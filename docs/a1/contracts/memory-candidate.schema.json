@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "memory-candidate.schema.json",
+  "title": "MemoryCandidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "action",
+    "category",
+    "normalizedKey",
+    "content",
+    "confidence",
+    "sourceMessageIds",
+    "reason"
+  ],
+  "properties": {
+    "action": {
+      "enum": [
+        "create",
+        "confirm",
+        "update",
+        "ignore"
+      ]
+    },
+    "category": {
+      "enum": [
+        "profile",
+        "preference",
+        "relationship",
+        "interest",
+        "goal",
+        "event",
+        "promise",
+        "other"
+      ]
+    },
+    "normalizedKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "sourceMessageIds": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "existingMemoryId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    }
+  }
+}

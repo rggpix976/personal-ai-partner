@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "chat-request.schema.json",
+  "title": "ChatRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "requestId",
+    "text",
+    "clientTimestamp"
+  ],
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "text": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "clientTimestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "image": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "mimeType",
+        "base64"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "mimeType": {
+          "enum": [
+            "image/jpeg",
+            "image/png",
+            "image/webp"
+          ]
+        },
+        "base64": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "anyOf": [
+    {
+      "properties": {
+        "text": {
+          "minLength": 1
+        }
+      }
+    },
+    {
+      "required": [
+        "image"
+      ],
+      "properties": {
+        "image": {
+          "type": "object"
+        }
+      }
+    }
+  ]
+}
