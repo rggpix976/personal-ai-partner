@@ -1,0 +1,282 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acepilot.local/schemas/chat-result.schema.json",
+  "title": "ChatResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "status",
+    "requestId",
+    "warnings"
+  ],
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "queued",
+        "failed"
+      ]
+    },
+    "requestId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "userMessage": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/messageDto"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "assistantMessage": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/messageDto"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "retryAfterSeconds": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "error": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/errorDto"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "completed"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "userMessage",
+          "assistantMessage"
+        ],
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "userMessage": {
+            "$ref": "#/$defs/messageDto"
+          },
+          "assistantMessage": {
+            "$ref": "#/$defs/messageDto"
+          },
+          "error": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "queued"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "userMessage",
+          "retryAfterSeconds"
+        ],
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "userMessage": {
+            "$ref": "#/$defs/messageDto"
+          },
+          "retryAfterSeconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "assistantMessage": {
+            "type": "null"
+          },
+          "error": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "failed"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "ok": {
+            "const": false
+          },
+          "error": {
+            "$ref": "#/$defs/errorDto"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "errorDto": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "messageDto": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "messageId",
+        "createdAt",
+        "role",
+        "messageType",
+        "text",
+        "status"
+      ],
+      "properties": {
+        "messageId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "requestId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "role": {
+          "enum": [
+            "user",
+            "assistant",
+            "system"
+          ]
+        },
+        "messageType": {
+          "enum": [
+            "text",
+            "image",
+            "proactive",
+            "error"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "image": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "mimeType",
+                "summary"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "enum": [
+                    "image/jpeg",
+                    "image/png",
+                    "image/webp"
+                  ]
+                },
+                "summary": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "accepted",
+            "completed",
+            "failed"
+          ]
+        },
+        "error": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/errorDto"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

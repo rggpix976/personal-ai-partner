@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acepilot.local/schemas/memory-candidates.schema.json",
+  "title": "MemoryCandidateList",
+  "type": "array",
+  "minItems": 0,
+  "maxItems": 20,
+  "items": {
+    "$ref": "https://acepilot.local/schemas/memory-candidate.schema.json"
+  }
+}

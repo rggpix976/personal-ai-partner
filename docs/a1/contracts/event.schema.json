@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acepilot.local/schemas/event.schema.json",
+  "title": "QueueEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventId",
+    "eventType",
+    "dedupeKey",
+    "payload",
+    "status",
+    "attemptCount",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "eventType": {
+      "enum": [
+        "CHAT_REPLY",
+        "MEMORY_EXTRACT",
+        "DIARY_GENERATE",
+        "PROACTIVE_SEND",
+        "WEEKLY_BACKUP"
+      ]
+    },
+    "dedupeKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "payload": {
+      "type": "object"
+    },
+    "status": {
+      "enum": [
+        "PENDING",
+        "PROCESSING",
+        "RETRY_WAIT",
+        "DONE",
+        "DEAD"
+      ]
+    },
+    "attemptCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5
+    },
+    "nextAttemptAt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "lockedAt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "lockedBy": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completedAt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "lastError": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "eventType": {
+          "const": "CHAT_REPLY"
+        },
+        "payload": {
+          "$ref": "https://acepilot.local/schemas/events/chat-reply-payload.schema.json"
+        }
+      }
+    },
+    {
+      "properties": {
+        "eventType": {
+          "const": "MEMORY_EXTRACT"
+        },
+        "payload": {
+          "$ref": "https://acepilot.local/schemas/events/memory-extract-payload.schema.json"
+        }
+      }
+    },
+    {
+      "properties": {
+        "eventType": {
+          "const": "DIARY_GENERATE"
+        },
+        "payload": {
+          "$ref": "https://acepilot.local/schemas/events/diary-generate-payload.schema.json"
+        }
+      }
+    },
+    {
+      "properties": {
+        "eventType": {
+          "const": "PROACTIVE_SEND"
+        },
+        "payload": {
+          "$ref": "https://acepilot.local/schemas/events/proactive-send-payload.schema.json"
+        }
+      }
+    },
+    {
+      "properties": {
+        "eventType": {
+          "const": "WEEKLY_BACKUP"
+        },
+        "payload": {
+          "$ref": "https://acepilot.local/schemas/events/weekly-backup-payload.schema.json"
+        }
+      }
+    }
+  ]
+}

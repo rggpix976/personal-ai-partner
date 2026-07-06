@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acepilot.local/schemas/events/weekly-backup-payload.schema.json",
+  "title": "WeeklyBackupPayload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "backupDate",
+    "requestedAt"
+  ],
+  "properties": {
+    "backupDate": {
+      "type": "string",
+      "format": "date"
+    },
+    "requestedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}
