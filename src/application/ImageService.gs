@@ -113,6 +113,14 @@ var ImageService = (function() {
     return truncate_('Image attachment: ' + String(image.name || 'uploaded image'), DEFAULTS.maxSummaryChars);
   }
 
+  function summarizeFromAssistantText(assistantText) {
+    var text = String(assistantText || '').replace(/\s+/g, ' ').trim();
+    if (!text) {
+      return 'Image attachment';
+    }
+    return truncate_(text, DEFAULTS.maxSummaryChars);
+  }
+
   function normalizeBase64_(value) {
     var normalized = String(value || '').trim();
     var prefixIndex = normalized.indexOf('base64,');
@@ -140,7 +148,10 @@ var ImageService = (function() {
     if (text.length <= maxChars) {
       return text;
     }
-    return text.slice(0, maxChars - 1).replace(/\s+$/g, '') + '...';
+    if (maxChars <= 3) {
+      return text.slice(0, maxChars);
+    }
+    return text.slice(0, maxChars - 3).replace(/\s+$/g, '') + '...';
   }
 
   function getConfigInt_(key, fallback) {
@@ -163,6 +174,7 @@ var ImageService = (function() {
     validateImageMetadata: validateImageMetadata,
     cleanupAfterSuccess: cleanupAfterSuccess,
     buildImageSummary: buildImageSummary,
+    summarizeFromAssistantText: summarizeFromAssistantText,
     __test: {
       normalizeBase64: normalizeBase64_,
       truncate: truncate_

@@ -9,10 +9,7 @@ var ContextService = (function() {
     input = input || {};
     var recentLimit = getConfigInt_('RECENT_MESSAGE_LIMIT', DEFAULTS.recentMessageLimit);
     var memoryLimit = getConfigInt_('MEMORY_CONTEXT_LIMIT', DEFAULTS.memoryContextLimit);
-    var recentMessages = SheetRepository.listRecentMessages(recentLimit)
-      .slice()
-      .reverse()
-      .map(normalizeMessageForContext_);
+    var recentMessages = buildRecentMessages_(input.currentUserMessage, recentLimit);
     var memories = SheetRepository.listActiveMemories()
       .sort(compareMemories_)
       .slice(0, memoryLimit)
@@ -32,6 +29,18 @@ var ContextService = (function() {
       memories: memories,
       currentTime: input.now || toIsoStringInTokyo(new Date())
     };
+  }
+
+  function buildRecentMessages_(currentUserMessage, recentLimit) {
+    if (!currentUserMessage || !currentUserMessage.messageId) {
+      return [];
+    }
+    var previousLimit = Math.max(recentLimit - 1, 0);
+    var previousMessages = previousLimit > 0
+      ? SheetRepository.listMessagesBefore(currentUserMessage.messageId, previousLimit).slice().reverse()
+      : [];
+    previousMessages.push(currentUserMessage);
+    return previousMessages.map(normalizeMessageForContext_);
   }
 
   function normalizeMessageForContext_(message) {

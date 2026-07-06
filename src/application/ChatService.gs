@@ -10,6 +10,7 @@ var ChatService = (function() {
     var normalizedRequest = null;
     var preparedImage = null;
     var userMessage = null;
+    var event = null;
 
     try {
       validatePlatform_();
@@ -29,7 +30,11 @@ var ChatService = (function() {
       }
 
       userMessage = state.userMessage;
-      var chatContext = ContextService.buildChatContext(normalizedContext);
+      event = state.event;
+      var chatContext = ContextService.buildChatContext({
+        now: normalizedContext.now,
+        currentUserMessage: userMessage
+      });
       var geminiRequest = buildGeminiRequest_(normalizedRequest, chatContext, preparedImage);
       var generation = preparedImage
         ? GeminiClient.generateWithImage(geminiRequest)
@@ -38,15 +43,18 @@ var ChatService = (function() {
       ensure(assistantText !== '', 'GEMINI_BAD_RESPONSE', 'Gemini returned an empty response.');
 
       var completedResult = LockManager.withScriptLock('chat-complete-' + normalizedContext.requestId, function() {
-        return finalizeCompleted_(normalizedContext.requestId, userMessage, generation, assistantText);
+        return finalizeCompleted_(normalizedContext.requestId, userMessage, generation, assistantText, event);
       });
 
       ImageService.cleanupAfterSuccess(preparedImage);
       return completedResult;
     } catch (error) {
       var normalized = normalizeError(error);
-      if (normalized.retryable && normalizedContext && userMessage) {
-        return queueRetry_(normalizedContext, userMessage, preparedImage, normalized);
+      if (normalizedContext && userMessage && event) {
+        if (normalized.retryable) {
+          return queueRetry_(normalizedContext, userMessage, preparedImage, normalized, event);
+        }
+        return markDeadAndFail_(normalizedContext, userMessage, normalized, event);
       }
       return buildFailedResult_(
         normalizedContext ? normalizedContext.requestId : requestId,
@@ -81,20 +89,20 @@ var ChatService = (function() {
           )
         };
       }
-      if (event && event.status !== 'DEAD') {
+      if (event) {
         return {
           result: buildQueuedResult_(
             context.requestId,
             pair.userMessage,
             computeRetryAfterSeconds_(event),
-            event.status === 'DONE'
-              ? ['Reply processing finished, but the assistant message is not visible yet.']
-              : []
+            buildInFlightWarnings_(event)
           )
         };
       }
+      event = insertProcessingEvent_(context, pair.userMessage, preparedImage);
       return {
-        userMessage: pair.userMessage
+        userMessage: pair.userMessage,
+        event: event
       };
     }
 
@@ -113,16 +121,23 @@ var ChatService = (function() {
       last_user_message_at: context.now
     });
 
+    event = insertProcessingEvent_(context, userMessageRecord, preparedImage);
     return {
-      userMessage: userMessageRecord
+      userMessage: userMessageRecord,
+      event: event
     };
   }
 
-  function finalizeCompleted_(requestId, userMessage, generation, assistantText) {
+  function finalizeCompleted_(requestId, userMessage, generation, assistantText, event) {
     var pair = SheetRepository.getConversationByRequestId(requestId);
     if (pair.userMessage && pair.assistantMessage) {
+      if (event && event.eventId && event.status !== 'DONE') {
+        markEventDone_(event.eventId, pair.assistantMessage.createdAt);
+      }
       return buildCompletedResult_(requestId, pair.userMessage, pair.assistantMessage, []);
     }
+
+    userMessage = updateUserImageSummary_(userMessage, assistantText);
 
     var assistantMessage = SheetRepository.appendConversation({
       messageId: generateUuidV4(),
@@ -142,59 +157,91 @@ var ChatService = (function() {
     SheetRepository.updateUserState({
       last_assistant_message_at: assistantMessage.createdAt
     });
+    if (event && event.eventId) {
+      markEventDone_(event.eventId, assistantMessage.createdAt);
+    }
 
     return buildCompletedResult_(requestId, pair.userMessage || userMessage, assistantMessage, []);
   }
 
-  function queueRetry_(context, userMessage, preparedImage, error) {
+  function queueRetry_(context, userMessage, preparedImage, error, event) {
     return LockManager.withScriptLock('chat-queue-' + context.requestId, function() {
-      var event = findChatReplyEvent_(context.requestId);
-      if (!event) {
-        var retryDecision = RetryPolicy.getRetryDecision(error, 1, parseIsoToDate(context.now), {
+      var currentEvent = event || findChatReplyEvent_(context.requestId);
+      ensure(currentEvent && currentEvent.eventId, 'STORAGE_DATA_CORRUPTED', 'Missing CHAT_REPLY event for retry update.');
+      var retryDecision = RetryPolicy.getRetryDecision(
+        error,
+        (currentEvent.attemptCount || 0) + 1,
+        parseIsoToDate(context.now),
+        {
           eventType: 'CHAT_REPLY',
           payload: {
             requestId: context.requestId
           }
-        });
-        try {
-          SheetRepository.insertEvent({
-            eventId: generateUuidV4(),
-            eventType: 'CHAT_REPLY',
-            dedupeKey: buildChatReplyDedupeKey_(context.requestId),
-            payload: {
-              requestId: context.requestId,
-              userMessageId: userMessage.messageId,
-              requestedAt: context.now,
-              image: preparedImage ? preparedImage.queueImage : null
-            },
-            status: retryDecision.action === 'RETRY_WAIT' ? 'RETRY_WAIT' : 'PENDING',
-            attemptCount: 1,
-            nextAttemptAt: retryDecision.nextAttemptAt ? toIsoStringInTokyo(retryDecision.nextAttemptAt) : null,
-            lockedAt: null,
-            lockedBy: null,
-            createdAt: context.now,
-            updatedAt: context.now,
-            completedAt: null,
-            lastError: {
-              code: error.code,
-              message: error.message
-            }
-          });
-          event = findChatReplyEvent_(context.requestId);
-        } catch (insertError) {
-          if (!(insertError instanceof AppError) || insertError.code !== 'DUPLICATE_REQUEST') {
-            throw insertError;
-          }
-          event = findChatReplyEvent_(context.requestId);
         }
+      );
+      var nextAttemptAt = retryDecision.nextAttemptAt ? toIsoStringInTokyo(retryDecision.nextAttemptAt) : null;
+      var nextStatus = retryDecision.action === 'RETRY_WAIT' ? 'RETRY_WAIT' : 'DEAD';
+      SheetRepository.updateEvent(currentEvent.eventId, {
+        status: nextStatus,
+        attemptCount: (currentEvent.attemptCount || 0) + 1,
+        nextAttemptAt: nextAttemptAt,
+        lockedAt: null,
+        lockedBy: null,
+        updatedAt: context.now,
+        completedAt: nextStatus === 'DEAD' ? context.now : null,
+        lastError: {
+          code: error.code,
+          message: error.message
+        }
+      });
+      currentEvent = findChatReplyEvent_(context.requestId);
+      if (nextStatus === 'DEAD') {
+        return buildFailedResult_(context.requestId, userMessage, createAppError('QUEUE_DEAD', error.message, null, {
+          userMessage: error.userMessage
+        }), []);
       }
 
       return buildQueuedResult_(
         context.requestId,
         userMessage,
-        computeRetryAfterSeconds_(event),
+        computeRetryAfterSeconds_(currentEvent),
         ['Reply generation is temporarily queued for retry.']
       );
+    });
+  }
+
+  function markDeadAndFail_(context, userMessage, error, event) {
+    return LockManager.withScriptLock('chat-dead-' + context.requestId, function() {
+      var currentEvent = event || findChatReplyEvent_(context.requestId);
+      if (currentEvent && currentEvent.eventId) {
+        SheetRepository.updateEvent(currentEvent.eventId, {
+          status: 'DEAD',
+          attemptCount: currentEvent.attemptCount || 1,
+          nextAttemptAt: null,
+          lockedAt: null,
+          lockedBy: null,
+          updatedAt: context.now,
+          completedAt: context.now,
+          lastError: {
+            code: error.code,
+            message: error.message
+          }
+        });
+      }
+      return buildFailedResult_(context.requestId, userMessage, error, []);
+    });
+  }
+
+  function updateUserImageSummary_(userMessage, assistantText) {
+    if (!userMessage || !userMessage.image) {
+      return userMessage;
+    }
+    return SheetRepository.updateConversationMessage(userMessage.messageId, {
+      image: {
+        name: userMessage.image.name,
+        mimeType: userMessage.image.mimeType,
+        summary: ImageService.summarizeFromAssistantText(assistantText)
+      }
     });
   }
 
@@ -320,6 +367,66 @@ var ChatService = (function() {
     return String(text || '').replace(/\r\n/g, '\n').trim();
   }
 
+  function insertProcessingEvent_(context, userMessage, preparedImage) {
+    var createdEvent = {
+      eventId: generateUuidV4(),
+      eventType: 'CHAT_REPLY',
+      dedupeKey: buildChatReplyDedupeKey_(context.requestId),
+      payload: {
+        requestId: context.requestId,
+        userMessageId: userMessage.messageId,
+        requestedAt: context.now,
+        image: preparedImage ? preparedImage.queueImage : null
+      },
+      status: 'PROCESSING',
+      attemptCount: 0,
+      nextAttemptAt: null,
+      lockedAt: context.now,
+      lockedBy: 'ChatService.send',
+      createdAt: context.now,
+      updatedAt: context.now,
+      completedAt: null,
+      lastError: null
+    };
+    try {
+      SheetRepository.insertEvent(createdEvent);
+      return createdEvent;
+    } catch (error) {
+      if (!(error instanceof AppError) || error.code !== 'DUPLICATE_REQUEST') {
+        throw error;
+      }
+      return findChatReplyEvent_(context.requestId);
+    }
+  }
+
+  function markEventDone_(eventId, completedAt) {
+    SheetRepository.updateEvent(eventId, {
+      status: 'DONE',
+      nextAttemptAt: null,
+      lockedAt: null,
+      lockedBy: null,
+      updatedAt: completedAt,
+      completedAt: completedAt,
+      lastError: null
+    });
+  }
+
+  function buildInFlightWarnings_(event) {
+    if (!event) {
+      return [];
+    }
+    if (event.status === 'DONE') {
+      return ['Reply processing finished, but the assistant message is not visible yet.'];
+    }
+    if (event.status === 'PROCESSING') {
+      return ['Reply generation is already in progress for this request.'];
+    }
+    if (event.status === 'PENDING' || event.status === 'RETRY_WAIT') {
+      return ['Reply generation is temporarily queued for retry.'];
+    }
+    return [];
+  }
+
   function buildCompletedResult_(requestId, userMessage, assistantMessage, warnings) {
     return {
       ok: true,
@@ -379,6 +486,7 @@ var ChatService = (function() {
     return {
       eventId: rows[0].event_id,
       status: rows[0].status,
+      attemptCount: rows[0].attempt_count,
       nextAttemptAt: rows[0].next_attempt_at,
       lastError: rows[0].last_error_code ? {
         code: rows[0].last_error_code,
@@ -411,8 +519,12 @@ var ChatService = (function() {
   return {
     send: send,
     __test: {
+      ensureUserMessageState: ensureUserMessageState_,
+      markDeadAndFail: markDeadAndFail_,
+      updateUserImageSummary: updateUserImageSummary_,
       buildSystemInstruction: buildSystemInstruction_,
       buildContents: buildContents_,
+      buildInFlightWarnings: buildInFlightWarnings_,
       computeRetryAfterSeconds: computeRetryAfterSeconds_
     }
   };
