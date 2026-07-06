@@ -222,6 +222,227 @@ function runA4ChatGeminiTests() {
     }
   });
 
+  test('completed image request resend does not prepare image again', function() {
+    var originalLockManager = LockManager;
+    var originalSheetRepository = SheetRepository;
+    var originalPropertiesService = PropertiesService;
+    var originalConfigRepository = ConfigRepository;
+    var originalImageService = ImageService;
+    var prepareCalls = 0;
+    LockManager = {
+      withScriptLock: function(_, callback) {
+        return callback();
+      }
+    };
+    PropertiesService = {
+      getScriptProperties: function() {
+        return {
+          getProperties: function() {
+            return {
+              GEMINI_API_KEY: 'stub',
+              OWNER_EMAIL: 'owner@example.com',
+              APP_ENV: 'test',
+              SPREADSHEET_ID: 'sheet',
+              DIARY_DOC_ID: 'doc',
+              TEMP_FOLDER_ID: 'temp',
+              BACKUP_FOLDER_ID: 'backup',
+              SCHEMA_VERSION: APP_CONSTANTS.SCHEMA_VERSION
+            };
+          }
+        };
+      }
+    };
+    SheetRepository = {
+      ensureDefaultUserState: function() {},
+      getConversationByRequestId: function() {
+        return {
+          requestId: '11111111-1111-4111-8111-111111111111',
+          userMessage: {
+            messageId: '22222222-2222-4222-8222-222222222222',
+            requestId: '11111111-1111-4111-8111-111111111111',
+            createdAt: '2026-07-06T10:00:00+09:00',
+            role: 'user',
+            messageType: 'image',
+            text: 'What is this?',
+            image: {
+              name: 'photo.jpg',
+              mimeType: 'image/jpeg',
+              summary: 'cat'
+            },
+            status: 'accepted',
+            error: null
+          },
+          assistantMessage: {
+            messageId: '33333333-3333-4333-8333-333333333333',
+            requestId: '11111111-1111-4111-8111-111111111111',
+            createdAt: '2026-07-06T10:00:02+09:00',
+            role: 'assistant',
+            messageType: 'text',
+            text: 'A cat.',
+            image: null,
+            status: 'completed',
+            error: null
+          }
+        };
+      },
+      getRows: function() {
+        return [];
+      }
+    };
+    ConfigRepository = {
+      getByKey: function(key) {
+        if (key === 'MAX_USER_TEXT_CHARS') {
+          return { value: 4000 };
+        }
+        if (key === 'IMAGE_MAX_BYTES') {
+          return { value: 4194304 };
+        }
+        return null;
+      }
+    };
+    ImageService = Object.assign({}, ImageService, {
+      prepareGeminiInput: function() {
+        prepareCalls += 1;
+        throw new Error('prepareGeminiInput should not be called for completed duplicate requests.');
+      }
+    });
+    try {
+      var result = ChatService.send({
+        requestId: '11111111-1111-4111-8111-111111111111',
+        text: 'What is this?',
+        clientTimestamp: '2026-07-06T10:00:00+09:00',
+        image: {
+          name: 'photo.jpg',
+          mimeType: 'image/jpeg',
+          base64: 'Zm9v'
+        }
+      }, {
+        requestId: '11111111-1111-4111-8111-111111111111',
+        now: '2026-07-06T10:00:00+09:00'
+      });
+      assert(result.status === 'completed', 'Completed duplicate requests should short-circuit.');
+      assert(prepareCalls === 0, 'Image preparation should not run for completed duplicates.');
+    } finally {
+      LockManager = originalLockManager;
+      SheetRepository = originalSheetRepository;
+      PropertiesService = originalPropertiesService;
+      ConfigRepository = originalConfigRepository;
+      ImageService = originalImageService;
+    }
+  });
+
+  test('processing image request resend does not create a new temp file', function() {
+    var originalLockManager = LockManager;
+    var originalSheetRepository = SheetRepository;
+    var originalPropertiesService = PropertiesService;
+    var originalConfigRepository = ConfigRepository;
+    var originalImageService = ImageService;
+    var prepareCalls = 0;
+    LockManager = {
+      withScriptLock: function(_, callback) {
+        return callback();
+      }
+    };
+    PropertiesService = {
+      getScriptProperties: function() {
+        return {
+          getProperties: function() {
+            return {
+              GEMINI_API_KEY: 'stub',
+              OWNER_EMAIL: 'owner@example.com',
+              APP_ENV: 'test',
+              SPREADSHEET_ID: 'sheet',
+              DIARY_DOC_ID: 'doc',
+              TEMP_FOLDER_ID: 'temp',
+              BACKUP_FOLDER_ID: 'backup',
+              SCHEMA_VERSION: APP_CONSTANTS.SCHEMA_VERSION
+            };
+          }
+        };
+      }
+    };
+    SheetRepository = {
+      ensureDefaultUserState: function() {},
+      getConversationByRequestId: function() {
+        return {
+          requestId: '11111111-1111-4111-8111-111111111111',
+          userMessage: {
+            messageId: '22222222-2222-4222-8222-222222222222',
+            requestId: '11111111-1111-4111-8111-111111111111',
+            createdAt: '2026-07-06T10:00:00+09:00',
+            role: 'user',
+            messageType: 'image',
+            text: 'What is this?',
+            image: {
+              name: 'photo.jpg',
+              mimeType: 'image/jpeg',
+              summary: 'cat'
+            },
+            status: 'accepted',
+            error: null
+          },
+          assistantMessage: null
+        };
+      },
+      getRows: function() {
+        return [{
+          event_id: '33333333-3333-4333-8333-333333333333',
+          event_type: 'CHAT_REPLY',
+          dedupe_key: 'CHAT_REPLY:11111111-1111-4111-8111-111111111111',
+          payload_json: {
+            requestId: '11111111-1111-4111-8111-111111111111'
+          },
+          status: 'PROCESSING',
+          attempt_count: 0,
+          next_attempt_at: null,
+          updated_at: '2026-07-06T10:00:01+09:00',
+          last_error_code: null,
+          last_error_message: null
+        }];
+      }
+    };
+    ConfigRepository = {
+      getByKey: function(key) {
+        if (key === 'MAX_USER_TEXT_CHARS') {
+          return { value: 4000 };
+        }
+        if (key === 'IMAGE_MAX_BYTES') {
+          return { value: 4194304 };
+        }
+        return null;
+      }
+    };
+    ImageService = Object.assign({}, ImageService, {
+      prepareGeminiInput: function() {
+        prepareCalls += 1;
+        throw new Error('prepareGeminiInput should not run for in-flight duplicates.');
+      }
+    });
+    try {
+      var result = ChatService.send({
+        requestId: '11111111-1111-4111-8111-111111111111',
+        text: 'What is this?',
+        clientTimestamp: '2026-07-06T10:00:00+09:00',
+        image: {
+          name: 'photo.jpg',
+          mimeType: 'image/jpeg',
+          base64: 'Zm9v'
+        }
+      }, {
+        requestId: '11111111-1111-4111-8111-111111111111',
+        now: '2026-07-06T10:00:00+09:00'
+      });
+      assert(result.status === 'queued', 'In-flight duplicate requests should return queued status.');
+      assert(prepareCalls === 0, 'Image preparation should not run for in-flight duplicates.');
+    } finally {
+      LockManager = originalLockManager;
+      SheetRepository = originalSheetRepository;
+      PropertiesService = originalPropertiesService;
+      ConfigRepository = originalConfigRepository;
+      ImageService = originalImageService;
+    }
+  });
+
   test('chat prompt includes latest current user turn', function() {
     var contents = ChatService.__test.buildContents({
       recentMessages: [{
@@ -312,6 +533,146 @@ function runA4ChatGeminiTests() {
     var summary = ImageService.summarizeFromAssistantText('A small orange cat is sitting on a windowsill and looking outside.');
     assert(summary.indexOf('orange cat') !== -1, 'Assistant-based summary should preserve image meaning.');
     assert(summary.length <= 150, 'Assistant-based summary should stay bounded.');
+  });
+
+  test('race after prepare cleans up only newly created temp files', function() {
+    var originalLockManager = LockManager;
+    var originalSheetRepository = SheetRepository;
+    var originalPropertiesService = PropertiesService;
+    var originalConfigRepository = ConfigRepository;
+    var originalImageService = ImageService;
+    var prepareCalls = 0;
+    var cleanupCalls = 0;
+    var conversationReadCount = 0;
+    LockManager = {
+      withScriptLock: function(_, callback) {
+        return callback();
+      }
+    };
+    PropertiesService = {
+      getScriptProperties: function() {
+        return {
+          getProperties: function() {
+            return {
+              GEMINI_API_KEY: 'stub',
+              OWNER_EMAIL: 'owner@example.com',
+              APP_ENV: 'test',
+              SPREADSHEET_ID: 'sheet',
+              DIARY_DOC_ID: 'doc',
+              TEMP_FOLDER_ID: 'temp',
+              BACKUP_FOLDER_ID: 'backup',
+              SCHEMA_VERSION: APP_CONSTANTS.SCHEMA_VERSION
+            };
+          }
+        };
+      }
+    };
+    ConfigRepository = {
+      getByKey: function(key) {
+        if (key === 'MAX_USER_TEXT_CHARS') {
+          return { value: 4000 };
+        }
+        if (key === 'IMAGE_MAX_BYTES') {
+          return { value: 4194304 };
+        }
+        return null;
+      }
+    };
+    SheetRepository = {
+      ensureDefaultUserState: function() {},
+      getConversationByRequestId: function() {
+        conversationReadCount += 1;
+        if (conversationReadCount === 1) {
+          return {
+            requestId: '11111111-1111-4111-8111-111111111111',
+            userMessage: null,
+            assistantMessage: null
+          };
+        }
+        return {
+          requestId: '11111111-1111-4111-8111-111111111111',
+          userMessage: {
+            messageId: '22222222-2222-4222-8222-222222222222',
+            requestId: '11111111-1111-4111-8111-111111111111',
+            createdAt: '2026-07-06T10:00:00+09:00',
+            role: 'user',
+            messageType: 'image',
+            text: 'What is this?',
+            image: {
+              name: 'photo.jpg',
+              mimeType: 'image/jpeg',
+              summary: 'cat'
+            },
+            status: 'accepted',
+            error: null
+          },
+          assistantMessage: {
+            messageId: '33333333-3333-4333-8333-333333333333',
+            requestId: '11111111-1111-4111-8111-111111111111',
+            createdAt: '2026-07-06T10:00:02+09:00',
+            role: 'assistant',
+            messageType: 'text',
+            text: 'A cat.',
+            image: null,
+            status: 'completed',
+            error: null
+          }
+        };
+      },
+      getRows: function() {
+        return [];
+      }
+    };
+    ImageService = Object.assign({}, ImageService, {
+      prepareGeminiInput: function() {
+        prepareCalls += 1;
+        return {
+          queueImage: {
+            tempFileId: 'new-temp'
+          },
+          cleanupTarget: {
+            tempFileId: 'new-temp',
+            createdByCurrentRequest: true
+          },
+          storedImage: {
+            name: 'photo.jpg',
+            mimeType: 'image/jpeg',
+            summary: 'placeholder'
+          }
+        };
+      },
+      cleanupPreparedImage: function(preparedImage) {
+        if (preparedImage.cleanupTarget.createdByCurrentRequest) {
+          cleanupCalls += 1;
+          return true;
+        }
+        return false;
+      }
+    });
+    try {
+      var result = ChatService.send({
+        requestId: '11111111-1111-4111-8111-111111111111',
+        text: 'What is this?',
+        clientTimestamp: '2026-07-06T10:00:00+09:00',
+        image: {
+          name: 'photo.jpg',
+          mimeType: 'image/jpeg',
+          base64: 'Zm9v'
+        }
+      }, {
+        requestId: '11111111-1111-4111-8111-111111111111',
+        now: '2026-07-06T10:00:00+09:00'
+      });
+      assert(result.status === 'completed', 'Race should resolve to the existing completed result.');
+      assert(prepareCalls === 1, 'Prepare should have run before the race became visible.');
+      assert(cleanupCalls === 1, 'Newly created temp file should be cleaned on race short-circuit.');
+    } finally {
+      LockManager = originalLockManager;
+      SheetRepository = originalSheetRepository;
+      PropertiesService = originalPropertiesService;
+      ConfigRepository = originalConfigRepository;
+      ImageService = originalImageService;
+    }
   });
 
   test('non-retryable Gemini error can be persisted as DEAD event', function() {
@@ -405,6 +766,76 @@ function runA4ChatGeminiTests() {
       assert(updated.image.summary.indexOf('brown dog') !== -1, 'Updated message should expose the new summary.');
     } finally {
       SheetRepository = originalSheetRepository;
+    }
+  });
+
+  test('existing tempFileId is not trashed on cleanupAfterSuccess', function() {
+    var originalDriveTempRepository = DriveTempRepository;
+    var trashed = 0;
+    DriveTempRepository = {
+      trashTempImage: function() {
+        trashed += 1;
+      }
+    };
+    try {
+      var result = ImageService.cleanupAfterSuccess({
+        cleanupTarget: {
+          tempFileId: 'existing-temp',
+          createdByCurrentRequest: false
+        }
+      });
+      assert(result === false, 'Existing temp files should not be cleaned by another request.');
+      assert(trashed === 0, 'Existing temp files should not be trashed.');
+    } finally {
+      DriveTempRepository = originalDriveTempRepository;
+    }
+  });
+
+  test('prepareGeminiInput marks existing tempFileId as not created by current request', function() {
+    var originalDriveTempRepository = DriveTempRepository;
+    var originalConfigRepository = ConfigRepository;
+    ConfigRepository = {
+      getByKey: function(key) {
+        if (key === 'IMAGE_MAX_BYTES') {
+          return { value: 4194304 };
+        }
+        if (key === 'TEMP_IMAGE_TTL_HOURS') {
+          return { value: 24 };
+        }
+        return null;
+      }
+    };
+    DriveTempRepository = {
+      getTempImageData: function(tempFileId) {
+        assert(tempFileId === 'existing-temp', 'Existing tempFileId should be read.');
+        return {
+          tempFileId: tempFileId,
+          name: 'photo.jpg',
+          mimeType: 'image/jpeg',
+          base64: 'Zm9v',
+          sizeBytes: 3
+        };
+      },
+      createTempImage: function() {
+        throw new Error('createTempImage should not run when an existing tempFileId is supplied.');
+      },
+      trashTempImage: function() {
+        throw new Error('trashTempImage should not be called during prepare.');
+      }
+    };
+    try {
+      var prepared = ImageService.prepareGeminiInput({
+        name: 'photo.jpg',
+        mimeType: 'image/jpeg',
+        tempFileId: 'existing-temp'
+      }, {
+        now: '2026-07-06T10:00:00+09:00'
+      });
+      assert(prepared.createdTempFile === false, 'Existing temp file should not be marked as newly created.');
+      assert(prepared.cleanupTarget.createdByCurrentRequest === false, 'Existing temp file should not be owned by the current request.');
+    } finally {
+      DriveTempRepository = originalDriveTempRepository;
+      ConfigRepository = originalConfigRepository;
     }
   });
 

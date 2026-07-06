@@ -17,6 +17,14 @@ var ChatService = (function() {
       normalizedRequest = normalizeRequest_(request, requestId);
       normalizedContext = normalizeContext_(normalizedRequest, context);
       validateRequest_(normalizedRequest);
+
+      var existingResult = LockManager.withScriptLock('chat-check-' + normalizedContext.requestId, function() {
+        return getExistingRequestResult_(normalizedContext.requestId);
+      });
+      if (existingResult) {
+        return existingResult;
+      }
+
       preparedImage = normalizedRequest.image ? ImageService.prepareGeminiInput(normalizedRequest.image, {
         now: normalizedContext.now,
         requestText: normalizedRequest.text
@@ -26,6 +34,7 @@ var ChatService = (function() {
         return ensureUserMessageState_(normalizedRequest, normalizedContext, preparedImage);
       });
       if (state.result) {
+        cleanupPreparedImageIfOwned_(preparedImage);
         return state.result;
       }
 
@@ -56,6 +65,7 @@ var ChatService = (function() {
         }
         return markDeadAndFail_(normalizedContext, userMessage, normalized, event);
       }
+      cleanupPreparedImageIfOwned_(preparedImage);
       return buildFailedResult_(
         normalizedContext ? normalizedContext.requestId : requestId,
         userMessage,
@@ -66,39 +76,16 @@ var ChatService = (function() {
   }
 
   function ensureUserMessageState_(request, context, preparedImage) {
-    var pair = SheetRepository.getConversationByRequestId(context.requestId);
-    var event = findChatReplyEvent_(context.requestId);
-
-    if (pair.userMessage && pair.assistantMessage) {
+    var existingResult = getExistingRequestResult_(context.requestId);
+    if (existingResult) {
       return {
-        result: buildCompletedResult_(context.requestId, pair.userMessage, pair.assistantMessage, [])
+        result: existingResult
       };
     }
 
+    var pair = SheetRepository.getConversationByRequestId(context.requestId);
+    var event = null;
     if (pair.userMessage) {
-      if (event && event.status === 'DEAD') {
-        return {
-          result: buildFailedResult_(
-            context.requestId,
-            pair.userMessage,
-            createAppError(
-              event.lastError && event.lastError.code ? event.lastError.code : 'QUEUE_DEAD',
-              event.lastError && event.lastError.message ? event.lastError.message : 'The queued reply failed.'
-            ),
-            []
-          )
-        };
-      }
-      if (event) {
-        return {
-          result: buildQueuedResult_(
-            context.requestId,
-            pair.userMessage,
-            computeRetryAfterSeconds_(event),
-            buildInFlightWarnings_(event)
-          )
-        };
-      }
       event = insertProcessingEvent_(context, pair.userMessage, preparedImage);
       return {
         userMessage: pair.userMessage,
@@ -230,6 +217,45 @@ var ChatService = (function() {
       }
       return buildFailedResult_(context.requestId, userMessage, error, []);
     });
+  }
+
+  function getExistingRequestResult_(requestId) {
+    var pair = SheetRepository.getConversationByRequestId(requestId);
+    var event = findChatReplyEvent_(requestId);
+
+    if (pair.userMessage && pair.assistantMessage) {
+      return buildCompletedResult_(requestId, pair.userMessage, pair.assistantMessage, []);
+    }
+
+    if (pair.userMessage && event && event.status === 'DEAD') {
+      return buildFailedResult_(
+        requestId,
+        pair.userMessage,
+        createAppError(
+          event.lastError && event.lastError.code ? event.lastError.code : 'QUEUE_DEAD',
+          event.lastError && event.lastError.message ? event.lastError.message : 'The queued reply failed.'
+        ),
+        []
+      );
+    }
+
+    if (pair.userMessage && event) {
+      return buildQueuedResult_(
+        requestId,
+        pair.userMessage,
+        computeRetryAfterSeconds_(event),
+        buildInFlightWarnings_(event)
+      );
+    }
+
+    return null;
+  }
+
+  function cleanupPreparedImageIfOwned_(preparedImage) {
+    if (!preparedImage) {
+      return false;
+    }
+    return ImageService.cleanupPreparedImage(preparedImage);
   }
 
   function updateUserImageSummary_(userMessage, assistantText) {
@@ -519,7 +545,9 @@ var ChatService = (function() {
   return {
     send: send,
     __test: {
+      getExistingRequestResult: getExistingRequestResult_,
       ensureUserMessageState: ensureUserMessageState_,
+      cleanupPreparedImageIfOwned: cleanupPreparedImageIfOwned_,
       markDeadAndFail: markDeadAndFail_,
       updateUserImageSummary: updateUserImageSummary_,
       buildSystemInstruction: buildSystemInstruction_,

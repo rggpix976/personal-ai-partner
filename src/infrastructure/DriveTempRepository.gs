@@ -62,7 +62,8 @@ var DriveTempRepository = (function() {
       tempFileId: file.getId(),
       name: input.name,
       mimeType: input.mimeType,
-      expiresAt: toIsoStringInTokyo(expiresAt)
+      expiresAt: toIsoStringInTokyo(expiresAt),
+      createdTempFile: true
     };
   }
 

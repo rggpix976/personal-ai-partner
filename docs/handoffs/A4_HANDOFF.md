@@ -78,6 +78,6 @@
 
 ## Known Limitations
 - The new Apps Script self-tests are static/unit-like only and were not executed in a live GAS runtime here.
-- `ImageService` stores a bounded metadata summary for user image messages; it does not yet write back a richer post-generation image summary into the existing conversation row.
+- Image requests now write back a bounded post-generation `image_summary`, but the summary is derived from the assistant response text rather than a dedicated structured image-summary model output.
 - Queue processing itself is still out of scope here; queued `CHAT_REPLY` items wait for downstream worker support.
 - No full long-term memory extraction or diary generation is included in A4.

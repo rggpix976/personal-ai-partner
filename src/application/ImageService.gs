@@ -24,6 +24,7 @@ var ImageService = (function() {
         normalizedBase64 = tempRecord.base64;
       }
       sizeBytes = tempRecord.sizeBytes;
+      tempRecord.createdTempFile = false;
     }
 
     if (!normalizedBase64) {
@@ -62,8 +63,10 @@ var ImageService = (function() {
         expiresAt: tempRecord.expiresAt || buildExpiresAt_(options.now)
       },
       cleanupTarget: {
-        tempFileId: tempRecord.tempFileId
+        tempFileId: tempRecord.tempFileId,
+        createdByCurrentRequest: Boolean(tempRecord.createdTempFile)
       },
+      createdTempFile: Boolean(tempRecord.createdTempFile),
       storedImage: {
         name: image.name,
         mimeType: image.mimeType,
@@ -98,7 +101,14 @@ var ImageService = (function() {
   }
 
   function cleanupAfterSuccess(preparedImage) {
+    return cleanupPreparedImage(preparedImage);
+  }
+
+  function cleanupPreparedImage(preparedImage) {
     if (!preparedImage || !preparedImage.cleanupTarget || !preparedImage.cleanupTarget.tempFileId) {
+      return false;
+    }
+    if (!preparedImage.cleanupTarget.createdByCurrentRequest) {
       return false;
     }
     DriveTempRepository.trashTempImage(preparedImage.cleanupTarget.tempFileId);
@@ -173,6 +183,7 @@ var ImageService = (function() {
     prepareGeminiInput: prepareGeminiInput,
     validateImageMetadata: validateImageMetadata,
     cleanupAfterSuccess: cleanupAfterSuccess,
+    cleanupPreparedImage: cleanupPreparedImage,
     buildImageSummary: buildImageSummary,
     summarizeFromAssistantText: summarizeFromAssistantText,
     __test: {
