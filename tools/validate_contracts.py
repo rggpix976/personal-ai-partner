@@ -20,13 +20,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
-try:
-    from jsonschema import Draft202012Validator, FormatChecker
-    from jsonschema.exceptions import SchemaError, ValidationError
-    from referencing import Registry, Resource
-except ImportError as exc:
-    print("ERROR: jsonschema is required. Run: python -m pip install -r requirements-dev.txt")
-    raise SystemExit(2) from exc
+from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema.exceptions import SchemaError, ValidationError
+from referencing import Registry, Resource
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -178,6 +174,38 @@ def check_text_encoding_and_line_endings(results: Results) -> None:
             results.fail(problem)
     else:
         results.ok("all text files are UTF-8/LF with final newline")
+
+
+def check_repository_config_files(results: Results) -> None:
+    checks = {
+        ".editorconfig": [
+            "root = true",
+            "[*]",
+            "end_of_line = lf",
+            "insert_final_newline = true",
+            "[*.py]",
+        ],
+        ".gitattributes": [
+            "* text=auto eol=lf",
+            "*.md text eol=lf",
+            "*.json text eol=lf",
+            "*.py text eol=lf",
+        ],
+    }
+    problems: list[str] = []
+    for filename, required_lines in checks.items():
+        path = ROOT / filename
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if len(lines) < 5:
+            problems.append(f"{filename}: expected real multi-line configuration")
+        for required_line in required_lines:
+            if required_line not in lines:
+                problems.append(f"{filename}: missing line {required_line!r}")
+    if problems:
+        for problem in problems:
+            results.fail(problem)
+    else:
+        results.ok("repository config files are valid multi-line files")
 
 
 def check_json_and_schemas(results: Results) -> None:
@@ -383,6 +411,7 @@ def main() -> int:
     print(f"Repository: {ROOT}")
     check_repository_layout(results)
     check_text_encoding_and_line_endings(results)
+    check_repository_config_files(results)
     check_json_and_schemas(results)
     check_chat_result_contract(results)
     check_event_contract(results)
