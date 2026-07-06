@@ -1,4 +1,5 @@
 var APP_ERROR_DEFINITIONS = Object.freeze({
+  VALIDATION_REQUEST_INVALID: { userMessage: 'The request payload is invalid.', retryable: false, retryStrategy: 'NONE', httpStatus: 400 },
   VALIDATION_TEXT_TOO_LONG: { userMessage: 'Message text is too long.', retryable: false, retryStrategy: 'NONE', httpStatus: 400 },
   VALIDATION_IMAGE_UNSUPPORTED: { userMessage: 'Unsupported image format.', retryable: false, retryStrategy: 'NONE', httpStatus: 400 },
   VALIDATION_IMAGE_TOO_LARGE: { userMessage: 'Image is too large.', retryable: false, retryStrategy: 'NONE', httpStatus: 400 },

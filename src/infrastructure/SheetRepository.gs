@@ -245,6 +245,53 @@ var SheetRepository = (function() {
     return toMessageDto(row);
   }
 
+  function updateConversationMessage(messageId, patch) {
+    Validators.assertUuidV4(messageId, 'messageId');
+    var normalized = {};
+    Object.keys(patch || {}).forEach(function(key) {
+      normalized[key] = patch[key];
+    });
+    if (Object.prototype.hasOwnProperty.call(normalized, 'requestId')) {
+      normalized.request_id = normalized.requestId;
+      delete normalized.requestId;
+    }
+    if (Object.prototype.hasOwnProperty.call(normalized, 'createdAt')) {
+      normalized.created_at = normalized.createdAt;
+      delete normalized.createdAt;
+    }
+    if (Object.prototype.hasOwnProperty.call(normalized, 'messageType')) {
+      normalized.message_type = normalized.messageType;
+      delete normalized.messageType;
+    }
+    if (Object.prototype.hasOwnProperty.call(normalized, 'replyToMessageId')) {
+      normalized.reply_to_message_id = normalized.replyToMessageId;
+      delete normalized.replyToMessageId;
+    }
+    if (Object.prototype.hasOwnProperty.call(normalized, 'model')) {
+      normalized.model = normalized.model;
+    }
+    if (Object.prototype.hasOwnProperty.call(normalized, 'inputTokens')) {
+      normalized.input_tokens = normalized.inputTokens;
+      delete normalized.inputTokens;
+    }
+    if (Object.prototype.hasOwnProperty.call(normalized, 'outputTokens')) {
+      normalized.output_tokens = normalized.outputTokens;
+      delete normalized.outputTokens;
+    }
+    if (Object.prototype.hasOwnProperty.call(normalized, 'error')) {
+      normalized.error_code = normalized.error ? normalized.error.code : null;
+      delete normalized.error;
+    }
+    if (Object.prototype.hasOwnProperty.call(normalized, 'image')) {
+      normalized.image_name = normalized.image ? normalized.image.name : null;
+      normalized.image_mime = normalized.image ? normalized.image.mimeType : null;
+      normalized.image_summary = normalized.image ? normalized.image.summary : null;
+      delete normalized.image;
+    }
+    var row = updateRowByKey(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS, 'message_id', messageId, normalized);
+    return toMessageDto(row);
+  }
+
   function listRecentMessages(limit) {
     var rows = getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS);
     return rows
@@ -466,6 +513,7 @@ var SheetRepository = (function() {
     getHeaders: getHeaders,
     getRows: getRows,
     appendConversation: appendConversation,
+    updateConversationMessage: updateConversationMessage,
     listRecentMessages: listRecentMessages,
     listMessagesBefore: listMessagesBefore,
     getConversationByRequestId: getConversationByRequestId,
