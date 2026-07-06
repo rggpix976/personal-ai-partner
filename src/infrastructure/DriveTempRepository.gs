@@ -66,10 +66,35 @@ var DriveTempRepository = (function() {
     };
   }
 
+  function getTempImageData(tempFileId) {
+    ensure(String(tempFileId || '') !== '', 'CONFIG_MISSING', 'tempFileId is required.');
+    var file = DriveApp.getFileById(tempFileId);
+    ensure(file != null, 'CONFIG_MISSING', 'Temporary image file could not be opened.');
+    var blob = file.getBlob();
+    var bytes = blob.getBytes();
+    return {
+      tempFileId: tempFileId,
+      name: file.getName(),
+      mimeType: blob.getContentType(),
+      base64: Utilities.base64Encode(bytes),
+      sizeBytes: bytes.length
+    };
+  }
+
+  function trashTempImage(tempFileId) {
+    ensure(String(tempFileId || '') !== '', 'CONFIG_MISSING', 'tempFileId is required.');
+    var file = DriveApp.getFileById(tempFileId);
+    ensure(file != null, 'CONFIG_MISSING', 'Temporary image file could not be opened.');
+    file.setTrashed(true);
+    return true;
+  }
+
   return {
     getOrCreateFolder: getOrCreateFolder,
     ensureFolders: ensureFolders,
     validateFolder: validateFolder,
-    createTempImage: createTempImage
+    createTempImage: createTempImage,
+    getTempImageData: getTempImageData,
+    trashTempImage: trashTempImage
   };
 })();

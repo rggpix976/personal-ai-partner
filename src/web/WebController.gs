@@ -73,14 +73,14 @@ var WebController = (function() {
       ensurePlatformReadyForSend_();
       validateChatRequest_(request, requestId);
 
-      var existingResult = findExistingChatResult_(requestId);
-      if (existingResult) {
-        return existingResult;
-      }
-
       var context = buildRequestContext_(request, requestId, new Date());
       if (hasChatReplyWorker_()) {
         return ChatService.send(request, context);
+      }
+
+      var existingResult = findExistingChatResult_(requestId);
+      if (existingResult) {
+        return existingResult;
       }
 
       return sendChatViaQueueFallback_(request, context);
@@ -304,7 +304,11 @@ var WebController = (function() {
 
     ensure(typeof request.image === 'object', 'VALIDATION_IMAGE_UNSUPPORTED', 'image must be an object.');
     ensure(String(request.image.name || '') !== '', 'VALIDATION_IMAGE_UNSUPPORTED', 'image.name is required.');
-    Validators.assertMimeType(request.image.mimeType, 'image.mimeType');
+    ensure(
+      APP_CONSTANTS.MIME_TYPES.indexOf(request.image.mimeType) !== -1,
+      'VALIDATION_IMAGE_UNSUPPORTED',
+      'Unsupported image MIME type.'
+    );
     ensure(String(request.image.base64 || '') !== '', 'VALIDATION_IMAGE_UNSUPPORTED', 'image.base64 is required.');
 
     var bytes = decodeBase64ToBytes_(request.image.base64);
