@@ -114,7 +114,14 @@ function runA5MemoryDiaryTests() {
 
   test('applyCandidates handles create update confirm and ignore', function() {
     var writes = [];
+    var lockName = null;
     withOverrides({
+      LockManager: {
+        withScriptLock: function(name, callback) {
+          lockName = name;
+          return callback();
+        }
+      },
       SheetRepository: {
         listActiveMemories: function() {
           return [{
@@ -183,11 +190,17 @@ function runA5MemoryDiaryTests() {
       assert(result.updated === 1, 'One memory should be updated.');
       assert(result.ignored === 1, 'One candidate should be ignored.');
       assert(writes.length === 3, 'Ignore should not write a memory row.');
+      assert(lockName === 'memory-apply-candidates', 'applyCandidates should use the fixed script lock.');
     });
   });
 
   test('candidate action rules reject missing or forbidden existingMemoryId', function() {
     withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
       SheetRepository: {
         listActiveMemories: function() {
           return [];
@@ -219,6 +232,82 @@ function runA5MemoryDiaryTests() {
         }
       ]);
       assert(result.rejected === 2, 'Invalid candidates should be rejected safely.');
+    });
+  });
+
+  test('applyCandidates rethrows repository failures', function() {
+    withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      SheetRepository: {
+        listActiveMemories: function() {
+          return [];
+        },
+        upsertMemory: function() {
+          throw createAppError('STORAGE_WRITE_FAILED', 'temporary sheet failure');
+        }
+      }
+    }, function() {
+      var thrown = null;
+      try {
+        MemoryService.applyCandidates([{
+          action: 'create',
+          category: 'goal',
+          normalizedKey: 'trip plan',
+          content: 'The user wants to visit Kyoto in autumn.',
+          confidence: 0.8,
+          sourceMessageIds: ['20111111-1111-4111-8111-111111111111'],
+          reason: 'A durable future plan.'
+        }]);
+      } catch (error) {
+        thrown = error;
+      }
+      assert(thrown && thrown.code === 'STORAGE_WRITE_FAILED', 'Repository failures must be rethrown for A6 retry handling.');
+    });
+  });
+
+  test('applyCandidates does not create duplicate active memory for the same normalizedKey', function() {
+    var writes = [];
+    withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      SheetRepository: {
+        listActiveMemories: function() {
+          return [];
+        },
+        upsertMemory: function(memory) {
+          writes.push(memory);
+          return memory;
+        }
+      }
+    }, function() {
+      var result = MemoryService.applyCandidates([{
+        action: 'create',
+        category: 'goal',
+        normalizedKey: 'kyoto trip',
+        content: 'The user wants to visit Kyoto in autumn.',
+        confidence: 0.8,
+        sourceMessageIds: ['20111111-1111-4111-8111-111111111111'],
+        reason: 'Durable plan.'
+      }, {
+        action: 'create',
+        category: 'goal',
+        normalizedKey: 'kyoto trip',
+        content: 'The user wants to visit Kyoto in autumn.',
+        confidence: 0.85,
+        sourceMessageIds: ['30111111-1111-4111-8111-111111111111'],
+        reason: 'Repeated plan.'
+      }]);
+      assert(result.created === 1, 'Only one active memory should be created.');
+      assert(result.confirmed === 1, 'The duplicate create should fold into a confirm.');
+      assert(writes.length === 2, 'The second write should update the same memory rather than create another one.');
+      assert(writes[0].memoryId === writes[1].memoryId, 'The same memoryId should be reused for duplicate normalizedKey writes.');
     });
   });
 
@@ -291,7 +380,14 @@ function runA5MemoryDiaryTests() {
   test('DiaryService.generate appends once and skips duplicates', function() {
     var summaryRow = null;
     var appended = 0;
+    var locks = [];
     withOverrides({
+      LockManager: {
+        withScriptLock: function(name, callback) {
+          locks.push(name);
+          return callback();
+        }
+      },
       SheetRepository: {
         listMessagesByDate: function() {
           return [{
@@ -372,6 +468,82 @@ function runA5MemoryDiaryTests() {
       assert(first.generated === true && first.skipped === false, 'First generation should append the diary.');
       assert(second.generated === false && second.skipped === true, 'Second generation should skip duplicates.');
       assert(appended === 1, 'Diary should be appended only once.');
+      assert(locks.indexOf('diary-generate-2026-07-07') !== -1, 'Diary generation should use a per-date lock.');
+    });
+  });
+
+  test('DiaryService repairs DONE summary state when doc anchor already exists', function() {
+    var summaryRow = {
+      summary_date: '2026-07-07',
+      conversation_count: 0,
+      summary_text: null,
+      key_topics_json: null,
+      memory_candidate_count: 0,
+      diary_status: 'PENDING',
+      diary_doc_anchor: null,
+      created_at: '2026-07-07T23:00:00+09:00',
+      updated_at: '2026-07-07T23:00:00+09:00'
+    };
+    var appended = 0;
+    withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      SheetRepository: {
+        getDailySummary: function() {
+          return summaryRow;
+        },
+        listMessagesByDate: function() {
+          return [{
+            messageId: '11111111-1111-4111-8111-111111111111',
+            createdAt: '2026-07-07T09:00:00+09:00',
+            role: 'user',
+            text: 'I want to plan a Kyoto trip this fall.',
+            image: null
+          }];
+        },
+        upsertDailySummary: function(summary) {
+          summaryRow = {
+            summary_date: summary.summaryDate,
+            conversation_count: summary.conversationCount,
+            summary_text: summary.summaryText,
+            key_topics_json: summary.keyTopics,
+            memory_candidate_count: summary.memoryCandidateCount,
+            diary_status: summary.diaryStatus,
+            diary_doc_anchor: summary.diaryDocAnchor,
+            created_at: summary.createdAt,
+            updated_at: summary.updatedAt
+          };
+          return summaryRow;
+        },
+        updateUserState: function() {
+          return true;
+        }
+      },
+      DocumentRepository: {
+        findDiaryEntryAnchor: function() {
+          return 'AI Diary - 2026-07-07';
+        },
+        appendDiaryEntry: function() {
+          appended += 1;
+          return {
+            documentId: 'doc-1',
+            anchor: 'AI Diary - 2026-07-07',
+            appended: true
+          };
+        }
+      }
+    }, function() {
+      var result = DiaryService.generate({
+        diaryDate: '2026-07-07',
+        requestedAt: '2026-07-07T23:31:00+09:00'
+      });
+      assert(result.skipped === true, 'Existing anchor should skip duplicate generation.');
+      assert(summaryRow.diary_status === 'DONE', 'Existing anchor should repair summary status to DONE.');
+      assert(summaryRow.diary_doc_anchor === 'AI Diary - 2026-07-07', 'Existing anchor should be persisted back to daily_summaries.');
+      assert(appended === 0, 'Repair path should not append a second diary entry.');
     });
   });
 

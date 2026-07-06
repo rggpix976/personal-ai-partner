@@ -35,13 +35,7 @@ var DocumentRepository = (function() {
     Validators.assertDateString(diaryDate, 'diaryDate');
     var anchor = getDiaryAnchor_(diaryDate);
     var document = createOrOpenDiaryDocument();
-    var paragraphs = document.getBody().getParagraphs();
-    for (var i = 0; i < paragraphs.length; i += 1) {
-      if (String(paragraphs[i].getText()).trim() === anchor) {
-        return anchor;
-      }
-    }
-    return null;
+    return findDiaryAnchorInBody_(document.getBody(), anchor);
   }
 
   function appendDiaryEntry(entry) {
@@ -49,7 +43,7 @@ var DocumentRepository = (function() {
     var document = createOrOpenDiaryDocument();
     var body = document.getBody();
     var anchor = getDiaryAnchor_(entry.diaryDate);
-    if (findDiaryEntryAnchor(entry.diaryDate)) {
+    if (findDiaryAnchorInBody_(body, anchor)) {
       return {
         documentId: document.getId(),
         anchor: anchor,
@@ -78,6 +72,16 @@ var DocumentRepository = (function() {
       anchor: anchor,
       appended: true
     };
+  }
+
+  function findDiaryAnchorInBody_(body, anchor) {
+    var paragraphs = body.getParagraphs();
+    for (var i = 0; i < paragraphs.length; i += 1) {
+      if (String(paragraphs[i].getText()).trim() === anchor) {
+        return anchor;
+      }
+    }
+    return null;
   }
 
   return {

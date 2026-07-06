@@ -62,6 +62,8 @@
   - PASS (`syntax ok`)
 - `python tools/validate_contracts.py`
   - PASS locally after A5 changes
+- `python -c "<unicode scan script>"`
+  - PASS (`OK: no BOM, CRLF/CR, bidi controls, Unicode format controls, NBSP, or unexpected ASCII control characters found`)
 - Apps Script runtime self-tests were added but not executed in this shell environment
 
 ## Known Limitations

@@ -67,74 +67,38 @@ var MemoryService = (function() {
   function applyCandidates(candidates) {
     ensure(Array.isArray(candidates), 'VALIDATION_REQUEST_INVALID', 'Memory candidates must be an array.');
     ensure(candidates.length <= DEFAULTS.maxCandidateCount, 'VALIDATION_REQUEST_INVALID', 'Too many memory candidates.');
+    return LockManager.withScriptLock('memory-apply-candidates', function() {
+      var counts = {
+        created: 0,
+        confirmed: 0,
+        updated: 0,
+        ignored: 0,
+        rejected: 0
+      };
+      var now = toIsoStringInTokyo(new Date());
+      var activeRows = SheetRepository.listActiveMemories();
+      var memoryById = {};
+      var memoryByKey = {};
 
-    var counts = {
-      created: 0,
-      confirmed: 0,
-      updated: 0,
-      ignored: 0,
-      rejected: 0
-    };
-    var now = toIsoStringInTokyo(new Date());
-    var activeRows = SheetRepository.listActiveMemories();
-    var memoryById = {};
-    var memoryByKey = {};
+      activeRows.forEach(function(row) {
+        memoryById[row.memory_id] = cloneMemoryRow_(row);
+        memoryByKey[row.normalized_key] = cloneMemoryRow_(row);
+      });
 
-    activeRows.forEach(function(row) {
-      memoryById[row.memory_id] = cloneMemoryRow_(row);
-      memoryByKey[row.normalized_key] = cloneMemoryRow_(row);
-    });
-
-    candidates.forEach(function(candidate) {
-      try {
-        validateCandidate_(candidate);
-        var normalizedKey = normalizeMemoryKey_(candidate.normalizedKey);
-        var action = candidate.action;
-        var existingByKey = memoryByKey[normalizedKey] || null;
-
-        if (action === 'ignore') {
-          counts.ignored += 1;
-          return;
-        }
-
-        if (action === 'create') {
-          if (candidate.existingMemoryId) {
+      candidates.forEach(function(candidate) {
+        try {
+          applyCandidate_(candidate, now, counts, memoryById, memoryByKey);
+        } catch (error) {
+          if (isCandidateRejectionError_(error)) {
             counts.rejected += 1;
             return;
           }
-          if (existingByKey) {
-            upsertExistingMemoryFromCreate_(existingByKey, candidate, now, counts, memoryById, memoryByKey);
-            return;
-          }
-          var created = buildNewMemory_(candidate, now);
-          SheetRepository.upsertMemory(created);
-          memoryById[created.memoryId] = cloneMemoryDtoAsRow_(created);
-          memoryByKey[created.normalizedKey] = cloneMemoryDtoAsRow_(created);
-          counts.created += 1;
-          return;
+          throw error;
         }
+      });
 
-        var existing = candidate.existingMemoryId ? memoryById[candidate.existingMemoryId] : null;
-        if (!existing) {
-          counts.rejected += 1;
-          return;
-        }
-        if (existingByKey && existingByKey.memory_id !== existing.memory_id) {
-          counts.rejected += 1;
-          return;
-        }
-
-        var next = buildUpdatedMemory_(existing, candidate, now);
-        SheetRepository.upsertMemory(next);
-        memoryById[next.memoryId] = cloneMemoryDtoAsRow_(next);
-        memoryByKey[next.normalizedKey] = cloneMemoryDtoAsRow_(next);
-        counts[action === 'confirm' ? 'confirmed' : 'updated'] += 1;
-      } catch (error) {
-        counts.rejected += 1;
-      }
+      return counts;
     });
-
-    return counts;
   }
 
   function findRelevant(query, limit) {
@@ -186,9 +150,9 @@ var MemoryService = (function() {
       ? messageRange.requestedAt
       : toIsoStringInTokyo(new Date());
 
-    validateMessageIdArray_(sourceMessageIds, 'sourceMessageIds');
-    Validators.assertUuidV4(firstMessageId, 'firstMessageId');
-    Validators.assertUuidV4(lastMessageId, 'lastMessageId');
+    validatePayloadMessageIdArray_(sourceMessageIds, 'sourceMessageIds');
+    ensure(Validators.isUuidV4(firstMessageId), 'VALIDATION_REQUEST_INVALID', 'firstMessageId must be a UUID v4.');
+    ensure(Validators.isUuidV4(lastMessageId), 'VALIDATION_REQUEST_INVALID', 'lastMessageId must be a UUID v4.');
 
     ensure(
       sourceMessageIds.length > 0,
@@ -206,10 +170,10 @@ var MemoryService = (function() {
 
   function validateExtractionPayload_(payload) {
     payload = payload || {};
-    Validators.assertUuidV4(payload.firstMessageId, 'eventPayload.firstMessageId');
-    Validators.assertUuidV4(payload.lastMessageId, 'eventPayload.lastMessageId');
-    validateMessageIdArray_(payload.sourceMessageIds, 'eventPayload.sourceMessageIds');
-    Validators.assertIsoDateTimeString(payload.requestedAt, 'eventPayload.requestedAt');
+    ensure(Validators.isUuidV4(payload.firstMessageId), 'VALIDATION_REQUEST_INVALID', 'eventPayload.firstMessageId must be a UUID v4.');
+    ensure(Validators.isUuidV4(payload.lastMessageId), 'VALIDATION_REQUEST_INVALID', 'eventPayload.lastMessageId must be a UUID v4.');
+    validatePayloadMessageIdArray_(payload.sourceMessageIds, 'eventPayload.sourceMessageIds');
+    ensure(Validators.isIsoDateTimeString(payload.requestedAt), 'VALIDATION_REQUEST_INVALID', 'eventPayload.requestedAt must be an ISO 8601 string.');
     ensure(payload.sourceMessageIds.length > 0, 'VALIDATION_REQUEST_INVALID', 'sourceMessageIds must not be empty.');
     return {
       firstMessageId: payload.firstMessageId,
@@ -254,21 +218,57 @@ var MemoryService = (function() {
   }
 
   function validateCandidate_(candidate) {
-    ensure(candidate && typeof candidate === 'object', 'VALIDATION_REQUEST_INVALID', 'Candidate must be an object.');
-    Validators.assertEnum(candidate.action, ['create', 'confirm', 'update', 'ignore'], 'candidate.action');
-    Validators.assertEnum(candidate.category, APP_CONSTANTS.MEMORY_CATEGORIES, 'candidate.category');
-    ensure(typeof candidate.normalizedKey === 'string' && candidate.normalizedKey.trim() !== '', 'VALIDATION_REQUEST_INVALID', 'candidate.normalizedKey is required.');
-    ensure(typeof candidate.content === 'string' && candidate.content.trim() !== '', 'VALIDATION_REQUEST_INVALID', 'candidate.content is required.');
-    ensure(typeof candidate.reason === 'string' && candidate.reason.trim() !== '', 'VALIDATION_REQUEST_INVALID', 'candidate.reason is required.');
-    ensure(typeof candidate.confidence === 'number' && candidate.confidence >= 0 && candidate.confidence <= 1, 'VALIDATION_REQUEST_INVALID', 'candidate.confidence must be between 0 and 1.');
+    rejectUnless_(candidate && typeof candidate === 'object', 'Candidate must be an object.');
+    rejectUnless_(['create', 'confirm', 'update', 'ignore'].indexOf(candidate.action) !== -1, 'candidate.action is invalid.');
+    rejectUnless_(APP_CONSTANTS.MEMORY_CATEGORIES.indexOf(candidate.category) !== -1, 'candidate.category is invalid.');
+    rejectUnless_(typeof candidate.normalizedKey === 'string' && candidate.normalizedKey.trim() !== '', 'candidate.normalizedKey is required.');
+    rejectUnless_(typeof candidate.content === 'string' && candidate.content.trim() !== '', 'candidate.content is required.');
+    rejectUnless_(typeof candidate.reason === 'string' && candidate.reason.trim() !== '', 'candidate.reason is required.');
+    rejectUnless_(typeof candidate.confidence === 'number' && candidate.confidence >= 0 && candidate.confidence <= 1, 'candidate.confidence must be between 0 and 1.');
     validateMessageIdArray_(candidate.sourceMessageIds, 'candidate.sourceMessageIds');
     if (candidate.action === 'create' || candidate.action === 'ignore') {
-      ensure(!candidate.existingMemoryId, 'VALIDATION_REQUEST_INVALID', 'existingMemoryId is not allowed for this action.');
+      rejectUnless_(!candidate.existingMemoryId, 'existingMemoryId is not allowed for this action.');
     }
     if (candidate.action === 'confirm' || candidate.action === 'update') {
-      Validators.assertUuidV4(candidate.existingMemoryId, 'candidate.existingMemoryId');
+      rejectUnless_(Validators.isUuidV4(candidate.existingMemoryId), 'existingMemoryId is required for this action.');
     }
     return true;
+  }
+
+  function applyCandidate_(candidate, now, counts, memoryById, memoryByKey) {
+    validateCandidate_(candidate);
+    var normalizedKey = normalizeMemoryKey_(candidate.normalizedKey);
+    var action = candidate.action;
+    var existingByKey = memoryByKey[normalizedKey] || null;
+
+    if (action === 'ignore') {
+      counts.ignored += 1;
+      return;
+    }
+
+    if (action === 'create') {
+      rejectUnless_(!candidate.existingMemoryId, 'Create candidates must not include existingMemoryId.');
+      if (existingByKey) {
+        upsertExistingMemoryFromCreate_(existingByKey, candidate, now, counts, memoryById, memoryByKey);
+        return;
+      }
+      var created = buildNewMemory_(candidate, now);
+      SheetRepository.upsertMemory(created);
+      memoryById[created.memoryId] = cloneMemoryDtoAsRow_(created);
+      memoryByKey[created.normalizedKey] = cloneMemoryDtoAsRow_(created);
+      counts.created += 1;
+      return;
+    }
+
+    var existing = candidate.existingMemoryId ? memoryById[candidate.existingMemoryId] : null;
+    rejectUnless_(Boolean(existing), 'existingMemoryId was not found among active memories.');
+    rejectUnless_(!existingByKey || existingByKey.memory_id === existing.memory_id, 'normalizedKey points to a different active memory.');
+
+    var next = buildUpdatedMemory_(existing, candidate, now);
+    SheetRepository.upsertMemory(next);
+    memoryById[next.memoryId] = cloneMemoryDtoAsRow_(next);
+    memoryByKey[next.normalizedKey] = cloneMemoryDtoAsRow_(next);
+    counts[action === 'confirm' ? 'confirmed' : 'updated'] += 1;
   }
 
   function buildNewMemory_(candidate, now) {
@@ -341,12 +341,41 @@ var MemoryService = (function() {
   }
 
   function validateMessageIdArray_(ids, label) {
+    rejectUnless_(Array.isArray(ids), (label || 'ids') + ' must be an array.');
+    ids.forEach(function(id) {
+      rejectUnless_(Validators.isUuidV4(id), (label || 'id') + ' must contain UUID v4 values.');
+    });
+    rejectUnless_(uniqueIds_(ids).length === ids.length, (label || 'ids') + ' must be unique.');
+    return true;
+  }
+
+  function validatePayloadMessageIdArray_(ids, label) {
     ensure(Array.isArray(ids), 'VALIDATION_REQUEST_INVALID', (label || 'ids') + ' must be an array.');
     ids.forEach(function(id) {
-      Validators.assertUuidV4(id, label || 'id');
+      ensure(Validators.isUuidV4(id), 'VALIDATION_REQUEST_INVALID', (label || 'id') + ' must contain UUID v4 values.');
     });
     ensure(uniqueIds_(ids).length === ids.length, 'VALIDATION_REQUEST_INVALID', (label || 'ids') + ' must be unique.');
     return true;
+  }
+
+  function rejectUnless_(condition, message) {
+    if (!condition) {
+      throw createCandidateRejectionError_(message);
+    }
+    return true;
+  }
+
+  function createCandidateRejectionError_(message) {
+    return createAppError('VALIDATION_REQUEST_INVALID', message, {
+      candidateRejection: true
+    });
+  }
+
+  function isCandidateRejectionError_(error) {
+    return error instanceof AppError &&
+      error.code === 'VALIDATION_REQUEST_INVALID' &&
+      error.details &&
+      error.details.candidateRejection === true;
   }
 
   function uniqueIds_(ids) {
@@ -517,7 +546,8 @@ var MemoryService = (function() {
       buildDedupeKey: buildDedupeKey_,
       normalizeCandidateList: normalizeCandidateList_,
       scoreMemory: scoreMemory_,
-      normalizeMemoryKey: normalizeMemoryKey_
+      normalizeMemoryKey: normalizeMemoryKey_,
+      isCandidateRejectionError: isCandidateRejectionError_
     }
   };
 })();

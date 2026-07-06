@@ -66,9 +66,10 @@ var DiaryService = (function() {
     var payload = validateGeneratePayload_(eventPayload);
     var diaryDate = payload.diaryDate;
     var warnings = [];
+    var existingState = getDiaryState_(diaryDate);
 
-    if (isGenerated(diaryDate)) {
-      return buildSkippedResult_(diaryDate, warnings);
+    if (existingState.generated) {
+      return repairGeneratedDiaryState_(diaryDate, null, null, warnings);
     }
 
     var messages = SheetRepository.listMessagesByDate(diaryDate);
@@ -94,42 +95,32 @@ var DiaryService = (function() {
       'diary-entry'
     );
     var diary = normalizeDiaryEntry_(generation.data);
-    var renderedBody = renderDiaryBody_(diary);
-    var appendResult = DocumentRepository.appendDiaryEntry({
-      diaryDate: diaryDate,
-      title: diary.title,
-      body: renderedBody
-    });
+    return LockManager.withScriptLock('diary-generate-' + diaryDate, function() {
+      var currentState = getDiaryState_(diaryDate);
+      if (currentState.generated) {
+        return repairGeneratedDiaryStateWithoutLock_(diaryDate, messages, null, warnings);
+      }
 
-    if (!appendResult.appended) {
-      return buildSkippedResult_(diaryDate, warnings, appendResult.documentId);
-    }
+      var renderedBody = renderDiaryBody_(diary);
+      var appendResult = DocumentRepository.appendDiaryEntry({
+        diaryDate: diaryDate,
+        title: diary.title,
+        body: renderedBody
+      });
+      if (!appendResult.appended) {
+        return repairGeneratedDiaryStateWithoutLock_(diaryDate, messages, appendResult.anchor, warnings, appendResult.documentId);
+      }
 
-    var now = toIsoStringInTokyo(new Date());
-    var existingSummary = SheetRepository.getDailySummary(diaryDate);
-    SheetRepository.upsertDailySummary({
-      summaryDate: diaryDate,
-      conversationCount: messages.length,
-      summaryText: summarizeDiaryForSheet_(diary),
-      keyTopics: normalizeTopics_(diary.thingsToRemember.concat(diary.unresolvedFollowUps)),
-      memoryCandidateCount: existingSummary ? Number(existingSummary.memory_candidate_count || 0) : 0,
-      diaryStatus: 'DONE',
-      diaryDocAnchor: appendResult.anchor,
-      createdAt: existingSummary ? existingSummary.created_at : now,
-      updatedAt: now
+      persistDiarySummary_(diaryDate, messages, diary, appendResult.anchor);
+      return {
+        generated: true,
+        skipped: false,
+        diaryDate: diaryDate,
+        documentId: appendResult.documentId,
+        summaryId: diaryDate,
+        warnings: warnings
+      };
     });
-    SheetRepository.updateUserState({
-      last_diary_date: diaryDate
-    });
-
-    return {
-      generated: true,
-      skipped: false,
-      diaryDate: diaryDate,
-      documentId: appendResult.documentId,
-      summaryId: diaryDate,
-      warnings: warnings
-    };
   }
 
   function markDailySummaryPending_(diaryDate, now) {
@@ -149,12 +140,78 @@ var DiaryService = (function() {
 
   function validateGeneratePayload_(payload) {
     payload = payload || {};
-    Validators.assertDateString(payload.diaryDate, 'eventPayload.diaryDate');
-    Validators.assertIsoDateTimeString(payload.requestedAt, 'eventPayload.requestedAt');
+    ensure(Validators.isDateString(payload.diaryDate), 'VALIDATION_REQUEST_INVALID', 'eventPayload.diaryDate must be a yyyy-MM-dd string.');
+    ensure(Validators.isIsoDateTimeString(payload.requestedAt), 'VALIDATION_REQUEST_INVALID', 'eventPayload.requestedAt must be an ISO 8601 string.');
     return {
       diaryDate: payload.diaryDate,
       requestedAt: payload.requestedAt
     };
+  }
+
+  function getDiaryState_(diaryDate) {
+    var summary = SheetRepository.getDailySummary(diaryDate);
+    var anchor = summary && summary.diary_doc_anchor
+      ? String(summary.diary_doc_anchor)
+      : DocumentRepository.findDiaryEntryAnchor(diaryDate);
+    return {
+      generated: Boolean((summary && summary.diary_status === 'DONE') || anchor),
+      summary: summary,
+      anchor: anchor || null
+    };
+  }
+
+  function repairGeneratedDiaryState_(diaryDate, messages, anchorOverride, warnings, documentId) {
+    var normalizedWarnings = warnings || [];
+    return LockManager.withScriptLock('diary-generate-' + diaryDate, function() {
+      return repairGeneratedDiaryStateWithoutLock_(diaryDate, messages, anchorOverride, normalizedWarnings, documentId);
+    });
+  }
+
+  function repairGeneratedDiaryStateWithoutLock_(diaryDate, messages, anchorOverride, warnings, documentId) {
+    var state = getDiaryState_(diaryDate);
+    var anchor = anchorOverride || state.anchor || DocumentRepository.findDiaryEntryAnchor(diaryDate);
+    if (anchor) {
+      persistDiaryDoneFromExisting_(diaryDate, messages, state.summary, anchor);
+    }
+    return buildSkippedResult_(diaryDate, warnings || [], documentId || null);
+  }
+
+  function persistDiarySummary_(diaryDate, messages, diary, anchor) {
+    var now = toIsoStringInTokyo(new Date());
+    var existingSummary = SheetRepository.getDailySummary(diaryDate);
+    SheetRepository.upsertDailySummary({
+      summaryDate: diaryDate,
+      conversationCount: messages.length,
+      summaryText: summarizeDiaryForSheet_(diary),
+      keyTopics: normalizeTopics_(diary.thingsToRemember.concat(diary.unresolvedFollowUps)),
+      memoryCandidateCount: existingSummary ? Number(existingSummary.memory_candidate_count || 0) : 0,
+      diaryStatus: 'DONE',
+      diaryDocAnchor: anchor,
+      createdAt: existingSummary ? existingSummary.created_at : now,
+      updatedAt: now
+    });
+    SheetRepository.updateUserState({
+      last_diary_date: diaryDate
+    });
+  }
+
+  function persistDiaryDoneFromExisting_(diaryDate, messages, existingSummary, anchor) {
+    var now = toIsoStringInTokyo(new Date());
+    var messageRows = messages || SheetRepository.listMessagesByDate(diaryDate);
+    SheetRepository.upsertDailySummary({
+      summaryDate: diaryDate,
+      conversationCount: existingSummary ? Number(existingSummary.conversation_count || 0) : messageRows.length,
+      summaryText: existingSummary ? existingSummary.summary_text : null,
+      keyTopics: existingSummary ? existingSummary.key_topics_json : null,
+      memoryCandidateCount: existingSummary ? Number(existingSummary.memory_candidate_count || 0) : 0,
+      diaryStatus: 'DONE',
+      diaryDocAnchor: anchor,
+      createdAt: existingSummary ? existingSummary.created_at : now,
+      updatedAt: now
+    });
+    SheetRepository.updateUserState({
+      last_diary_date: diaryDate
+    });
   }
 
   function buildDiaryRequest_(diaryDate, messages, memories) {
@@ -291,7 +348,8 @@ var DiaryService = (function() {
     __test: {
       buildDedupeKey: buildDedupeKey_,
       normalizeDiaryEntry: normalizeDiaryEntry_,
-      renderDiaryBody: renderDiaryBody_
+      renderDiaryBody: renderDiaryBody_,
+      getDiaryState: getDiaryState_
     }
   };
 })();
