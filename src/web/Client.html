@@ -1,0 +1,543 @@
+<script>
+  (function() {
+    var bootstrap = window.__A3_BOOTSTRAP__ || {};
+    var RETRYABLE_CODES = {
+      GEMINI_RATE_LIMIT: true,
+      GEMINI_BAD_RESPONSE: true,
+      GEMINI_TEMPORARY_FAILURE: true,
+      STORAGE_WRITE_FAILED: true,
+      MAIL_QUOTA_EXHAUSTED: true,
+      QUEUE_LOCK_BUSY: true
+    };
+    var state = {
+      messages: [],
+      pagination: {
+        hasMore: false,
+        nextBeforeMessageId: null
+      },
+      loadingOlder: false,
+      sending: false,
+      selectedImage: null,
+      activeRequestId: null,
+      pollTimer: null
+    };
+
+    var elements = {};
+
+    document.addEventListener('DOMContentLoaded', init);
+
+    function init() {
+      cacheElements();
+      bindEvents();
+      elements.messageInput.maxLength = String(bootstrap.maxUserTextChars || 4000);
+      renderAttachmentMeta();
+      setStatus('loading', 'Loading', 'Preparing the chat screen.');
+      loadInitialState();
+    }
+
+    function cacheElements() {
+      elements.partnerTitle = document.getElementById('partner-title');
+      elements.statusPanel = document.getElementById('status-panel');
+      elements.statusLabel = document.getElementById('status-label');
+      elements.statusText = document.getElementById('status-text');
+      elements.messages = document.getElementById('messages');
+      elements.historyNote = document.getElementById('history-note');
+      elements.loadOlderButton = document.getElementById('load-older-button');
+      elements.refreshButton = document.getElementById('refresh-button');
+      elements.composerForm = document.getElementById('composer-form');
+      elements.messageInput = document.getElementById('message-input');
+      elements.imageInput = document.getElementById('image-input');
+      elements.attachmentMeta = document.getElementById('attachment-meta');
+      elements.previewCard = document.getElementById('preview-card');
+      elements.previewImage = document.getElementById('preview-image');
+      elements.previewName = document.getElementById('preview-name');
+      elements.previewSize = document.getElementById('preview-size');
+      elements.removeImageButton = document.getElementById('remove-image-button');
+      elements.helperText = document.getElementById('helper-text');
+      elements.sendButton = document.getElementById('send-button');
+    }
+
+    function bindEvents() {
+      elements.composerForm.addEventListener('submit', onSubmit);
+      elements.imageInput.addEventListener('change', onImageSelected);
+      elements.removeImageButton.addEventListener('click', clearSelectedImage);
+      elements.loadOlderButton.addEventListener('click', onLoadOlder);
+      elements.refreshButton.addEventListener('click', loadInitialState);
+      elements.messageInput.addEventListener('input', autoResizeTextarea);
+    }
+
+    function loadInitialState() {
+      clearPoll();
+      setBusyState(false);
+      setStatus('loading', 'Loading', 'Fetching the latest messages.');
+      callServer('getInitialState', [])
+        .then(function(response) {
+          var system = response.system || {};
+          state.messages = Array.isArray(response.messages) ? response.messages.slice() : [];
+          state.pagination = response.pagination || {
+            hasMore: false,
+            nextBeforeMessageId: null
+          };
+          renderSystem(system);
+          renderMessages('bottom');
+          updatePaginationUi();
+          if (system.status === 'stopped') {
+            setStatus('not-configured', 'Setup required', joinWarnings(system.warnings, 'The app is not fully configured.'));
+            setComposerEnabled(false);
+            return;
+          }
+          setComposerEnabled(true);
+          if (system.status === 'degraded') {
+            setStatus('succeeded', 'Queue mode', joinWarnings(system.warnings, 'Messages can be queued, but assistant replies are not active yet.'));
+          } else {
+            setStatus('succeeded', 'Ready', 'Latest messages loaded.');
+          }
+        })
+        .catch(function(error) {
+          setStatus('retryable-failure', 'Load failed', error.message || 'Could not load the chat screen.');
+        });
+    }
+
+    function onLoadOlder() {
+      if (!state.pagination.hasMore || state.loadingOlder) {
+        return;
+      }
+      state.loadingOlder = true;
+      updatePaginationUi();
+      setStatus('loading', 'Loading older messages', 'Fetching more history.');
+      callServer('loadMessages', [state.pagination.nextBeforeMessageId, bootstrap.pageSize || 20])
+        .then(function(response) {
+          var olderMessages = Array.isArray(response.messages) ? response.messages : [];
+          state.messages = olderMessages.concat(state.messages);
+          state.pagination = response.pagination || state.pagination;
+          renderMessages('preserve');
+          updatePaginationUi();
+          setStatus('succeeded', 'History updated', olderMessages.length > 0 ? 'Older messages loaded.' : 'No additional messages were found.');
+        })
+        .catch(function(error) {
+          setStatus('retryable-failure', 'History load failed', error.message || 'Could not load older messages.');
+        })
+        .finally(function() {
+          state.loadingOlder = false;
+          updatePaginationUi();
+        });
+    }
+
+    function onSubmit(event) {
+      event.preventDefault();
+      if (state.sending) {
+        return;
+      }
+
+      var text = elements.messageInput.value || '';
+      if (!text.trim() && !state.selectedImage) {
+        setStatus('failed', 'Nothing to send', 'Write a message or attach an image first.');
+        return;
+      }
+
+      var requestId = generateRequestId();
+      var request = {
+        requestId: requestId,
+        text: text,
+        clientTimestamp: toOffsetIsoString(new Date()),
+        image: state.selectedImage ? {
+          name: state.selectedImage.name,
+          mimeType: state.selectedImage.mimeType,
+          base64: state.selectedImage.base64
+        } : null
+      };
+
+      state.sending = true;
+      state.activeRequestId = requestId;
+      setBusyState(true);
+      setStatus('sending', 'Sending', 'Submitting your message.');
+
+      callServer('sendChat', [request])
+        .then(function(result) {
+          handleChatResult(result, true);
+          if (result && result.ok && result.userMessage) {
+            upsertMessage(result.userMessage);
+            renderMessages('bottom');
+          }
+          if (result && result.ok) {
+            elements.messageInput.value = '';
+            autoResizeTextarea();
+            clearSelectedImage();
+          }
+          if (result && result.status === 'queued') {
+            schedulePoll(requestId, 4, 12);
+          }
+        })
+        .catch(function(error) {
+          setStatus('retryable-failure', 'Send failed', error.message || 'The request could not be sent.');
+        })
+        .finally(function() {
+          state.sending = false;
+          setBusyState(false);
+        });
+    }
+
+    function handleChatResult(result, fromSend) {
+      if (!result) {
+        setStatus('failed', 'Unexpected response', 'The server returned an empty response.');
+        return;
+      }
+
+      if (result.status === 'completed' && result.assistantMessage) {
+        upsertMessage(result.userMessage);
+        upsertMessage(result.assistantMessage);
+        renderMessages('bottom');
+        setStatus('succeeded', 'Reply ready', 'The assistant reply has been received.');
+        clearPoll();
+        return;
+      }
+
+      if (result.status === 'queued') {
+        var queuedText = joinWarnings(result.warnings, fromSend ? 'Message accepted and queued for reply processing.' : 'Reply processing is still in progress.');
+        setStatus('succeeded', 'Queued', queuedText);
+        return;
+      }
+
+      if (result.status === 'failed') {
+        var retryable = isRetryableFailure(result.error);
+        setStatus(
+          retryable ? 'retryable-failure' : 'failed',
+          retryable ? 'Retryable failure' : 'Failed',
+          result.error && result.error.message ? result.error.message : 'The request failed.'
+        );
+      }
+    }
+
+    function schedulePoll(requestId, intervalSeconds, remainingAttempts) {
+      clearPoll();
+      if (remainingAttempts <= 0) {
+        setStatus('succeeded', 'Still waiting', 'Your message is queued. Refresh later to check for a reply.');
+        return;
+      }
+      state.pollTimer = window.setTimeout(function() {
+        callServer('getRequestStatus', [requestId])
+          .then(function(result) {
+            handleChatResult(result, false);
+            if (result && result.status === 'completed') {
+              return;
+            }
+            if (result && result.status === 'queued') {
+              schedulePoll(requestId, intervalSeconds, remainingAttempts - 1);
+            }
+          })
+          .catch(function(error) {
+            setStatus('retryable-failure', 'Status check failed', error.message || 'The request status could not be refreshed.');
+          });
+      }, intervalSeconds * 1000);
+    }
+
+    function clearPoll() {
+      if (state.pollTimer) {
+        window.clearTimeout(state.pollTimer);
+        state.pollTimer = null;
+      }
+    }
+
+    function onImageSelected(event) {
+      var file = event.target.files && event.target.files[0];
+      if (!file) {
+        clearSelectedImage();
+        return;
+      }
+
+      var allowedMimeTypes = bootstrap.allowedMimeTypes || ['image/jpeg', 'image/png', 'image/webp'];
+      var maxBytes = bootstrap.imageMaxBytes || 4194304;
+
+      if (allowedMimeTypes.indexOf(file.type) === -1) {
+        clearSelectedImage();
+        setStatus('failed', 'Unsupported image', 'Choose a JPEG, PNG, or WebP image.');
+        return;
+      }
+
+      if (file.size > maxBytes) {
+        clearSelectedImage();
+        setStatus('failed', 'Image too large', 'Keep images under ' + formatBytes(maxBytes) + '.');
+        return;
+      }
+
+      readFileAsDataUrl(file)
+        .then(function(dataUrl) {
+          state.selectedImage = {
+            name: file.name,
+            size: file.size,
+            mimeType: file.type,
+            base64: dataUrl.split(',')[1] || '',
+            previewUrl: dataUrl
+          };
+          renderPreview();
+          setStatus('succeeded', 'Image ready', 'The attachment passed client-side validation.');
+        })
+        .catch(function() {
+          clearSelectedImage();
+          setStatus('failed', 'Preview failed', 'The selected image could not be read.');
+        });
+    }
+
+    function clearSelectedImage() {
+      state.selectedImage = null;
+      elements.imageInput.value = '';
+      renderPreview();
+      renderAttachmentMeta();
+    }
+
+    function renderPreview() {
+      if (!state.selectedImage) {
+        elements.previewCard.classList.add('hidden');
+        elements.previewImage.removeAttribute('src');
+        elements.previewName.textContent = '';
+        elements.previewSize.textContent = '';
+        return;
+      }
+      elements.previewCard.classList.remove('hidden');
+      elements.previewImage.src = state.selectedImage.previewUrl;
+      elements.previewName.textContent = state.selectedImage.name;
+      elements.previewSize.textContent = formatBytes(state.selectedImage.size);
+    }
+
+    function renderSystem(system) {
+      elements.partnerTitle.textContent = system.partnerName || 'Partner';
+      elements.historyNote.textContent = system.userName
+        ? 'Chatting as ' + system.userName
+        : 'Latest messages';
+    }
+
+    function renderMessages(scrollMode) {
+      var previousHeight = elements.messages.scrollHeight;
+      var previousTop = elements.messages.scrollTop;
+      while (elements.messages.firstChild) {
+        elements.messages.removeChild(elements.messages.firstChild);
+      }
+
+      if (state.messages.length === 0) {
+        var empty = document.createElement('div');
+        empty.className = 'message-row';
+        var emptyBubble = document.createElement('div');
+        emptyBubble.className = 'bubble';
+        var emptyText = document.createElement('p');
+        emptyText.className = 'bubble-text';
+        emptyText.textContent = 'No messages yet. Start with a short note or image.';
+        emptyBubble.appendChild(emptyText);
+        empty.appendChild(emptyBubble);
+        elements.messages.appendChild(empty);
+        return;
+      }
+
+      state.messages.forEach(function(message) {
+        elements.messages.appendChild(createMessageNode(message));
+      });
+      if (scrollMode === 'preserve') {
+        elements.messages.scrollTop = elements.messages.scrollHeight - previousHeight + previousTop;
+        return;
+      }
+      elements.messages.scrollTop = elements.messages.scrollHeight;
+    }
+
+    function createMessageNode(message) {
+      var row = document.createElement('article');
+      row.className = 'message-row';
+      row.setAttribute('data-role', message.role || 'system');
+
+      var bubble = document.createElement('div');
+      bubble.className = 'bubble';
+
+      var meta = document.createElement('div');
+      meta.className = 'bubble-meta';
+
+      var author = document.createElement('span');
+      author.textContent = formatRoleLabel(message.role);
+
+      var timestamp = document.createElement('time');
+      timestamp.dateTime = message.createdAt || '';
+      timestamp.textContent = formatTimestamp(message.createdAt);
+
+      meta.appendChild(author);
+      meta.appendChild(timestamp);
+      bubble.appendChild(meta);
+
+      var text = document.createElement('p');
+      text.className = 'bubble-text';
+      text.textContent = message.text || '';
+      bubble.appendChild(text);
+
+      if (message.image) {
+        var imageMeta = document.createElement('div');
+        imageMeta.className = 'bubble-image-meta';
+        imageMeta.textContent = 'Image: ' + message.image.name + ' (' + message.image.mimeType + ')';
+        bubble.appendChild(imageMeta);
+      }
+
+      row.appendChild(bubble);
+      return row;
+    }
+
+    function setStatus(stateName, label, text) {
+      elements.statusPanel.setAttribute('data-state', stateName);
+      elements.statusLabel.textContent = label;
+      elements.statusText.textContent = text;
+    }
+
+    function setBusyState(isBusy) {
+      elements.sendButton.disabled = isBusy;
+      elements.messageInput.disabled = isBusy;
+      elements.imageInput.disabled = isBusy;
+    }
+
+    function setComposerEnabled(isEnabled) {
+      elements.messageInput.disabled = !isEnabled || state.sending;
+      elements.imageInput.disabled = !isEnabled || state.sending;
+      elements.sendButton.disabled = !isEnabled || state.sending;
+      elements.helperText.textContent = isEnabled
+        ? 'Messages are displayed with escaped text content.'
+        : 'Finish setup before sending messages.';
+    }
+
+    function updatePaginationUi() {
+      elements.loadOlderButton.disabled = !state.pagination.hasMore || state.loadingOlder;
+      elements.loadOlderButton.textContent = state.loadingOlder ? 'Loading...' : 'Load older messages';
+    }
+
+    function renderAttachmentMeta() {
+      var maxBytes = bootstrap.imageMaxBytes || 4194304;
+      elements.attachmentMeta.textContent = 'JPEG, PNG, or WebP up to ' + formatBytes(maxBytes);
+    }
+
+    function autoResizeTextarea() {
+      elements.messageInput.style.height = 'auto';
+      elements.messageInput.style.height = Math.min(elements.messageInput.scrollHeight, 180) + 'px';
+    }
+
+    function upsertMessage(message) {
+      if (!message || !message.messageId) {
+        return;
+      }
+      var found = false;
+      state.messages = state.messages.map(function(existing) {
+        if (existing.messageId === message.messageId) {
+          found = true;
+          return message;
+        }
+        return existing;
+      });
+      if (!found) {
+        state.messages.push(message);
+        state.messages.sort(function(left, right) {
+          return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+        });
+      }
+    }
+
+    function callServer(functionName, args) {
+      args = args || [];
+      return new Promise(function(resolve, reject) {
+        if (!window.google || !google.script || !google.script.run) {
+          reject(new Error('google.script.run is unavailable in this context.'));
+          return;
+        }
+        var runner = google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(function(error) {
+            reject(new Error(error && error.message ? error.message : String(error)));
+          });
+        runner[functionName].apply(runner, args);
+      });
+    }
+
+    function readFileAsDataUrl(file) {
+      return new Promise(function(resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function() {
+          resolve(String(reader.result || ''));
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function generateRequestId() {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return window.crypto.randomUUID();
+      }
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(character) {
+        var random = Math.random() * 16 | 0;
+        var value = character === 'x' ? random : (random & 0x3 | 0x8);
+        return value.toString(16);
+      });
+    }
+
+    function formatTimestamp(isoString) {
+      if (!isoString) {
+        return '';
+      }
+      try {
+        var date = new Date(isoString);
+        return date.toLocaleString([], {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+      } catch (error) {
+        return isoString;
+      }
+    }
+
+    function toOffsetIsoString(date) {
+      var timezoneOffsetMinutes = -date.getTimezoneOffset();
+      var sign = timezoneOffsetMinutes >= 0 ? '+' : '-';
+      var absoluteOffset = Math.abs(timezoneOffsetMinutes);
+      var offsetHours = padNumber(Math.floor(absoluteOffset / 60));
+      var offsetMinutes = padNumber(absoluteOffset % 60);
+      return date.getFullYear() +
+        '-' + padNumber(date.getMonth() + 1) +
+        '-' + padNumber(date.getDate()) +
+        'T' + padNumber(date.getHours()) +
+        ':' + padNumber(date.getMinutes()) +
+        ':' + padNumber(date.getSeconds()) +
+        sign + offsetHours + ':' + offsetMinutes;
+    }
+
+    function padNumber(value) {
+      return value < 10 ? '0' + value : String(value);
+    }
+
+    function formatRoleLabel(role) {
+      if (role === 'user') {
+        return 'You';
+      }
+      if (role === 'assistant') {
+        return 'Partner';
+      }
+      return 'System';
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes) {
+        return '0 B';
+      }
+      var units = ['B', 'KB', 'MB', 'GB'];
+      var size = bytes;
+      var unitIndex = 0;
+      while (size >= 1024 && unitIndex < units.length - 1) {
+        size = size / 1024;
+        unitIndex += 1;
+      }
+      return size.toFixed(unitIndex === 0 ? 0 : 1) + ' ' + units[unitIndex];
+    }
+
+    function joinWarnings(warnings, fallback) {
+      if (!warnings || !warnings.length) {
+        return fallback;
+      }
+      return warnings.join('\n');
+    }
+
+    function isRetryableFailure(error) {
+      return Boolean(error && error.code && RETRYABLE_CODES[error.code]);
+    }
+  })();
+</script>

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="format-detection" content="telephone=no">
+    <meta name="apple-mobile-web-app-title" content="AI Partner">
+    <script>
+      window.__A3_BOOTSTRAP__ = <?!= bootstrapJson ?>;
+    </script>
+    <?!= includePartial_('web/Styles'); ?>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Personal AI Partner</p>
+          <h1 class="title" id="partner-title">Partner</h1>
+        </div>
+        <button class="ghost-button" id="refresh-button" type="button">Refresh</button>
+      </header>
+
+      <section class="status-panel" id="status-panel" aria-live="polite">
+        <strong class="status-label" id="status-label">Loading</strong>
+        <p class="status-text" id="status-text">Preparing the chat screen.</p>
+      </section>
+
+      <main class="chat-panel">
+        <div class="history-toolbar">
+          <button class="ghost-button" id="load-older-button" type="button">Load older messages</button>
+          <span class="history-note" id="history-note">Latest messages</span>
+        </div>
+
+        <section class="messages" id="messages" aria-live="polite" aria-label="Conversation"></section>
+      </main>
+
+      <footer class="composer-shell">
+        <form class="composer" id="composer-form">
+          <label class="sr-only" for="message-input">Message</label>
+          <textarea
+            id="message-input"
+            class="message-input"
+            rows="1"
+            maxlength="4000"
+            placeholder="Write a message for your partner"
+          ></textarea>
+
+          <div class="attachment-row">
+            <label class="attach-button" for="image-input">Attach image</label>
+            <input id="image-input" class="sr-only" type="file" accept="image/jpeg,image/png,image/webp">
+            <span class="attachment-meta" id="attachment-meta">JPEG, PNG, or WebP</span>
+          </div>
+
+          <div class="preview-card hidden" id="preview-card">
+            <img id="preview-image" class="preview-image" alt="Selected preview">
+            <div class="preview-copy">
+              <p class="preview-name" id="preview-name"></p>
+              <p class="preview-size" id="preview-size"></p>
+            </div>
+            <button class="ghost-button" id="remove-image-button" type="button">Remove</button>
+          </div>
+
+          <div class="composer-actions">
+            <span class="helper-text" id="helper-text">Message text is safely escaped before display.</span>
+            <button class="send-button" id="send-button" type="submit">Send</button>
+          </div>
+        </form>
+      </footer>
+    </div>
+
+    <?!= includePartial_('web/Client'); ?>
+  </body>
+</html>
