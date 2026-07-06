@@ -52,7 +52,7 @@
 
 - The Apps Script self-tests are present but unexecuted locally.
 - No change request document was needed because no A1 contract contradiction was found.
-- `AppLogger` currently logs to the execution log with masking; it does not persist masked rows into `debug_logs` automatically.
+- `AppLogger.writeDebugLog(...)` and `SheetRepository.appendDebugLog(...)` are available for downstream A6/A7 use, but no caller is wired into production flows yet.
 
 ## Items Requiring Human Setup In Google Apps Script
 
@@ -67,10 +67,23 @@
 
 ## Merge Checklist
 
+### A2 merge prerequisites
+
 - [x] A2-owned foundation files implemented only within allowed paths
 - [x] `setup()` is idempotent
 - [x] `migrateSchema()` appends missing columns only
 - [x] `runPlatformSelfTest()` avoids Gemini API calls
 - [x] Contract validator passes
+
+### After creating the Google Apps Script environment
+
+- [ ] Apps Script project created/imported
+- [ ] Script Properties set for `GEMINI_API_KEY`, `OWNER_EMAIL`, and `APP_ENV`
+- [ ] `setup()` executed successfully
 - [ ] Apps Script runtime self-tests executed by a human in GAS
-- [ ] Web app deployed and `WEB_APP_URL` stored
+
+### After web app deployment
+
+- [ ] Web app deployed to `/exec`
+- [ ] `WEB_APP_URL` stored in Script Properties
+- [ ] `validatePostDeployProperties()` executed successfully

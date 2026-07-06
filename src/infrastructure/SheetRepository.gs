@@ -313,6 +313,30 @@ var SheetRepository = (function() {
     return event;
   }
 
+  function appendDebugLog(entry) {
+    var row = {
+      log_id: generateUuidV4(),
+      timestamp: entry.timestamp || toIsoStringInTokyo(new Date()),
+      level: entry.level,
+      operation: entry.operation,
+      correlation_id: entry.correlationId || generateUuidV4(),
+      event_id: entry.eventId || null,
+      message: entry.message || '',
+      details_json: entry.details == null ? null : entry.details
+    };
+    appendRow(APP_CONSTANTS.SHEETS.DEBUG_LOGS, row);
+    return {
+      logId: row.log_id,
+      timestamp: row.timestamp,
+      level: row.level,
+      operation: row.operation,
+      correlationId: row.correlation_id,
+      eventId: row.event_id,
+      message: row.message,
+      details: row.details_json
+    };
+  }
+
   function listClaimableEvents(limit, now) {
     var nowIso = now instanceof Date ? toIsoStringInTokyo(now) : now;
     return getRows(APP_CONSTANTS.SHEETS.EVENT_QUEUE)
@@ -406,6 +430,7 @@ var SheetRepository = (function() {
     insertEvent: insertEvent,
     listClaimableEvents: listClaimableEvents,
     updateEvent: updateEvent,
+    appendDebugLog: appendDebugLog,
     listActiveMemories: listActiveMemories,
     upsertMemory: upsertMemory
   };

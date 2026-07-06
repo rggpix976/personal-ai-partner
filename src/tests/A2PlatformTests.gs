@@ -102,9 +102,36 @@ function runA2PlatformTests() {
   }, 'STORAGE_DATA_CORRUPTED');
 
   test('log masking', function() {
-    var masked = AppLogger.mask('Authorization: Bearer token123 x-goog-api-key: demo-key owner@example.com Zm9vYmFyYmF6cXV4cXV4cXV4cXV4cXV4cXV4cXV4cXV4cXV4cXV4');
+    var masked = AppLogger.mask(
+      'Authorization: Bearer token123 ' +
+      'x-goog-api-key: demo-key ' +
+      'owner@example.com ' +
+      'requestId=11111111-1111-4111-8111-111111111111 ' +
+      'messageId=22222222-2222-4222-8222-222222222222 ' +
+      'fileId=1AbCdEfGhIjKlMnOpQrStUvWxYz123456 ' +
+      'base64=data:image/png;base64,Zm9vYmFyYmF6cXV4cXV4cXV4cXV4cXV4cXV4cXV4cXV4cXV4cXV4'
+    );
     assert(masked.indexOf('Bearer token123') === -1, 'Authorization token should be masked.');
     assert(masked.indexOf('demo-key') === -1, 'Header API key should be masked.');
+    assert(masked.indexOf('owner@example.com') === -1, 'Owner email should be masked.');
+    assert(masked.indexOf('11111111-1111-4111-8111-111111111111') !== -1, 'requestId should remain visible.');
+    assert(masked.indexOf('22222222-2222-4222-8222-222222222222') !== -1, 'messageId should remain visible.');
+    assert(masked.indexOf('[REDACTED_DRIVE_ID:3456]') !== -1, 'Drive ID should keep suffix.');
+    assert(masked.indexOf('[REDACTED_BASE64]') !== -1, 'Base64 should be masked.');
+  });
+
+  test('debug log payload builder', function() {
+    var payload = AppLogger.buildPayload(
+      'INFO',
+      'testOperation',
+      'ok',
+      { fileId: '1AbCdEfGhIjKlMnOpQrStUvWxYz123456' },
+      '33333333-3333-4333-8333-333333333333',
+      '44444444-4444-4444-8444-444444444444'
+    );
+    assert(payload.correlationId === '33333333-3333-4333-8333-333333333333', 'correlationId should be preserved.');
+    assert(payload.eventId === '44444444-4444-4444-8444-444444444444', 'eventId should be preserved.');
+    assert(String(payload.details).indexOf('[REDACTED_DRIVE_ID:3456]') !== -1, 'Drive ID in details should be masked.');
   });
 
   test('config default metadata validation', function() {
