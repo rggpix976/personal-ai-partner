@@ -29,9 +29,47 @@ var DriveTempRepository = (function() {
     return true;
   }
 
+  function createTempImage(input) {
+    ensure(input && typeof input === 'object', 'CONFIG_MISSING', 'Temp image input is required.');
+    Validators.assertMimeType(input.mimeType, 'tempImage.mimeType');
+    ensure(String(input.name || '') !== '', 'CONFIG_MISSING', 'Temp image name is required.');
+    ensure(String(input.base64 || '') !== '', 'CONFIG_MISSING', 'Temp image base64 is required.');
+
+    var bytes;
+    try {
+      bytes = Utilities.base64Decode(input.base64);
+    } catch (error) {
+      try {
+        bytes = Utilities.base64DecodeWebSafe(input.base64);
+      } catch (webSafeError) {
+        throw createAppError('VALIDATION_IMAGE_UNSUPPORTED', 'Temp image payload is not valid base64.', null, {
+          cause: error
+        });
+      }
+    }
+
+    var blob = Utilities.newBlob(bytes, input.mimeType, input.name);
+    var tempFolder = ensureFolders().tempFolder;
+    var file = tempFolder.createFile(blob);
+    var createdAt = input.now ? parseIsoToDate(input.now) : new Date();
+    var ttlHours = Number(input.ttlHours);
+    if (!isFinite(ttlHours) || ttlHours <= 0) {
+      ttlHours = 24;
+    }
+    var expiresAt = new Date(createdAt.getTime() + ttlHours * 60 * 60 * 1000);
+
+    return {
+      tempFileId: file.getId(),
+      name: input.name,
+      mimeType: input.mimeType,
+      expiresAt: toIsoStringInTokyo(expiresAt)
+    };
+  }
+
   return {
     getOrCreateFolder: getOrCreateFolder,
     ensureFolders: ensureFolders,
-    validateFolder: validateFolder
+    validateFolder: validateFolder,
+    createTempImage: createTempImage
   };
 })();

@@ -24,6 +24,7 @@ All Apps Script source files live under [`src/`](src/).
 
 ```text
 src/
+  PublicApi.gs
   Setup.gs
   appsscript.json
   common/
@@ -45,7 +46,9 @@ Current WebUI files:
 - Users can load older messages.
 - Users can send text and attach JPEG, PNG, or WebP images.
 - Image type and size are validated client-side before send.
-- `sendChat(request)` stores the user message and enqueues a `CHAT_REPLY` event.
+- Public browser-callable functions are defined in `src/PublicApi.gs`.
+- `sendChat(request)` delegates to `ChatService.send(request, context)` when A4 is present.
+- If A4 is not present, `sendChat(request)` stores the user message and enqueues a `CHAT_REPLY` event as a fallback.
 - A4 is still required to generate assistant replies, call Gemini, and process queued chat work.
 
 ## Read Before Continuing

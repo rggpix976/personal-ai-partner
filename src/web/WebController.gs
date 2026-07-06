@@ -78,64 +78,12 @@ var WebController = (function() {
         return existingResult;
       }
 
-      var now = new Date();
-      var nowIso = toIsoStringInTokyo(now);
-      var imagePayload = request.image ? persistTempImage_(request.image, now) : null;
-      var userMessage = SheetRepository.appendConversation({
-        messageId: generateUuidV4(),
-        requestId: requestId,
-        createdAt: nowIso,
-        role: 'user',
-        messageType: request.image ? 'image' : 'text',
-        text: request.text || '',
-        image: request.image ? {
-          name: request.image.name,
-          mimeType: request.image.mimeType,
-          summary: 'Attached image upload'
-        } : null,
-        status: 'accepted'
-      });
-
-      SheetRepository.updateUserState({
-        last_user_message_at: nowIso
-      });
-
-      SheetRepository.insertEvent({
-        eventId: generateUuidV4(),
-        eventType: 'CHAT_REPLY',
-        dedupeKey: buildChatReplyDedupeKey_(requestId),
-        payload: {
-          requestId: requestId,
-          userMessageId: userMessage.messageId,
-          requestedAt: nowIso,
-          image: imagePayload
-        },
-        status: 'PENDING',
-        attemptCount: 0,
-        nextAttemptAt: null,
-        lockedAt: null,
-        lockedBy: null,
-        createdAt: nowIso,
-        updatedAt: nowIso,
-        completedAt: null,
-        lastError: null
-      });
-
-      var warnings = [];
-      if (!hasChatReplyWorker_()) {
-        warnings.push('A4 ChatService is not implemented yet. This request is queued for a later worker.');
+      var context = buildRequestContext_(request, requestId, new Date());
+      if (hasChatReplyWorker_()) {
+        return ChatService.send(request, context);
       }
 
-      return {
-        ok: true,
-        status: 'queued',
-        requestId: requestId,
-        userMessage: userMessage,
-        assistantMessage: null,
-        retryAfterSeconds: DEFAULTS.pendingRetrySeconds,
-        error: null,
-        warnings: warnings
-      };
+      return sendChatViaQueueFallback_(request, context);
     } catch (error) {
       return buildFailedChatResult_(requestId, error, []);
     }
@@ -201,6 +149,60 @@ var WebController = (function() {
     } catch (error) {
       return buildFailedChatResult_(Validators.isUuidV4(requestId) ? requestId : generateUuidV4(), error, []);
     }
+  }
+
+  function sendChatViaQueueFallback_(request, context) {
+    var imagePayload = request.image ? persistTempImage_(request.image, context) : null;
+    var userMessage = SheetRepository.appendConversation({
+      messageId: generateUuidV4(),
+      requestId: context.requestId,
+      createdAt: context.now,
+      role: 'user',
+      messageType: request.image ? 'image' : 'text',
+      text: request.text || '',
+      image: request.image ? {
+        name: request.image.name,
+        mimeType: request.image.mimeType,
+        summary: 'Attached image upload'
+      } : null,
+      status: 'accepted'
+    });
+
+    SheetRepository.updateUserState({
+      last_user_message_at: context.now
+    });
+
+    SheetRepository.insertEvent({
+      eventId: generateUuidV4(),
+      eventType: 'CHAT_REPLY',
+      dedupeKey: buildChatReplyDedupeKey_(context.requestId),
+      payload: {
+        requestId: context.requestId,
+        userMessageId: userMessage.messageId,
+        requestedAt: context.now,
+        image: imagePayload
+      },
+      status: 'PENDING',
+      attemptCount: 0,
+      nextAttemptAt: null,
+      lockedAt: null,
+      lockedBy: null,
+      createdAt: context.now,
+      updatedAt: context.now,
+      completedAt: null,
+      lastError: null
+    });
+
+    return {
+      ok: true,
+      status: 'queued',
+      requestId: context.requestId,
+      userMessage: userMessage,
+      assistantMessage: null,
+      retryAfterSeconds: DEFAULTS.pendingRetrySeconds,
+      error: null,
+      warnings: ['A4 ChatService is not implemented yet. This request is queued for a later worker.']
+    };
   }
 
   function buildBootstrapConfig_() {
@@ -270,9 +272,18 @@ var WebController = (function() {
   }
 
   function validateChatRequest_(request, requestId) {
-    ensure(request && typeof request === 'object', 'CONFIG_MISSING', 'request must be an object.');
-    ensure(Validators.isUuidV4(requestId), 'CONFIG_MISSING', 'requestId must be a UUID v4.');
-    ensure(Validators.isIsoDateTimeString(request.clientTimestamp), 'CONFIG_MISSING', 'clientTimestamp must be an ISO 8601 string.');
+    if (!request || typeof request !== 'object') {
+      throw createValidationError_('request must be an object.', 'The request payload is invalid.');
+    }
+    if (!Validators.isUuidV4(requestId)) {
+      throw createValidationError_('requestId must be a UUID v4.', 'The request ID is invalid.');
+    }
+    if (!Validators.isIsoDateTimeString(request.clientTimestamp)) {
+      throw createValidationError_(
+        'clientTimestamp must be an ISO 8601 string.',
+        'The message timestamp is invalid.'
+      );
+    }
 
     var text = request.text == null ? '' : String(request.text);
     var maxUserTextChars = Math.min(
@@ -280,7 +291,12 @@ var WebController = (function() {
       DEFAULTS.maxUserTextChars
     );
     ensure(text.length <= maxUserTextChars, 'VALIDATION_TEXT_TOO_LONG', 'User text exceeds the configured limit.');
-    ensure(text.length > 0 || Boolean(request.image), 'CONFIG_MISSING', 'Either text or image is required.');
+    if (text.length === 0 && !request.image) {
+      throw createValidationError_(
+        'Either text or image is required.',
+        'Send a message or attach an image before submitting.'
+      );
+    }
 
     if (!request.image) {
       return true;
@@ -292,22 +308,22 @@ var WebController = (function() {
     ensure(String(request.image.base64 || '') !== '', 'VALIDATION_IMAGE_UNSUPPORTED', 'image.base64 is required.');
 
     var bytes = decodeBase64ToBytes_(request.image.base64);
-    ensure(bytes.length <= getConfigInt_('IMAGE_MAX_BYTES', DEFAULTS.imageMaxBytes), 'VALIDATION_IMAGE_TOO_LARGE', 'Image exceeds the configured byte limit.');
+    ensure(
+      bytes.length <= getConfigInt_('IMAGE_MAX_BYTES', DEFAULTS.imageMaxBytes),
+      'VALIDATION_IMAGE_TOO_LARGE',
+      'Image exceeds the configured byte limit.'
+    );
     return true;
   }
 
-  function persistTempImage_(image, now) {
-    var bytes = decodeBase64ToBytes_(image.base64);
-    var blob = Utilities.newBlob(bytes, image.mimeType, image.name);
-    var tempFolder = DriveTempRepository.ensureFolders().tempFolder;
-    var file = tempFolder.createFile(blob);
-    var expiresAt = new Date(now.getTime() + getConfigInt_('TEMP_IMAGE_TTL_HOURS', DEFAULTS.tempImageTtlHours) * 60 * 60 * 1000);
-    return {
-      tempFileId: file.getId(),
+  function persistTempImage_(image, context) {
+    return DriveTempRepository.createTempImage({
       name: image.name,
       mimeType: image.mimeType,
-      expiresAt: toIsoStringInTokyo(expiresAt)
-    };
+      base64: image.base64,
+      now: context.now,
+      ttlHours: getConfigInt_('TEMP_IMAGE_TTL_HOURS', DEFAULTS.tempImageTtlHours)
+    });
   }
 
   function decodeBase64ToBytes_(base64) {
@@ -454,6 +470,15 @@ var WebController = (function() {
     return typeof ChatService !== 'undefined' && ChatService && typeof ChatService.send === 'function';
   }
 
+  function buildRequestContext_(request, requestId, now) {
+    return {
+      requestId: requestId,
+      currentText: request.text == null ? '' : String(request.text),
+      hasImage: Boolean(request.image),
+      now: toIsoStringInTokyo(now)
+    };
+  }
+
   function buildChatReplyDedupeKey_(requestId) {
     return 'CHAT_REPLY:' + requestId;
   }
@@ -469,6 +494,17 @@ var WebController = (function() {
       result.push(value);
     });
     return result;
+  }
+
+  function createValidationError_(message, userMessage) {
+    return new AppError({
+      code: 'VALIDATION_REQUEST_INVALID',
+      message: message,
+      userMessage: userMessage || message,
+      retryable: false,
+      retryStrategy: 'NONE',
+      httpStatus: 400
+    });
   }
 
   function assertWebAccess_() {
@@ -536,26 +572,6 @@ var WebController = (function() {
   };
 })();
 
-function doGet() {
-  return WebController.doGet();
-}
-
 function includePartial_(fileName) {
   return WebController.includePartial_(fileName);
-}
-
-function getInitialState() {
-  return WebController.getInitialState();
-}
-
-function loadMessages(beforeMessageId, limit) {
-  return WebController.loadMessages(beforeMessageId, limit);
-}
-
-function sendChat(request) {
-  return WebController.sendChat(request);
-}
-
-function getRequestStatus(requestId) {
-  return WebController.getRequestStatus(requestId);
 }
