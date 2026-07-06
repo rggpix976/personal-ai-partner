@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "memory-candidate.schema.json",
+  "$id": "https://acepilot.local/schemas/memory-candidate.schema.json",
   "title": "MemoryCandidate",
   "type": "object",
   "additionalProperties": false,
@@ -52,20 +52,81 @@
     "sourceMessageIds": {
       "type": "array",
       "minItems": 1,
+      "maxItems": 100,
+      "uniqueItems": true,
       "items": {
-        "type": "string"
+        "type": "string",
+        "format": "uuid"
       }
     },
     "existingMemoryId": {
-      "type": [
-        "string",
-        "null"
-      ]
+      "type": "string",
+      "format": "uuid"
     },
     "reason": {
       "type": "string",
       "minLength": 1,
       "maxLength": 500
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "create"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "not": {
+          "required": [
+            "existingMemoryId"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "enum": [
+              "confirm",
+              "update"
+            ]
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "required": [
+          "existingMemoryId"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "ignore"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "not": {
+          "required": [
+            "existingMemoryId"
+          ]
+        }
+      }
+    }
+  ]
 }

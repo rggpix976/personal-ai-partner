@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "chat-result.schema.json",
+  "$id": "https://acepilot.local/schemas/chat-result.schema.json",
   "title": "ChatResult",
   "type": "object",
   "additionalProperties": false,
@@ -22,13 +22,28 @@
       ]
     },
     "requestId": {
-      "type": "string"
+      "type": "string",
+      "format": "uuid"
     },
     "userMessage": {
-      "$ref": "#/$defs/messageDto"
+      "oneOf": [
+        {
+          "$ref": "#/$defs/messageDto"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "assistantMessage": {
-      "$ref": "#/$defs/messageDto"
+      "oneOf": [
+        {
+          "$ref": "#/$defs/messageDto"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "retryAfterSeconds": {
       "type": [
@@ -38,23 +53,14 @@
       "minimum": 0
     },
     "error": {
-      "type": [
-        "object",
-        "null"
-      ],
-      "additionalProperties": false,
-      "required": [
-        "code",
-        "message"
-      ],
-      "properties": {
-        "code": {
-          "type": "string"
+      "oneOf": [
+        {
+          "$ref": "#/$defs/errorDto"
         },
-        "message": {
-          "type": "string"
+        {
+          "type": "null"
         }
-      }
+      ]
     },
     "warnings": {
       "type": "array",
@@ -63,12 +69,122 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "completed"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "userMessage",
+          "assistantMessage"
+        ],
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "userMessage": {
+            "$ref": "#/$defs/messageDto"
+          },
+          "assistantMessage": {
+            "$ref": "#/$defs/messageDto"
+          },
+          "error": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "queued"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "userMessage",
+          "retryAfterSeconds"
+        ],
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "userMessage": {
+            "$ref": "#/$defs/messageDto"
+          },
+          "retryAfterSeconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "assistantMessage": {
+            "type": "null"
+          },
+          "error": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "failed"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "ok": {
+            "const": false
+          },
+          "error": {
+            "$ref": "#/$defs/errorDto"
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
-    "messageDto": {
-      "type": [
-        "object",
-        "null"
+    "errorDto": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
       ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "messageDto": {
+      "type": "object",
       "additionalProperties": false,
       "required": [
         "messageId",
@@ -80,13 +196,15 @@
       ],
       "properties": {
         "messageId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         },
         "requestId": {
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "format": "uuid"
         },
         "createdAt": {
           "type": "string",
@@ -111,31 +229,35 @@
           "type": "string"
         },
         "image": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": false,
-          "required": [
-            "name",
-            "mimeType",
-            "summary"
-          ],
-          "properties": {
-            "name": {
-              "type": "string"
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "mimeType",
+                "summary"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "enum": [
+                    "image/jpeg",
+                    "image/png",
+                    "image/webp"
+                  ]
+                },
+                "summary": {
+                  "type": "string"
+                }
+              }
             },
-            "mimeType": {
-              "enum": [
-                "image/jpeg",
-                "image/png",
-                "image/webp"
-              ]
-            },
-            "summary": {
-              "type": "string"
+            {
+              "type": "null"
             }
-          }
+          ]
         },
         "status": {
           "enum": [
@@ -145,23 +267,14 @@
           ]
         },
         "error": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": false,
-          "required": [
-            "code",
-            "message"
-          ],
-          "properties": {
-            "code": {
-              "type": "string"
+          "oneOf": [
+            {
+              "$ref": "#/$defs/errorDto"
             },
-            "message": {
-              "type": "string"
+            {
+              "type": "null"
             }
-          }
+          ]
         }
       }
     }

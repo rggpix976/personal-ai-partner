@@ -30,6 +30,8 @@
 - IDはUUID v4
 - JSON時刻はISO 8601 `+09:00`
 - Sheets時刻はDate型
+- 全実装ファイルは `src/` 配下へ置く
+- Webアクセス制御はデプロイ設定を主制御とし、`Session.getActiveUser().getEmail()` に依存しない
 
 ## 3. 必須シート
 
@@ -67,7 +69,7 @@
 |---|---|---:|---|---|
 | conversation_id | string | 必須 |  | 固定 `default` |
 | message_id | string | 必須 | PK | UUID |
-| request_id | string | 任意 | UNIQUE | ブラウザ要求ID |
+| request_id | string | 任意 | 複合一意 | ブラウザ要求ID。`(request_id, role)` で一意 |
 | created_at | datetime | 必須 | INDEX | 発言日時 |
 | role | enum | 必須 |  | user/assistant/system |
 | message_type | enum | 必須 |  | text/image/proactive/error |
@@ -87,7 +89,7 @@
 | 列名 | 型 | 必須 | キー | 説明 |
 |---|---|---:|---|---|
 | event_id | string | 必須 | PK | UUID |
-| event_type | enum | 必須 | INDEX | CHAT_REPLY/MEMORY_EXTRACT/DIARY_GENERATE/PROACTIVE_SEND |
+| event_type | enum | 必須 | INDEX | CHAT_REPLY/MEMORY_EXTRACT/DIARY_GENERATE/PROACTIVE_SEND/WEEKLY_BACKUP |
 | dedupe_key | string | 必須 | UNIQUE | 重複防止 |
 | payload_json | json | 必須 |  | 処理入力 |
 | status | enum | 必須 | INDEX | PENDING/PROCESSING/RETRY_WAIT/DONE/DEAD |
@@ -160,19 +162,39 @@
 
 ## 4. Script Properties
 
-| キー | 必須 | 説明 |
-|---|---:|---|
-| GEMINI_API_KEY | 必須 | Gemini APIキー |
-| OWNER_EMAIL | 必須 | 自発通知先 |
-| SPREADSHEET_ID | 必須 | データストア |
-| DIARY_DOC_ID | 必須 | AI日記ドキュメント |
-| TEMP_FOLDER_ID | 必須 | 画像一時保存フォルダ |
-| BACKUP_FOLDER_ID | 必須 | バックアップ先 |
-| WEB_APP_URL | 必須 | 通知メール内リンク。初回setup時は未設定を許可 |
-| APP_ENV | 必須 | prod/test |
-| SCHEMA_VERSION | 必須 | データスキーマ版 |
+Script Propertiesは検証時点を分離する。
 
-秘密値をシート、コード、HTML、ログへ出力してはならない。
+### 4.1 setup前必須
+
+| キー | 説明 |
+|---|---|
+| GEMINI_API_KEY | Gemini APIキー |
+| OWNER_EMAIL | 自発通知先 |
+| APP_ENV | `prod` または `test` |
+
+`setup()` はファイル作成などの副作用前に `validatePreSetupProperties()` を実行する。
+
+### 4.2 setup生成
+
+| キー | 説明 |
+|---|---|
+| SPREADSHEET_ID | データストア |
+| DIARY_DOC_ID | AI日記ドキュメント |
+| TEMP_FOLDER_ID | 画像一時保存フォルダ |
+| BACKUP_FOLDER_ID | バックアップ先 |
+| SCHEMA_VERSION | データスキーマ版 |
+
+`setup()` 完了後に `validatePostSetupProperties()` を実行する。
+
+### 4.3 デプロイ後必須
+
+| キー | 説明 |
+|---|---|
+| WEB_APP_URL | `/exec` のWebアプリURL |
+
+初回setupでは未設定を許可する。デプロイ後に `validatePostDeployProperties()` とヘルスチェックで必須検証する。
+
+秘密値をシート、コード、HTML、ログへ出力してはならない。`OWNER_EMAIL` は通知先であり、Webアクセス認可の判定キーではない。
 
 ## 5. `config` 初期値
 
@@ -208,17 +230,20 @@
 
 `setup()` は冪等でなければならない。
 
-1. Spreadsheet IDがある場合は検証し、ない場合は作成する。
-2. 必須8シートを不足分だけ作る。
-3. ヘッダーが完全一致することを検証する。
-4. 列不足は末尾へ追加する。既存列の並べ替え・削除は禁止。
-5. `config` 初期値を不足分だけ追加する。
-6. `user_state` のdefault行を不足時のみ追加する。
-7. AI日記用Documentを作成または検証する。
-8. 一時画像フォルダとバックアップフォルダを作成または検証する。
-9. 作成したIDをScript Propertiesへ保存する。
-10. トリガーはA2では最終確定しない。作成ヘルパー案までとし、A1/A6統合時に有効化する。
-11. `runPlatformSelfTest()` を実行可能な状態にする。
+1. `validatePreSetupProperties()` を実行し、不足時は副作用なしで停止する。
+2. Spreadsheet IDがある場合は検証し、ない場合は作成する。
+3. 必須8シートを不足分だけ作る。
+4. ヘッダーが完全一致することを検証する。
+5. 列不足は末尾へ追加する。既存列の並べ替え・削除は禁止。
+6. `config` 初期値を不足分だけ追加する。
+7. `user_state` のdefault行を不足時のみ追加する。
+8. AI日記用Documentを作成または検証する。
+9. 一時画像フォルダとバックアップフォルダを作成または検証する。
+10. 作成したIDとSCHEMA_VERSIONをScript Propertiesへ保存する。
+11. `validatePostSetupProperties()` を実行する。
+12. `WEB_APP_URL` は初回setupで要求しない。
+13. トリガーはA2では最終確定しない。作成ヘルパー案までとし、A1/A6統合時に有効化する。
+14. `runPlatformSelfTest()` を実行可能な状態にする。
 
 ## 7. `migrateSchema()` の責務
 
@@ -230,7 +255,7 @@
 
 ## 8. 共通部品
 
-### `Constants.gs`
+### `src/common/Constants.gs`
 
 - シート名
 - ヘッダー配列
@@ -240,23 +265,25 @@
 - schema version
 - エラーコード定数
 
-### `Errors.gs`
+### `src/common/Errors.gs`
 
 - `AppError`
 - 未知例外からの正規化
 - 利用者向けエラーへの変換
 - retryable判定
 
-### `LockManager.gs`
+### `src/common/LockManager.gs`
 
 - ScriptLock取得
 - タイムアウト
 - callback実行
 - API通信中はロックを保持しない設計を支援
 
-### `RetryPolicy.gs`
+### `src/common/RetryPolicy.gs`
 
-失敗回数から次回日時を計算する。
+エラーコードと失敗回数から再試行戦略を決定する。
+
+共通一時障害:
 
 | 失敗回数 | 待機 |
 |---:|---|
@@ -266,7 +293,9 @@
 | 4 | 2時間 |
 | 5 | DEAD |
 
-### `Validators.gs`
+`MAIL_QUOTA_EXHAUSTED` は共通短時間リトライへ渡さない。次の暦日 `08:05 Asia/Tokyo` 以降へ設定し、再処理時に自発通知条件を再評価する。
+
+### `src/common/Validators.gs`
 
 - UUID
 - ISO 8601
@@ -277,13 +306,13 @@
 - シートヘッダー
 - 必須Script Properties
 
-### `Json.gs`
+### `src/common/Json.gs`
 
 - 安全なparse/stringify
 - 破損時 `STORAGE_DATA_CORRUPTED`
 - 循環参照や過大ログの防止
 
-### `AppLogger.gs`
+### `src/common/AppLogger.gs`
 
 必須マスク対象:
 
@@ -294,7 +323,7 @@
 - OWNER_EMAIL
 - Spreadsheet/Document/Folder ID
 
-## 9. Repository規則
+## 9. `src/infrastructure/SheetRepository.gs` 規則
 
 - 行番号を公開しない。
 - 呼出し側にはオブジェクトを返す。
@@ -303,8 +332,11 @@
 - シート全件scanを共通化し、無制限に繰り返さない。
 - Date型とJSON日時の変換を共通化する。
 - JSON列は必ず検証する。
+- `conversation_logs` は `(request_id, role)` を複合一意として扱う。
+- `getConversationByRequestId(requestId)` は `{requestId, userMessage, assistantMessage}` を返す。
+- SheetsにDB制約はないため、同一roleの重複をRepositoryが書込み前に防ぐ。
 
-## 10. `appsscript.json` 案
+## 10. `src/appsscript.json` 案
 
 - `timeZone`: `Asia/Tokyo`
 - `runtimeVersion`: `V8`
@@ -320,23 +352,28 @@
 | A2-T02 | setup再実行 | 重複シート・列・設定・default行が生じない |
 | A2-T03 | ヘッダー欠落 | 末尾へ不足列を追加する |
 | A2-T04 | ヘッダー順序不正 | 自動並べ替えせずエラーにする |
-| A2-T05 | Script Properties欠落 | CONFIG_MISSING |
-| A2-T06 | JSON破損 | STORAGE_DATA_CORRUPTED |
-| A2-T07 | Lock競合 | QUEUE_LOCK_BUSYまたは規定の非例外結果 |
-| A2-T08 | RetryPolicy | 1分/5分/30分/2時間/DEAD |
-| A2-T09 | ログマスク | APIキー・メール・Base64・IDが残らない |
-| A2-T10 | Repository戻り値 | 行番号を含まない |
-| A2-T11 | config型変換 | int/float/bool/time/jsonが正しく変換される |
-| A2-T12 | migrate再実行 | 同じ移行を再実行しても破損しない |
+| A2-T05 | setup前Properties欠落 | 副作用なしでCONFIG_MISSING |
+| A2-T06 | setup生成Properties | setup後に全IDとSCHEMA_VERSIONが存在 |
+| A2-T07 | WEB_APP_URL欠落 | setupは成功し、デプロイ後検証は失敗 |
+| A2-T08 | JSON破損 | STORAGE_DATA_CORRUPTED |
+| A2-T09 | Lock競合 | QUEUE_LOCK_BUSYまたは規定の非例外結果 |
+| A2-T10 | 共通RetryPolicy | 1分/5分/30分/2時間/DEAD |
+| A2-T11 | Mail quota RetryPolicy | 共通短時間リトライを使わない |
+| A2-T12 | ログマスク | APIキー・メール・Base64・IDが残らない |
+| A2-T13 | Repository戻り値 | 行番号を含まない |
+| A2-T14 | request複合一意 | user/assistant各1件を許可し、同じroleの重複を拒否 |
+| A2-T15 | request取得 | userMessageとassistantMessageの組を返す |
+| A2-T16 | config型変換 | int/float/bool/time/jsonが正しく変換される |
+| A2-T17 | migrate再実行 | 同じ移行を再実行しても破損しない |
 
 ## 12. A2提出物
 
 A2は差分ではなく担当ファイルの完全版を提出する。ZIPはリポジトリ直下へ展開できる構造とし、以下を含める。
 
-- 実装対象の全 `.gs`
-- `appsscript.json` 案
-- テストファイル
-- `HANDOFF.md`
+- `src/` 配下の実装対象全ファイル
+- `src/appsscript.json` 案
+- `src/tests/` のテストファイル
+- `docs/handoffs/A2_HANDOFF.md`
 - コミットメッセージ
 - PRタイトル
 - PR本文

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "chat-request.schema.json",
+  "$id": "https://acepilot.local/schemas/chat-request.schema.json",
   "title": "ChatRequest",
   "type": "object",
   "additionalProperties": false,

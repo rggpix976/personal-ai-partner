@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acepilot.local/schemas/events/proactive-send-payload.schema.json",
+  "title": "ProactiveSendPayload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "targetDate",
+    "sequence",
+    "requestedAt"
+  ],
+  "properties": {
+    "targetDate": {
+      "type": "string",
+      "format": "date"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "requestedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

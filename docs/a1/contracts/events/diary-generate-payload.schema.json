@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acepilot.local/schemas/events/diary-generate-payload.schema.json",
+  "title": "DiaryGeneratePayload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "diaryDate",
+    "requestedAt"
+  ],
+  "properties": {
+    "diaryDate": {
+      "type": "string",
+      "format": "date"
+    },
+    "requestedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

@@ -2,9 +2,9 @@
 
 ## 2.1 公開関数
 
-公開関数は `PublicApi.gs` に置く。ブラウザから呼べる関数は以下だけとする。
+公開関数は `src/PublicApi.gs` に置く。ブラウザから呼べる関数は以下だけとする。
 
-### getInitialState()
+### `getInitialState()`
 
 ```javascript
 function getInitialState()
@@ -30,15 +30,16 @@ function getInitialState()
 }
 ```
 
-### loadMessages(beforeMessageId, limit)
+### `loadMessages(beforeMessageId, limit)`
 
 ```javascript
 function loadMessages(beforeMessageId, limit)
 ```
 
 制約:
+
 - `limit`: 1〜30
-- `beforeMessageId`: nullまたは既存message_id
+- `beforeMessageId`: `null` または既存 `message_id`
 
 戻り値:
 
@@ -53,17 +54,25 @@ function loadMessages(beforeMessageId, limit)
 }
 ```
 
-### sendChat(request)
+### `sendChat(request)`
 
 ```javascript
 function sendChat(request)
 ```
 
-入力は `contracts/chat-request.schema.json` を正とする。
+入力は [`contracts/chat-request.schema.json`](contracts/chat-request.schema.json) を正とする。
 
-戻り値は `contracts/chat-result.schema.json` を正とする。
+戻り値は [`contracts/chat-result.schema.json`](contracts/chat-result.schema.json) を正とする。
 
-### getRequestStatus(requestId)
+`status` 別の必須条件:
+
+| status | 必須 |
+|---|---|
+| `completed` | `userMessage`, `assistantMessage` |
+| `queued` | `userMessage`, `retryAfterSeconds` |
+| `failed` | `error` |
+
+### `getRequestStatus(requestId)`
 
 ```javascript
 function getRequestStatus(requestId)
@@ -71,18 +80,23 @@ function getRequestStatus(requestId)
 
 戻り値は `ChatResult`。
 
-### retryRequest(requestId)
+Repositoryから取得する際は、同一 `requestId` の `user` と `assistant` を別行として扱い、両方を組み立てて返す。
+
+### `retryRequest(requestId)`
 
 ```javascript
 function retryRequest(requestId)
 ```
 
 条件:
-- 対象requestIdが存在する。
-- DONEではない。
-- 恒久エラーではない。
 
-### getHealthStatus()
+- 対象 `requestId` が存在する。
+- 既存の `DONE` イベントを再利用しない。
+- 既存の `DEAD` イベントを `PROCESSING` へ戻さない。
+- 手動再試行は、新しい `event_id` と新しい `dedupe_key` を持つ `CHAT_REPLY` イベントとして再起票する。
+- 恒久エラーは再起票しない。
+
+### `getHealthStatus()`
 
 ```javascript
 function getHealthStatus()
@@ -110,7 +124,7 @@ function getHealthStatus()
 }
 ```
 
-## 2.2 MessageDto
+## 2.2 `MessageDto`
 
 ```javascript
 {
@@ -140,3 +154,4 @@ function getHealthStatus()
 - スタックトレースを返さない。
 - Geminiの生レスポンスを返さない。
 - シート行番号を外部IDとして使わない。
+- `Session.getActiveUser().getEmail()` の取得結果を認可条件にしない。
