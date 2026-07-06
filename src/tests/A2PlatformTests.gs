@@ -97,6 +97,12 @@ function runA2PlatformTests() {
     Validators.validateSheetSchema('config', ['key', 'value', 'type', 'description', 'updated_at']);
   });
 
+  test('iso date comparisons use time order', function() {
+    assert(compareIsoDatesAscending('2026-07-06T09:00:00+09:00', '2026-07-06T10:00:00+09:00') < 0, 'Ascending compare should use time order.');
+    assert(compareIsoDatesDescending('2026-07-06T10:00:00+09:00', '2026-07-06T09:00:00+09:00') < 0, 'Descending compare should use time order.');
+    assert(getIsoTimeMillis('2026-07-06T10:00:00+09:00') > getIsoTimeMillis('2026-07-06T09:00:00+09:00'), 'Millis helper should parse ISO timestamps.');
+  });
+
   expectThrows('sheet schema validation failure', function() {
     Validators.validateSheetSchema('config', ['value', 'key', 'type', 'description', 'updated_at']);
   }, 'STORAGE_DATA_CORRUPTED');

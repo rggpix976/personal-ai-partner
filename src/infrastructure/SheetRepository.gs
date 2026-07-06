@@ -143,6 +143,54 @@ var SheetRepository = (function() {
     return result;
   }
 
+  function findExistingConversationMessage(requestId, role) {
+    var pair = getConversationByRequestId(requestId);
+    if (role === 'user') {
+      return pair.userMessage;
+    }
+    if (role === 'assistant') {
+      return pair.assistantMessage;
+    }
+    return null;
+  }
+
+  function normalizeEventPatch(patch) {
+    var normalized = {};
+    Object.keys(patch).forEach(function(key) {
+      normalized[key] = patch[key];
+    });
+    if (Object.prototype.hasOwnProperty.call(normalized, 'attemptCount')) {
+      normalized.attempt_count = normalized.attemptCount;
+      delete normalized.attemptCount;
+    }
+    if (Object.prototype.hasOwnProperty.call(normalized, 'nextAttemptAt')) {
+      normalized.next_attempt_at = normalized.nextAttemptAt;
+      delete normalized.nextAttemptAt;
+    }
+    if (Object.prototype.hasOwnProperty.call(normalized, 'lockedAt')) {
+      normalized.locked_at = normalized.lockedAt;
+      delete normalized.lockedAt;
+    }
+    if (Object.prototype.hasOwnProperty.call(normalized, 'lockedBy')) {
+      normalized.locked_by = normalized.lockedBy;
+      delete normalized.lockedBy;
+    }
+    if (Object.prototype.hasOwnProperty.call(normalized, 'updatedAt')) {
+      normalized.updated_at = normalized.updatedAt;
+      delete normalized.updatedAt;
+    }
+    if (Object.prototype.hasOwnProperty.call(normalized, 'completedAt')) {
+      normalized.completed_at = normalized.completedAt;
+      delete normalized.completedAt;
+    }
+    if (normalized.lastError) {
+      normalized.last_error_code = normalized.lastError.code;
+      normalized.last_error_message = normalized.lastError.message;
+      delete normalized.lastError;
+    }
+    return normalized;
+  }
+
   function toMessageDto(row) {
     return {
       messageId: row.message_id,
@@ -170,12 +218,9 @@ var SheetRepository = (function() {
     Validators.assertEnum(message.messageType, APP_CONSTANTS.MESSAGE_TYPES, 'message.messageType');
     Validators.assertEnum(message.status, APP_CONSTANTS.MESSAGE_STATUSES, 'message.status');
     if (message.requestId && (message.role === 'user' || message.role === 'assistant')) {
-      var existingPair = getConversationByRequestId(message.requestId);
-      if ((message.role === 'user' && existingPair.userMessage) || (message.role === 'assistant' && existingPair.assistantMessage)) {
-        throw createAppError('DUPLICATE_REQUEST', 'Duplicate request_id and role pair is not allowed.', {
-          requestId: message.requestId,
-          role: message.role
-        });
+      var existingMessage = findExistingConversationMessage(message.requestId, message.role);
+      if (existingMessage) {
+        return existingMessage;
       }
     }
     var row = {
@@ -215,12 +260,12 @@ var SheetRepository = (function() {
     var pivot = null;
     rows.forEach(function(row) {
       if (row.message_id === messageId) {
-        pivot = row.created_at;
+        pivot = getIsoTimeMillis(row.created_at);
       }
     });
     return rows
       .filter(function(row) {
-        return !pivot || row.created_at < pivot;
+        return pivot == null || getIsoTimeMillis(row.created_at) < pivot;
       })
       .sort(function(a, b) {
         return compareIsoDatesDescending(a.created_at, b.created_at);
@@ -338,14 +383,14 @@ var SheetRepository = (function() {
   }
 
   function listClaimableEvents(limit, now) {
-    var nowIso = now instanceof Date ? toIsoStringInTokyo(now) : now;
+    var nowTime = now instanceof Date ? now.getTime() : getIsoTimeMillis(now);
     return getRows(APP_CONSTANTS.SHEETS.EVENT_QUEUE)
       .filter(function(row) {
         if (row.status === 'PENDING') {
           return true;
         }
         if (row.status === 'RETRY_WAIT') {
-          return row.next_attempt_at && row.next_attempt_at <= nowIso;
+          return row.next_attempt_at && getIsoTimeMillis(row.next_attempt_at) <= nowTime;
         }
         return false;
       })
@@ -376,12 +421,12 @@ var SheetRepository = (function() {
   }
 
   function updateEvent(eventId, patch) {
-    if (patch.lastError) {
-      patch.last_error_code = patch.lastError.code;
-      patch.last_error_message = patch.lastError.message;
-      delete patch.lastError;
-    }
-    return updateRowByKey(APP_CONSTANTS.SHEETS.EVENT_QUEUE, 'event_id', eventId, patch);
+    return updateRowByKey(
+      APP_CONSTANTS.SHEETS.EVENT_QUEUE,
+      'event_id',
+      eventId,
+      normalizeEventPatch(patch)
+    );
   }
 
   function listActiveMemories() {

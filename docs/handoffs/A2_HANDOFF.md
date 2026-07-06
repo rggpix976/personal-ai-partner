@@ -57,10 +57,9 @@
 ## Items Requiring Human Setup In Google Apps Script
 
 - Create/import the Apps Script project and upload the `src/` files.
-- Populate Script Properties:
-  - `GEMINI_API_KEY`
-  - `OWNER_EMAIL`
-  - `APP_ENV`
+- Populate Script Property `GEMINI_API_KEY`.
+- Populate Script Property `OWNER_EMAIL`.
+- Populate Script Property `APP_ENV`.
 - Run `setup()`.
 - Deploy the web app, then store `WEB_APP_URL` in Script Properties.
 - Run `validatePostDeployProperties()` after deployment.

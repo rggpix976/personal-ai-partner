@@ -231,10 +231,18 @@ function parseDateStringToDate(value) {
   return new Date(value + 'T00:00:00+09:00');
 }
 
+function getIsoTimeMillis(value) {
+  return parseIsoToDate(value).getTime();
+}
+
 function compareIsoDatesDescending(left, right) {
-  return left === right ? 0 : left > right ? -1 : 1;
+  var leftTime = getIsoTimeMillis(left);
+  var rightTime = getIsoTimeMillis(right);
+  return leftTime === rightTime ? 0 : leftTime > rightTime ? -1 : 1;
 }
 
 function compareIsoDatesAscending(left, right) {
-  return left === right ? 0 : left < right ? -1 : 1;
+  var leftTime = getIsoTimeMillis(left);
+  var rightTime = getIsoTimeMillis(right);
+  return leftTime === rightTime ? 0 : leftTime < rightTime ? -1 : 1;
 }
