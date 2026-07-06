@@ -1,0 +1,412 @@
+var SheetRepository = (function() {
+  function getSpreadsheet() {
+    var spreadsheetId = PropertiesService.getScriptProperties().getProperty(APP_CONSTANTS.PROPERTY_KEYS.SPREADSHEET_ID);
+    ensure(spreadsheetId, 'CONFIG_MISSING', 'SPREADSHEET_ID is not configured.');
+    return SpreadsheetApp.openById(spreadsheetId);
+  }
+
+  function getSheet(sheetName) {
+    var sheet = getSpreadsheet().getSheetByName(sheetName);
+    ensure(sheet, 'CONFIG_MISSING', 'Missing required sheet: ' + sheetName);
+    return sheet;
+  }
+
+  function getHeaders(sheetName) {
+    var sheet = getSheet(sheetName);
+    return sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  }
+
+  function getRows(sheetName) {
+    var sheet = getSheet(sheetName);
+    var lastRow = sheet.getLastRow();
+    var lastColumn = sheet.getLastColumn();
+    if (lastRow < 2 || lastColumn === 0) {
+      return [];
+    }
+    var values = sheet.getRange(2, 1, lastRow - 1, lastColumn).getValues();
+    var headers = getHeaders(sheetName);
+    return values.map(function(row) {
+      return fromSheetRow(sheetName, headers, row);
+    });
+  }
+
+  function findRowIndexByColumnValue(sheetName, columnName, value) {
+    var headers = getHeaders(sheetName);
+    var index = headers.indexOf(columnName);
+    ensure(index !== -1, 'STORAGE_DATA_CORRUPTED', 'Missing sheet column: ' + columnName, {
+      sheetName: sheetName
+    });
+    var rows = getRows(sheetName);
+    for (var i = 0; i < rows.length; i += 1) {
+      if (rows[i][columnName] === value) {
+        return i + 2;
+      }
+    }
+    return -1;
+  }
+
+  function appendRow(sheetName, objectRow) {
+    var sheet = getSheet(sheetName);
+    var headers = getHeaders(sheetName);
+    var values = toSheetRow(sheetName, headers, objectRow);
+    var targetRow = sheet.getLastRow() + 1;
+    sheet.getRange(targetRow, 1, 1, values.length).setValues([values]);
+    return objectRow;
+  }
+
+  function updateRowByKey(sheetName, keyColumn, keyValue, patch) {
+    var rowIndex = findRowIndexByColumnValue(sheetName, keyColumn, keyValue);
+    ensure(rowIndex !== -1, 'CONFIG_MISSING', 'Target row was not found.', {
+      sheetName: sheetName,
+      keyColumn: keyColumn,
+      keyValue: keyValue
+    });
+    var headers = getHeaders(sheetName);
+    var sheet = getSheet(sheetName);
+    var current = fromSheetRow(
+      sheetName,
+      headers,
+      sheet.getRange(rowIndex, 1, 1, headers.length).getValues()[0]
+    );
+    var next = mergeObjects(current, patch);
+    sheet.getRange(rowIndex, 1, 1, headers.length).setValues([toSheetRow(sheetName, headers, next)]);
+    return next;
+  }
+
+  function fromSheetRow(sheetName, headers, rawRow) {
+    var schema = getSheetSchema(sheetName);
+    var objectRow = {};
+    for (var i = 0; i < headers.length; i += 1) {
+      var columnName = headers[i];
+      var spec = schema[i];
+      if (!spec) {
+        continue;
+      }
+      objectRow[columnName] = parseCellValue(spec.type, rawRow[i]);
+    }
+    return objectRow;
+  }
+
+  function toSheetRow(sheetName, headers, objectRow) {
+    var schema = getSheetSchema(sheetName);
+    return headers.map(function(header, index) {
+      return formatCellValue(schema[index].type, objectRow[header]);
+    });
+  }
+
+  function parseCellValue(type, value) {
+    if (value === '' || value == null) {
+      return null;
+    }
+    if (type === 'json') {
+      return JsonUtil.parse(String(value));
+    }
+    if (type === 'int' || type === 'float') {
+      return Number(value);
+    }
+    if (type === 'bool') {
+      return value === true || value === 'true';
+    }
+    if (type === 'datetime') {
+      return value instanceof Date ? toIsoStringInTokyo(value) : String(value);
+    }
+    if (type === 'date') {
+      return value instanceof Date ? formatDateInTokyo(value) : String(value);
+    }
+    return String(value);
+  }
+
+  function formatCellValue(type, value) {
+    if (value == null || value === '') {
+      return '';
+    }
+    if (type === 'json') {
+      return JsonUtil.stringify(value);
+    }
+    if (type === 'datetime') {
+      return value instanceof Date ? value : parseIsoToDate(value);
+    }
+    if (type === 'date') {
+      return value instanceof Date ? value : parseDateStringToDate(value);
+    }
+    return value;
+  }
+
+  function mergeObjects(baseObject, patch) {
+    var result = {};
+    Object.keys(baseObject).forEach(function(key) {
+      result[key] = baseObject[key];
+    });
+    Object.keys(patch).forEach(function(key) {
+      result[key] = patch[key];
+    });
+    return result;
+  }
+
+  function toMessageDto(row) {
+    return {
+      messageId: row.message_id,
+      requestId: row.request_id,
+      createdAt: row.created_at,
+      role: row.role,
+      messageType: row.message_type,
+      text: row.text || '',
+      image: row.image_name ? {
+        name: row.image_name,
+        mimeType: row.image_mime,
+        summary: row.image_summary || ''
+      } : null,
+      status: row.status,
+      error: row.error_code ? {
+        code: row.error_code,
+        message: row.error_code
+      } : null
+    };
+  }
+
+  function appendConversation(message) {
+    Validators.assertUuidV4(message.messageId, 'message.messageId');
+    Validators.assertEnum(message.role, APP_CONSTANTS.MESSAGE_ROLES, 'message.role');
+    Validators.assertEnum(message.messageType, APP_CONSTANTS.MESSAGE_TYPES, 'message.messageType');
+    Validators.assertEnum(message.status, APP_CONSTANTS.MESSAGE_STATUSES, 'message.status');
+    if (message.requestId && (message.role === 'user' || message.role === 'assistant')) {
+      var existingPair = getConversationByRequestId(message.requestId);
+      if ((message.role === 'user' && existingPair.userMessage) || (message.role === 'assistant' && existingPair.assistantMessage)) {
+        throw createAppError('DUPLICATE_REQUEST', 'Duplicate request_id and role pair is not allowed.', {
+          requestId: message.requestId,
+          role: message.role
+        });
+      }
+    }
+    var row = {
+      conversation_id: message.conversationId || APP_CONSTANTS.DEFAULT_CONVERSATION_ID,
+      message_id: message.messageId,
+      request_id: message.requestId || null,
+      created_at: message.createdAt || toIsoStringInTokyo(new Date()),
+      role: message.role,
+      message_type: message.messageType,
+      text: message.text || '',
+      image_name: message.image ? message.image.name : null,
+      image_mime: message.image ? message.image.mimeType : null,
+      image_summary: message.image ? message.image.summary : null,
+      reply_to_message_id: message.replyToMessageId || null,
+      status: message.status,
+      model: message.model || null,
+      input_tokens: message.inputTokens == null ? null : message.inputTokens,
+      output_tokens: message.outputTokens == null ? null : message.outputTokens,
+      error_code: message.error ? message.error.code : null
+    };
+    appendRow(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS, row);
+    return toMessageDto(row);
+  }
+
+  function listRecentMessages(limit) {
+    var rows = getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS);
+    return rows
+      .sort(function(a, b) {
+        return compareIsoDatesDescending(a.created_at, b.created_at);
+      })
+      .slice(0, limit)
+      .map(toMessageDto);
+  }
+
+  function listMessagesBefore(messageId, limit) {
+    var rows = getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS);
+    var pivot = null;
+    rows.forEach(function(row) {
+      if (row.message_id === messageId) {
+        pivot = row.created_at;
+      }
+    });
+    return rows
+      .filter(function(row) {
+        return !pivot || row.created_at < pivot;
+      })
+      .sort(function(a, b) {
+        return compareIsoDatesDescending(a.created_at, b.created_at);
+      })
+      .slice(0, limit)
+      .map(toMessageDto);
+  }
+
+  function getConversationByRequestId(requestId) {
+    var rows = getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS)
+      .filter(function(row) {
+        return row.request_id === requestId;
+      });
+    var result = {
+      requestId: requestId,
+      userMessage: null,
+      assistantMessage: null
+    };
+    rows.forEach(function(row) {
+      if (row.role === 'user') {
+        result.userMessage = toMessageDto(row);
+      } else if (row.role === 'assistant') {
+        result.assistantMessage = toMessageDto(row);
+      }
+    });
+    return result;
+  }
+
+  function getUserState() {
+    var rows = getRows(APP_CONSTANTS.SHEETS.USER_STATE);
+    for (var i = 0; i < rows.length; i += 1) {
+      if (rows[i].singleton_id === APP_CONSTANTS.USER_STATE_SINGLETON_ID) {
+        return rows[i];
+      }
+    }
+    return null;
+  }
+
+  function ensureDefaultUserState() {
+    var state = getUserState();
+    if (state) {
+      return state;
+    }
+    var row = mergeObjects(APP_CONSTANTS.USER_STATE_DEFAULTS, {
+      updated_at: toIsoStringInTokyo(new Date())
+    });
+    appendRow(APP_CONSTANTS.SHEETS.USER_STATE, row);
+    return row;
+  }
+
+  function updateUserState(patch) {
+    patch.updated_at = toIsoStringInTokyo(new Date());
+    return updateRowByKey(
+      APP_CONSTANTS.SHEETS.USER_STATE,
+      'singleton_id',
+      APP_CONSTANTS.USER_STATE_SINGLETON_ID,
+      patch
+    );
+  }
+
+  function insertEvent(event) {
+    Validators.assertUuidV4(event.eventId, 'event.eventId');
+    Validators.assertEnum(event.eventType, APP_CONSTANTS.EVENT_TYPES, 'event.eventType');
+    Validators.assertEnum(event.status, APP_CONSTANTS.EVENT_STATUSES, 'event.status');
+    var existing = getRows(APP_CONSTANTS.SHEETS.EVENT_QUEUE).filter(function(row) {
+      return row.dedupe_key === event.dedupeKey;
+    });
+    if (existing.length > 0) {
+      throw createAppError('DUPLICATE_REQUEST', 'Duplicate dedupe_key is not allowed.', {
+        dedupeKey: event.dedupeKey
+      });
+    }
+    var row = {
+      event_id: event.eventId,
+      event_type: event.eventType,
+      dedupe_key: event.dedupeKey,
+      payload_json: event.payload,
+      status: event.status,
+      attempt_count: event.attemptCount,
+      next_attempt_at: event.nextAttemptAt || null,
+      locked_at: event.lockedAt || null,
+      locked_by: event.lockedBy || null,
+      created_at: event.createdAt,
+      updated_at: event.updatedAt,
+      completed_at: event.completedAt || null,
+      last_error_code: event.lastError ? event.lastError.code : null,
+      last_error_message: event.lastError ? event.lastError.message : null
+    };
+    appendRow(APP_CONSTANTS.SHEETS.EVENT_QUEUE, row);
+    return event;
+  }
+
+  function listClaimableEvents(limit, now) {
+    var nowIso = now instanceof Date ? toIsoStringInTokyo(now) : now;
+    return getRows(APP_CONSTANTS.SHEETS.EVENT_QUEUE)
+      .filter(function(row) {
+        if (row.status === 'PENDING') {
+          return true;
+        }
+        if (row.status === 'RETRY_WAIT') {
+          return row.next_attempt_at && row.next_attempt_at <= nowIso;
+        }
+        return false;
+      })
+      .sort(function(a, b) {
+        return compareIsoDatesAscending(a.created_at, b.created_at);
+      })
+      .slice(0, limit)
+      .map(function(row) {
+        return {
+          eventId: row.event_id,
+          eventType: row.event_type,
+          dedupeKey: row.dedupe_key,
+          payload: row.payload_json,
+          status: row.status,
+          attemptCount: row.attempt_count,
+          nextAttemptAt: row.next_attempt_at,
+          lockedAt: row.locked_at,
+          lockedBy: row.locked_by,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          completedAt: row.completed_at,
+          lastError: row.last_error_code ? {
+            code: row.last_error_code,
+            message: row.last_error_message || row.last_error_code
+          } : null
+        };
+      });
+  }
+
+  function updateEvent(eventId, patch) {
+    if (patch.lastError) {
+      patch.last_error_code = patch.lastError.code;
+      patch.last_error_message = patch.lastError.message;
+      delete patch.lastError;
+    }
+    return updateRowByKey(APP_CONSTANTS.SHEETS.EVENT_QUEUE, 'event_id', eventId, patch);
+  }
+
+  function listActiveMemories() {
+    return getRows(APP_CONSTANTS.SHEETS.LONG_TERM_MEMORIES).filter(function(row) {
+      return row.status === 'active';
+    });
+  }
+
+  function upsertMemory(memory) {
+    Validators.assertUuidV4(memory.memoryId, 'memory.memoryId');
+    var existingRow = findRowIndexByColumnValue(APP_CONSTANTS.SHEETS.LONG_TERM_MEMORIES, 'memory_id', memory.memoryId);
+    var row = {
+      memory_id: memory.memoryId,
+      category: memory.category,
+      normalized_key: memory.normalizedKey,
+      content: memory.content,
+      confidence: memory.confidence,
+      status: memory.status,
+      source_message_ids_json: memory.sourceMessageIds,
+      created_at: memory.createdAt,
+      last_confirmed_at: memory.lastConfirmedAt,
+      supersedes_memory_id: memory.supersedesMemoryId || null,
+      usage_count: memory.usageCount,
+      last_used_at: memory.lastUsedAt || null
+    };
+    if (existingRow === -1) {
+      appendRow(APP_CONSTANTS.SHEETS.LONG_TERM_MEMORIES, row);
+    } else {
+      updateRowByKey(APP_CONSTANTS.SHEETS.LONG_TERM_MEMORIES, 'memory_id', memory.memoryId, row);
+    }
+    return memory;
+  }
+
+  return {
+    getSpreadsheet: getSpreadsheet,
+    getSheet: getSheet,
+    getHeaders: getHeaders,
+    getRows: getRows,
+    appendConversation: appendConversation,
+    listRecentMessages: listRecentMessages,
+    listMessagesBefore: listMessagesBefore,
+    getConversationByRequestId: getConversationByRequestId,
+    getUserState: getUserState,
+    ensureDefaultUserState: ensureDefaultUserState,
+    updateUserState: updateUserState,
+    insertEvent: insertEvent,
+    listClaimableEvents: listClaimableEvents,
+    updateEvent: updateEvent,
+    listActiveMemories: listActiveMemories,
+    upsertMemory: upsertMemory
+  };
+})();
