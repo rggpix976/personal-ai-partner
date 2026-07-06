@@ -1,23 +1,26 @@
 # Personal Proactive AI Partner
 
 ## Project Status
-- Latest deliverable: A4 Chat / Gemini / Image layer
-- Version: v0.5
-- PR state: A4 implementation ready for review
-- Next agent: A5 Long-term memory and diary
+- Latest deliverable: A5 Long-term memory and AI self-diary layer
+- Version: v0.6
+- PR state: A5 implementation ready for review
+- Next agent: A6 Queue, scheduler, proactive messages, Gmail notification
 
 ## Implemented Scope
 - A1 contracts and integration gates
 - A2 foundation and data layer
 - A3 Apps Script HTML Service WebUI
 - A4 chat generation, Gemini integration, context building, and image understanding
+- A5 long-term memory extraction, memory retrieval/application, and AI self-diary generation
 
 ## Not Yet Implemented
-- `MemoryService`
-- `DiaryService`
 - `ProactiveMessageService`
 - `GmailNotifier`
-- Queue worker / scheduler execution
+- `QueueService` worker
+- `SchedulerJob`
+- `MaintenanceService`
+- Weekly backup
+- Full acceptance testing
 
 ## Repository Layout
 All Apps Script source files live under [`src/`](src/).
@@ -52,7 +55,11 @@ Current WebUI files:
 - Temporary Gemini failures queue a `CHAT_REPLY` retry event instead of failing open.
 - Permanent Gemini failures return a failed `ChatResult` without enqueuing duplicate retry work.
 - Only image metadata and `image_summary` are stored in `conversation_logs`; raw image base64 stays out of Sheets and logs.
-- Long-term memory extraction, diary generation, proactive messaging, and scheduled queue processing are still future work.
+- `MemoryService.enqueueExtraction(...)` and `DiaryService.enqueue(...)` can create A1-compatible queue events, but A6 still owns worker execution.
+- `MemoryService.extract(...)` uses `GeminiClient.generateStructured(...)` plus repository-only message loading to create, confirm, update, or ignore durable memories.
+- `ContextService` now prefers `MemoryService.findRelevant(...)` for cheap deterministic memory retrieval and falls back safely if memory lookup fails.
+- `DiaryService.generate(...)` produces a grounded AI self-diary entry, appends it through `DocumentRepository`, and updates `daily_summaries` idempotently.
+- Proactive messaging, scheduled queue processing, Gmail notification, maintenance flows, and weekly backup are still future work.
 
 ## Read Before Continuing
 1. [`docs/a1/01_ARCHITECTURE_BASELINE.md`](docs/a1/01_ARCHITECTURE_BASELINE.md)
@@ -81,4 +88,4 @@ python tools/validate_contracts.py
 ## Notes
 - Keep secrets in Script Properties only.
 - Gemini API calls stay inside `src/infrastructure/GeminiClient.gs`.
-- Do not treat the project as the full MVP yet. A4 enables normal chat and image understanding, but memory, diary, proactive messaging, and scheduled queue processing still remain.
+- Do not treat the project as the full MVP yet. A5 makes long-term memory and AI self-diary service logic possible, but queue workers, scheduling, proactive messaging, Gmail notification, maintenance flows, weekly backup, and full acceptance coverage still remain.

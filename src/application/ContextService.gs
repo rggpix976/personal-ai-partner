@@ -10,10 +10,7 @@ var ContextService = (function() {
     var recentLimit = getConfigInt_('RECENT_MESSAGE_LIMIT', DEFAULTS.recentMessageLimit);
     var memoryLimit = getConfigInt_('MEMORY_CONTEXT_LIMIT', DEFAULTS.memoryContextLimit);
     var recentMessages = buildRecentMessages_(input.currentUserMessage, recentLimit);
-    var memories = SheetRepository.listActiveMemories()
-      .sort(compareMemories_)
-      .slice(0, memoryLimit)
-      .map(toMemoryDto_);
+    var memories = loadRelevantMemories_(input, memoryLimit);
 
     return {
       persona: {
@@ -60,6 +57,28 @@ var ContextService = (function() {
       status: message.status,
       error: message.error || null
     };
+  }
+
+  function loadRelevantMemories_(input, memoryLimit) {
+    try {
+      if (typeof MemoryService !== 'undefined' && MemoryService && typeof MemoryService.findRelevant === 'function') {
+        return MemoryService.findRelevant(buildMemoryQuery_(input), memoryLimit);
+      }
+    } catch (error) {
+      // Fall back to the A4 repository-only behavior.
+    }
+
+    return SheetRepository.listActiveMemories()
+      .sort(compareMemories_)
+      .slice(0, memoryLimit)
+      .map(toMemoryDto_);
+  }
+
+  function buildMemoryQuery_(input) {
+    if (input.currentUserMessage) {
+      return String(input.currentUserMessage.text || '');
+    }
+    return String(input.currentText || '');
   }
 
   function toMemoryDto_(row) {

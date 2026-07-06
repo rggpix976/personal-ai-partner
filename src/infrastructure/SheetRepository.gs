@@ -321,6 +321,35 @@ var SheetRepository = (function() {
       .map(toMessageDto);
   }
 
+  function listMessagesByIds(messageIds) {
+    var wanted = {};
+    (messageIds || []).forEach(function(messageId) {
+      if (Validators.isUuidV4(messageId)) {
+        wanted[messageId] = true;
+      }
+    });
+    return getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS)
+      .filter(function(row) {
+        return Boolean(wanted[row.message_id]);
+      })
+      .sort(function(a, b) {
+        return compareIsoDatesAscending(a.created_at, b.created_at);
+      })
+      .map(toMessageDto);
+  }
+
+  function listMessagesByDate(summaryDate) {
+    Validators.assertDateString(summaryDate, 'summaryDate');
+    return getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS)
+      .filter(function(row) {
+        return row.created_at && formatDateInTokyo(parseIsoToDate(row.created_at)) === summaryDate;
+      })
+      .sort(function(a, b) {
+        return compareIsoDatesAscending(a.created_at, b.created_at);
+      })
+      .map(toMessageDto);
+  }
+
   function getConversationByRequestId(requestId) {
     var rows = getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS)
       .filter(function(row) {
@@ -476,10 +505,60 @@ var SheetRepository = (function() {
     );
   }
 
+  function getEventByDedupeKey(dedupeKey) {
+    var rows = getRows(APP_CONSTANTS.SHEETS.EVENT_QUEUE)
+      .filter(function(row) {
+        return row.dedupe_key === dedupeKey;
+      })
+      .sort(function(a, b) {
+        return compareIsoDatesDescending(a.updated_at, b.updated_at);
+      });
+    if (rows.length === 0) {
+      return null;
+    }
+    return {
+      eventId: rows[0].event_id,
+      eventType: rows[0].event_type,
+      dedupeKey: rows[0].dedupe_key,
+      payload: rows[0].payload_json,
+      status: rows[0].status,
+      attemptCount: rows[0].attempt_count,
+      nextAttemptAt: rows[0].next_attempt_at,
+      lockedAt: rows[0].locked_at,
+      lockedBy: rows[0].locked_by,
+      createdAt: rows[0].created_at,
+      updatedAt: rows[0].updated_at,
+      completedAt: rows[0].completed_at,
+      lastError: rows[0].last_error_code ? {
+        code: rows[0].last_error_code,
+        message: rows[0].last_error_message || rows[0].last_error_code
+      } : null
+    };
+  }
+
   function listActiveMemories() {
     return getRows(APP_CONSTANTS.SHEETS.LONG_TERM_MEMORIES).filter(function(row) {
       return row.status === 'active';
     });
+  }
+
+  function getMemoryById(memoryId) {
+    Validators.assertUuidV4(memoryId, 'memoryId');
+    var rows = getRows(APP_CONSTANTS.SHEETS.LONG_TERM_MEMORIES).filter(function(row) {
+      return row.memory_id === memoryId;
+    });
+    return rows.length > 0 ? rows[0] : null;
+  }
+
+  function findActiveMemoryByNormalizedKey(normalizedKey) {
+    var key = String(normalizedKey || '').trim();
+    if (!key) {
+      return null;
+    }
+    var rows = getRows(APP_CONSTANTS.SHEETS.LONG_TERM_MEMORIES).filter(function(row) {
+      return row.status === 'active' && row.normalized_key === key;
+    });
+    return rows.length > 0 ? rows[0] : null;
   }
 
   function upsertMemory(memory) {
@@ -507,6 +586,36 @@ var SheetRepository = (function() {
     return memory;
   }
 
+  function getDailySummary(summaryDate) {
+    Validators.assertDateString(summaryDate, 'summaryDate');
+    var rows = getRows(APP_CONSTANTS.SHEETS.DAILY_SUMMARIES).filter(function(row) {
+      return row.summary_date === summaryDate;
+    });
+    return rows.length > 0 ? rows[0] : null;
+  }
+
+  function upsertDailySummary(summary) {
+    Validators.assertDateString(summary.summaryDate, 'summary.summaryDate');
+    var row = {
+      summary_date: summary.summaryDate,
+      conversation_count: Number(summary.conversationCount || 0),
+      summary_text: summary.summaryText || null,
+      key_topics_json: summary.keyTopics || null,
+      memory_candidate_count: Number(summary.memoryCandidateCount || 0),
+      diary_status: summary.diaryStatus || 'NONE',
+      diary_doc_anchor: summary.diaryDocAnchor || null,
+      created_at: summary.createdAt,
+      updated_at: summary.updatedAt
+    };
+    var existingRow = findRowIndexByColumnValue(APP_CONSTANTS.SHEETS.DAILY_SUMMARIES, 'summary_date', summary.summaryDate);
+    if (existingRow === -1) {
+      appendRow(APP_CONSTANTS.SHEETS.DAILY_SUMMARIES, row);
+    } else {
+      updateRowByKey(APP_CONSTANTS.SHEETS.DAILY_SUMMARIES, 'summary_date', summary.summaryDate, row);
+    }
+    return row;
+  }
+
   return {
     getSpreadsheet: getSpreadsheet,
     getSheet: getSheet,
@@ -516,6 +625,8 @@ var SheetRepository = (function() {
     updateConversationMessage: updateConversationMessage,
     listRecentMessages: listRecentMessages,
     listMessagesBefore: listMessagesBefore,
+    listMessagesByIds: listMessagesByIds,
+    listMessagesByDate: listMessagesByDate,
     getConversationByRequestId: getConversationByRequestId,
     getUserState: getUserState,
     ensureDefaultUserState: ensureDefaultUserState,
@@ -523,8 +634,13 @@ var SheetRepository = (function() {
     insertEvent: insertEvent,
     listClaimableEvents: listClaimableEvents,
     updateEvent: updateEvent,
+    getEventByDedupeKey: getEventByDedupeKey,
     appendDebugLog: appendDebugLog,
     listActiveMemories: listActiveMemories,
-    upsertMemory: upsertMemory
+    getMemoryById: getMemoryById,
+    findActiveMemoryByNormalizedKey: findActiveMemoryByNormalizedKey,
+    upsertMemory: upsertMemory,
+    getDailySummary: getDailySummary,
+    upsertDailySummary: upsertDailySummary
   };
 })();
