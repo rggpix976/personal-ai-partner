@@ -1,0 +1,71 @@
+function runAllSelfTests() {
+  var suiteNames = [
+    'runA2PlatformTests',
+    'runA3WebUiTests',
+    'runA4ChatGeminiTests',
+    'runA5MemoryDiaryTests',
+    'runA6QueueSchedulerTests',
+    'runA7StaticSelfTest',
+    'runA7IntegrationSelfTest'
+  ];
+  var summary = {
+    ok: true,
+    suites: [],
+    totalPasses: 0,
+    totalFailures: 0,
+    checkedAt: toIsoStringInTokyo(new Date())
+  };
+
+  suiteNames.forEach(function(name) {
+    var suite = runSelfTestSuiteByName_(name);
+    summary.suites.push(suite);
+    summary.totalPasses += suite.passes.length;
+    summary.totalFailures += suite.failures.length;
+    if (suite.failures.length > 0) {
+      summary.ok = false;
+    }
+  });
+
+  return summary;
+}
+
+function runSelfTestSuiteByName_(name) {
+  var fn = null;
+  if (typeof globalThis !== 'undefined' && typeof globalThis[name] === 'function') {
+    fn = globalThis[name];
+  }
+  if (!fn && typeof this !== 'undefined' && typeof this[name] === 'function') {
+    fn = this[name];
+  }
+  if (!fn) {
+    return {
+      name: name,
+      skipped: true,
+      passes: [],
+      failures: [{
+        name: name,
+        message: 'Self-test suite is not defined.'
+      }]
+    };
+  }
+
+  try {
+    var result = fn();
+    return {
+      name: name,
+      skipped: false,
+      passes: result && Array.isArray(result.passes) ? result.passes : [],
+      failures: result && Array.isArray(result.failures) ? result.failures : []
+    };
+  } catch (error) {
+    return {
+      name: name,
+      skipped: false,
+      passes: [],
+      failures: [{
+        name: name,
+        message: error && error.message ? error.message : String(error)
+      }]
+    };
+  }
+}
