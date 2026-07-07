@@ -647,6 +647,9 @@ function runA6QueueSchedulerTests() {
             last_memory_cursor: null
           };
         },
+        getEventByDedupeKey: function() {
+          return null;
+        },
         listRecentMessages: function() {
           return [{
             messageId: '11111111-1111-4111-8111-111111111111',
@@ -707,6 +710,85 @@ function runA6QueueSchedulerTests() {
       assert(queued.some(function(item) { return item.indexOf('DIARY_GENERATE:') === 0; }), 'Diary event should be queued.');
       assert(queued.some(function(item) { return item.indexOf('MEMORY_EXTRACT:') === 0; }), 'Memory extraction should be queued.');
       assert(queued.some(function(item) { return item.indexOf('WEEKLY_BACKUP:') === 0; }) === false, 'Weekly backup should respect the current window.');
+    });
+  });
+
+  test('enqueueWeeklyBackupIfDue does not create a new event when DONE backup already exists', function() {
+    var enqueueCalls = 0;
+    withOverrides({
+      SheetRepository: {
+        getEventByDedupeKey: function(dedupeKey) {
+          assert(dedupeKey === 'WEEKLY_BACKUP:2026-07-12', 'Weekly backup dedupe key should use the Tokyo date.');
+          return {
+            eventId: '11111111-1111-4111-8111-111111111111',
+            status: 'DONE'
+          };
+        }
+      },
+      QueueService: {
+        enqueue: function() {
+          enqueueCalls += 1;
+          throw new Error('QueueService.enqueue should not run when a DONE weekly backup exists.');
+        }
+      }
+    }, function() {
+      var result = enqueueWeeklyBackupIfDue_(new Date('2026-07-12T03:15:00+09:00'));
+      assert(result.enqueued === false, 'Existing DONE weekly backup should suppress auto-enqueue.');
+      assert(result.reason === 'WEEKLY_BACKUP_ALREADY_EXISTS', 'Reason should explain why enqueue was skipped.');
+      assert(result.status === 'DONE', 'Existing event status should be returned.');
+      assert(enqueueCalls === 0, 'No new weekly backup event should be created.');
+    });
+  });
+
+  test('enqueueWeeklyBackupIfDue does not create a new event when DEAD backup already exists', function() {
+    var enqueueCalls = 0;
+    withOverrides({
+      SheetRepository: {
+        getEventByDedupeKey: function() {
+          return {
+            eventId: '22222222-2222-4222-8222-222222222222',
+            status: 'DEAD'
+          };
+        }
+      },
+      QueueService: {
+        enqueue: function() {
+          enqueueCalls += 1;
+          throw new Error('QueueService.enqueue should not run when a DEAD weekly backup exists.');
+        }
+      }
+    }, function() {
+      var result = enqueueWeeklyBackupIfDue_(new Date('2026-07-12T04:00:00+09:00'));
+      assert(result.enqueued === false, 'Existing DEAD weekly backup should suppress auto-enqueue.');
+      assert(result.reason === 'WEEKLY_BACKUP_ALREADY_EXISTS', 'Reason should explain why enqueue was skipped.');
+      assert(result.status === 'DEAD', 'Existing DEAD status should be returned.');
+      assert(enqueueCalls === 0, 'No new weekly backup event should be created.');
+    });
+  });
+
+  test('enqueueWeeklyBackupIfDue creates a new event only when none exists in the Sunday window', function() {
+    var enqueued = null;
+    withOverrides({
+      SheetRepository: {
+        getEventByDedupeKey: function(dedupeKey) {
+          assert(dedupeKey === 'WEEKLY_BACKUP:2026-07-12', 'Weekly backup dedupe key should use the Tokyo date.');
+          return null;
+        }
+      },
+      QueueService: {
+        enqueue: function(event) {
+          enqueued = event;
+          return {
+            eventId: '33333333-3333-4333-8333-333333333333',
+            dedupeKey: event.dedupeKey
+          };
+        }
+      }
+    }, function() {
+      var result = enqueueWeeklyBackupIfDue_(new Date('2026-07-12T03:01:00+09:00'));
+      assert(result.enqueued === true, 'A missing weekly backup should be enqueued in the Sunday window.');
+      assert(result.eventId === '33333333-3333-4333-8333-333333333333', 'Created weekly backup event id should be returned.');
+      assert(enqueued && enqueued.dedupeKey === 'WEEKLY_BACKUP:2026-07-12', 'The queued event should use the expected dedupe key.');
     });
   });
 

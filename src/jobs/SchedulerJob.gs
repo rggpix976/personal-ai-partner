@@ -100,9 +100,20 @@ function enqueueWeeklyBackupIfDue_(now) {
     };
   }
   var backupDate = formatDateInTokyo(now);
+  var dedupeKey = 'WEEKLY_BACKUP:' + backupDate;
+  var existing = SheetRepository.getEventByDedupeKey(dedupeKey);
+  if (existing) {
+    return {
+      enqueued: false,
+      reason: 'WEEKLY_BACKUP_ALREADY_EXISTS',
+      eventId: existing.eventId,
+      status: existing.status,
+      backupDate: backupDate
+    };
+  }
   var event = QueueService.enqueue({
     eventType: 'WEEKLY_BACKUP',
-    dedupeKey: 'WEEKLY_BACKUP:' + backupDate,
+    dedupeKey: dedupeKey,
     payload: {
       backupDate: backupDate,
       requestedAt: toIsoStringInTokyo(now)
