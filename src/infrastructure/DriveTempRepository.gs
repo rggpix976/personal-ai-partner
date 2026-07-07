@@ -90,12 +90,41 @@ var DriveTempRepository = (function() {
     return true;
   }
 
+  function cleanupExpiredTempImages(now, ttlHours) {
+    var folderId = PropertiesService.getScriptProperties().getProperty(APP_CONSTANTS.PROPERTY_KEYS.TEMP_FOLDER_ID);
+    ensure(folderId, 'CONFIG_MISSING', 'TEMP_FOLDER_ID is not configured.');
+    var folder = DriveApp.getFolderById(folderId);
+    ensure(folder != null, 'CONFIG_MISSING', 'Temporary image folder could not be opened.');
+    var reference = now || new Date();
+    var ttlMillis = Math.max(Number(ttlHours || 24), 1) * 60 * 60 * 1000;
+    var cutoff = reference.getTime() - ttlMillis;
+    var files = folder.getFiles();
+    var deleted = [];
+    var keptCount = 0;
+    while (files.hasNext()) {
+      var file = files.next();
+      var updatedAt = file.getLastUpdated ? file.getLastUpdated() : file.getDateCreated();
+      if (updatedAt && updatedAt.getTime() < cutoff) {
+        file.setTrashed(true);
+        deleted.push(file.getId());
+      } else {
+        keptCount += 1;
+      }
+    }
+    return {
+      deletedCount: deleted.length,
+      keptCount: keptCount,
+      deletedFileIds: deleted
+    };
+  }
+
   return {
     getOrCreateFolder: getOrCreateFolder,
     ensureFolders: ensureFolders,
     validateFolder: validateFolder,
     createTempImage: createTempImage,
     getTempImageData: getTempImageData,
-    trashTempImage: trashTempImage
+    trashTempImage: trashTempImage,
+    cleanupExpiredTempImages: cleanupExpiredTempImages
   };
 })();

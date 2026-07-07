@@ -75,6 +75,86 @@ var ChatService = (function() {
     }
   }
 
+  function processQueuedReply(eventPayload, options) {
+    options = options || {};
+    var payload = eventPayload || {};
+    ensure(Validators.isUuidV4(payload.requestId), 'VALIDATION_REQUEST_INVALID', 'eventPayload.requestId must be a UUID v4.');
+    var nowIso = options.now && Validators.isIsoDateTimeString(options.now)
+      ? options.now
+      : toIsoStringInTokyo(new Date());
+    var pair = SheetRepository.getConversationByRequestId(payload.requestId);
+    ensure(pair && pair.userMessage, 'VALIDATION_REQUEST_INVALID', 'Queued chat reply is missing the original user message.');
+    if (pair.assistantMessage) {
+      return buildCompletedResult_(payload.requestId, pair.userMessage, pair.assistantMessage, []);
+    }
+
+    var preparedImage = null;
+    try {
+      preparedImage = payload.image ? ImageService.prepareGeminiInput({
+        name: payload.image.name,
+        mimeType: payload.image.mimeType,
+        tempFileId: payload.image.tempFileId
+      }, {
+        now: nowIso,
+        requestText: pair.userMessage.text
+      }) : null;
+      var chatContext = ContextService.buildChatContext({
+        now: nowIso,
+        currentUserMessage: pair.userMessage
+      });
+      var generation = preparedImage
+        ? GeminiClient.generateWithImage(buildGeminiRequest_({
+          requestId: payload.requestId,
+          text: pair.userMessage.text || '',
+          image: preparedImage
+        }, chatContext, preparedImage))
+        : GeminiClient.generateText(buildGeminiRequest_({
+          requestId: payload.requestId,
+          text: pair.userMessage.text || '',
+          image: null
+        }, chatContext, null));
+      var assistantText = normalizeAssistantText_(generation.text);
+      ensure(assistantText !== '', 'GEMINI_BAD_RESPONSE', 'Gemini returned an empty response.');
+
+      var userMessage = updateUserImageSummary_(pair.userMessage, assistantText);
+      var assistantMessage = SheetRepository.appendConversation({
+        messageId: generateUuidV4(),
+        requestId: payload.requestId,
+        createdAt: nowIso,
+        role: 'assistant',
+        messageType: 'text',
+        text: assistantText,
+        image: null,
+        status: 'completed',
+        replyToMessageId: userMessage.messageId,
+        model: generation.model || null,
+        inputTokens: generation.usage ? generation.usage.inputTokens : null,
+        outputTokens: generation.usage ? generation.usage.outputTokens : null
+      });
+      SheetRepository.updateUserState({
+        last_assistant_message_at: assistantMessage.createdAt
+      });
+      if (generation.usage) {
+        SheetRepository.incrementUsageDaily(formatDateInTokyo(parseIsoToDate(nowIso)), {
+          apiCalls: 1,
+          imageCalls: preparedImage ? 1 : 0,
+          inputTokens: generation.usage.inputTokens || 0,
+          outputTokens: generation.usage.outputTokens || 0
+        });
+      }
+      ImageService.cleanupAfterSuccess(preparedImage);
+      if (payload.image && payload.image.tempFileId && (!preparedImage || !preparedImage.createdTempFile)) {
+        try {
+          DriveTempRepository.trashTempImage(payload.image.tempFileId);
+        } catch (ignore) {}
+      }
+      return buildCompletedResult_(payload.requestId, userMessage, assistantMessage, []);
+    } catch (error) {
+      cleanupPreparedImageIfOwned_(preparedImage);
+      throw error;
+    }
+  }
+
   function ensureUserMessageState_(request, context, preparedImage) {
     var existingResult = getExistingRequestResult_(context.requestId);
     if (existingResult) {
@@ -544,6 +624,7 @@ var ChatService = (function() {
 
   return {
     send: send,
+    processQueuedReply: processQueuedReply,
     __test: {
       getExistingRequestResult: getExistingRequestResult_,
       ensureUserMessageState: ensureUserMessageState_,

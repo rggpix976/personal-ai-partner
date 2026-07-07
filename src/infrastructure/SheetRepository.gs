@@ -458,6 +458,27 @@ var SheetRepository = (function() {
     };
   }
 
+  function toEventDto(row) {
+    return {
+      eventId: row.event_id,
+      eventType: row.event_type,
+      dedupeKey: row.dedupe_key,
+      payload: row.payload_json,
+      status: row.status,
+      attemptCount: row.attempt_count,
+      nextAttemptAt: row.next_attempt_at,
+      lockedAt: row.locked_at,
+      lockedBy: row.locked_by,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      completedAt: row.completed_at,
+      lastError: row.last_error_code ? {
+        code: row.last_error_code,
+        message: row.last_error_message || row.last_error_code
+      } : null
+    };
+  }
+
   function listClaimableEvents(limit, now) {
     var nowTime = now instanceof Date ? now.getTime() : getIsoTimeMillis(now);
     return getRows(APP_CONSTANTS.SHEETS.EVENT_QUEUE)
@@ -474,26 +495,7 @@ var SheetRepository = (function() {
         return compareIsoDatesAscending(a.created_at, b.created_at);
       })
       .slice(0, limit)
-      .map(function(row) {
-        return {
-          eventId: row.event_id,
-          eventType: row.event_type,
-          dedupeKey: row.dedupe_key,
-          payload: row.payload_json,
-          status: row.status,
-          attemptCount: row.attempt_count,
-          nextAttemptAt: row.next_attempt_at,
-          lockedAt: row.locked_at,
-          lockedBy: row.locked_by,
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-          completedAt: row.completed_at,
-          lastError: row.last_error_code ? {
-            code: row.last_error_code,
-            message: row.last_error_message || row.last_error_code
-          } : null
-        };
-      });
+      .map(toEventDto);
   }
 
   function updateEvent(eventId, patch) {
@@ -516,23 +518,135 @@ var SheetRepository = (function() {
     if (rows.length === 0) {
       return null;
     }
+    return toEventDto(rows[0]);
+  }
+
+  function getEventById(eventId) {
+    Validators.assertUuidV4(eventId, 'eventId');
+    var rows = getRows(APP_CONSTANTS.SHEETS.EVENT_QUEUE).filter(function(row) {
+      return row.event_id === eventId;
+    });
+    return rows.length > 0 ? toEventDto(rows[0]) : null;
+  }
+
+  function listEventsByType(eventType) {
+    return getRows(APP_CONSTANTS.SHEETS.EVENT_QUEUE)
+      .filter(function(row) {
+        return row.event_type === eventType;
+      })
+      .sort(function(a, b) {
+        return compareIsoDatesDescending(a.created_at, b.created_at);
+      })
+      .map(toEventDto);
+  }
+
+  function listStaleProcessingEvents(now, staleMinutes) {
+    var referenceTime = now instanceof Date ? now.getTime() : getIsoTimeMillis(now);
+    var staleBefore = referenceTime - Math.max(Number(staleMinutes || 0), 0) * 60 * 1000;
+    return getRows(APP_CONSTANTS.SHEETS.EVENT_QUEUE)
+      .filter(function(row) {
+        return row.status === 'PROCESSING' &&
+          row.locked_at &&
+          getIsoTimeMillis(row.locked_at) <= staleBefore;
+      })
+      .sort(function(a, b) {
+        return compareIsoDatesAscending(a.locked_at, b.locked_at);
+      })
+      .map(toEventDto);
+  }
+
+  function getMessageByRequestIdAndRole(requestId, role) {
+    var rows = getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS).filter(function(row) {
+      return row.request_id === requestId && row.role === role;
+    });
+    return rows.length > 0 ? toMessageDto(rows[0]) : null;
+  }
+
+  function listMessagesAfter(messageId, limit) {
+    Validators.assertUuidV4(messageId, 'messageId');
+    var rows = getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS);
+    var pivot = null;
+    rows.forEach(function(row) {
+      if (row.message_id === messageId) {
+        pivot = getIsoTimeMillis(row.created_at);
+      }
+    });
+    if (pivot == null) {
+      return [];
+    }
+    return rows
+      .filter(function(row) {
+        return row.created_at && getIsoTimeMillis(row.created_at) > pivot;
+      })
+      .sort(function(a, b) {
+        return compareIsoDatesAscending(a.created_at, b.created_at);
+      })
+      .slice(0, limit || rows.length)
+      .map(toMessageDto);
+  }
+
+  function getUsageDaily(usageDate) {
+    Validators.assertDateString(usageDate, 'usageDate');
+    var rows = getRows(APP_CONSTANTS.SHEETS.USAGE_DAILY).filter(function(row) {
+      return row.usage_date === usageDate;
+    });
+    return rows.length > 0 ? rows[0] : null;
+  }
+
+  function upsertUsageDaily(usage) {
+    Validators.assertDateString(usage.usageDate, 'usage.usageDate');
+    var row = {
+      usage_date: usage.usageDate,
+      api_calls: Number(usage.apiCalls || 0),
+      image_calls: Number(usage.imageCalls || 0),
+      input_tokens: Number(usage.inputTokens || 0),
+      output_tokens: Number(usage.outputTokens || 0),
+      mail_recipients: Number(usage.mailRecipients || 0),
+      errors: Number(usage.errors || 0),
+      updated_at: usage.updatedAt || toIsoStringInTokyo(new Date())
+    };
+    var existingRow = findRowIndexByColumnValue(APP_CONSTANTS.SHEETS.USAGE_DAILY, 'usage_date', usage.usageDate);
+    if (existingRow === -1) {
+      appendRow(APP_CONSTANTS.SHEETS.USAGE_DAILY, row);
+    } else {
+      updateRowByKey(APP_CONSTANTS.SHEETS.USAGE_DAILY, 'usage_date', usage.usageDate, row);
+    }
+    return row;
+  }
+
+  function incrementUsageDaily(usageDate, patch) {
+    var existing = getUsageDaily(usageDate);
+    var next = {
+      usageDate: usageDate,
+      apiCalls: Number((existing && existing.api_calls) || 0) + Number((patch && patch.apiCalls) || 0),
+      imageCalls: Number((existing && existing.image_calls) || 0) + Number((patch && patch.imageCalls) || 0),
+      inputTokens: Number((existing && existing.input_tokens) || 0) + Number((patch && patch.inputTokens) || 0),
+      outputTokens: Number((existing && existing.output_tokens) || 0) + Number((patch && patch.outputTokens) || 0),
+      mailRecipients: Number((existing && existing.mail_recipients) || 0) + Number((patch && patch.mailRecipients) || 0),
+      errors: Number((existing && existing.errors) || 0) + Number((patch && patch.errors) || 0),
+      updatedAt: toIsoStringInTokyo(new Date())
+    };
+    return upsertUsageDaily(next);
+  }
+
+  function deleteDebugLogsOlderThan(cutoffIso) {
+    var sheet = getSheet(APP_CONSTANTS.SHEETS.DEBUG_LOGS);
+    var rows = getRows(APP_CONSTANTS.SHEETS.DEBUG_LOGS);
+    var cutoffTime = getIsoTimeMillis(cutoffIso);
+    var rowsToDelete = [];
+    rows.forEach(function(row, index) {
+      if (row.timestamp && getIsoTimeMillis(row.timestamp) < cutoffTime) {
+        rowsToDelete.push(index + 2);
+      }
+    });
+    rowsToDelete.sort(function(a, b) {
+      return b - a;
+    }).forEach(function(rowIndex) {
+      sheet.deleteRow(rowIndex);
+    });
     return {
-      eventId: rows[0].event_id,
-      eventType: rows[0].event_type,
-      dedupeKey: rows[0].dedupe_key,
-      payload: rows[0].payload_json,
-      status: rows[0].status,
-      attemptCount: rows[0].attempt_count,
-      nextAttemptAt: rows[0].next_attempt_at,
-      lockedAt: rows[0].locked_at,
-      lockedBy: rows[0].locked_by,
-      createdAt: rows[0].created_at,
-      updatedAt: rows[0].updated_at,
-      completedAt: rows[0].completed_at,
-      lastError: rows[0].last_error_code ? {
-        code: rows[0].last_error_code,
-        message: rows[0].last_error_message || rows[0].last_error_code
-      } : null
+      deletedCount: rowsToDelete.length,
+      keptCount: rows.length - rowsToDelete.length
     };
   }
 
@@ -627,20 +741,29 @@ var SheetRepository = (function() {
     listMessagesBefore: listMessagesBefore,
     listMessagesByIds: listMessagesByIds,
     listMessagesByDate: listMessagesByDate,
+    listMessagesAfter: listMessagesAfter,
     getConversationByRequestId: getConversationByRequestId,
+    getMessageByRequestIdAndRole: getMessageByRequestIdAndRole,
     getUserState: getUserState,
     ensureDefaultUserState: ensureDefaultUserState,
     updateUserState: updateUserState,
     insertEvent: insertEvent,
     listClaimableEvents: listClaimableEvents,
     updateEvent: updateEvent,
+    getEventById: getEventById,
     getEventByDedupeKey: getEventByDedupeKey,
+    listEventsByType: listEventsByType,
+    listStaleProcessingEvents: listStaleProcessingEvents,
     appendDebugLog: appendDebugLog,
     listActiveMemories: listActiveMemories,
     getMemoryById: getMemoryById,
     findActiveMemoryByNormalizedKey: findActiveMemoryByNormalizedKey,
     upsertMemory: upsertMemory,
     getDailySummary: getDailySummary,
-    upsertDailySummary: upsertDailySummary
+    upsertDailySummary: upsertDailySummary,
+    getUsageDaily: getUsageDaily,
+    upsertUsageDaily: upsertUsageDaily,
+    incrementUsageDaily: incrementUsageDaily,
+    deleteDebugLogsOlderThan: deleteDebugLogsOlderThan
   };
 })();

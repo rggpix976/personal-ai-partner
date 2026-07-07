@@ -1,10 +1,10 @@
 # Personal Proactive AI Partner
 
 ## Project Status
-- Latest deliverable: A5 Long-term memory and AI self-diary layer
-- Version: v0.6
-- PR state: A5 implementation ready for review
-- Next agent: A6 Queue, scheduler, proactive messages, Gmail notification
+- Latest deliverable: A6 queue, scheduler, proactive messages, Gmail notification, and maintenance
+- Version: v0.7
+- PR state: A6 implementation ready for review
+- Next agent: A7 QA, security review, acceptance testing, and integration hardening
 
 ## Implemented Scope
 - A1 contracts and integration gates
@@ -12,15 +12,12 @@
 - A3 Apps Script HTML Service WebUI
 - A4 chat generation, Gemini integration, context building, and image understanding
 - A5 long-term memory extraction, memory retrieval/application, and AI self-diary generation
+- A6 queue worker, scheduler, proactive email notifications, Gmail quota-safe sending, maintenance cleanup, and weekly backup orchestration
 
 ## Not Yet Implemented
-- `ProactiveMessageService`
-- `GmailNotifier`
-- `QueueService` worker
-- `SchedulerJob`
-- `MaintenanceService`
-- Weekly backup
-- Full acceptance testing
+- Full A7 acceptance testing
+- Final deployment verification
+- Live GAS, Gemini, Gmail, Drive, and Docs validation in a production-like environment
 
 ## Repository Layout
 All Apps Script source files live under [`src/`](src/).
@@ -59,7 +56,10 @@ Current WebUI files:
 - `MemoryService.extract(...)` uses `GeminiClient.generateStructured(...)` plus repository-only message loading to create, confirm, update, or ignore durable memories.
 - `ContextService` now prefers `MemoryService.findRelevant(...)` for cheap deterministic memory retrieval and falls back safely if memory lookup fails.
 - `DiaryService.generate(...)` produces a grounded AI self-diary entry, appends it through `DocumentRepository`, and updates `daily_summaries` idempotently.
-- Proactive messaging, scheduled queue processing, Gmail notification, maintenance flows, and weekly backup are still future work.
+- Temporary Gemini failures can be retried by `processQueueJob()` through `QueueService`.
+- `schedulerJob()` can enqueue proactive messages, diary generation, memory extraction, and weekly backup work on time-based triggers.
+- `ProactiveMessageService` evaluates quiet hours, cooldowns, daily caps, and MailApp quota before queueing or sending email.
+- `MaintenanceService` handles temp image cleanup, debug log cleanup, and backup retention.
 
 ## Read Before Continuing
 1. [`docs/a1/01_ARCHITECTURE_BASELINE.md`](docs/a1/01_ARCHITECTURE_BASELINE.md)
@@ -88,4 +88,5 @@ python tools/validate_contracts.py
 ## Notes
 - Keep secrets in Script Properties only.
 - Gemini API calls stay inside `src/infrastructure/GeminiClient.gs`.
-- Do not treat the project as the full MVP yet. A5 makes long-term memory and AI self-diary service logic possible, but queue workers, scheduling, proactive messaging, Gmail notification, maintenance flows, weekly backup, and full acceptance coverage still remain.
+- Mail sending stays inside `src/infrastructure/GmailNotifier.gs`.
+- Do not treat the project as the full MVP yet. A6 adds scheduled execution and proactive behavior, but A7 still needs to perform QA, security review, acceptance tests, live environment validation, and integration hardening.
