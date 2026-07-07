@@ -1,98 +1,184 @@
 # Personal Proactive AI Partner
 
 ## Project Status
-- Latest deliverable: A6 queue, scheduler, proactive messages, Gmail notification, and maintenance
-- Version: v0.7
-- PR state: A6 implementation ready for review
-- Next agent: A7 QA, security review, acceptance testing, and integration hardening
+
+- Latest deliverable: A7 QA, security review, acceptance testing, and integration hardening
+- Version: v0.8
+- Current state: implementation-complete candidate after A1-A7
+- Next step: live Apps Script, Gemini, Gmail, Drive, and Docs validation
+- Production readiness: not yet approved until live validation passes
 
 ## Implemented Scope
-- A1 contracts and integration gates
-- A2 foundation and data layer
-- A3 Apps Script HTML Service WebUI
-- A4 chat generation, Gemini integration, context building, and image understanding
-- A5 long-term memory extraction, memory retrieval/application, and AI self-diary generation
-- A6 queue worker, scheduler, proactive email notifications, Gmail quota-safe sending, maintenance cleanup, and weekly backup orchestration
 
-## Not Yet Implemented
-- Full A7 acceptance testing
-- Final deployment verification
-- Live GAS, Gemini, Gmail, Drive, and Docs validation in a production-like environment
+- A1 architecture baseline, contracts, event model, and integration gates
+- A2 Apps Script foundation, Sheets repositories, setup, validation, logging, and retry primitives
+- A3 Apps Script HTML Service WebUI
+- A4 chat generation, Gemini integration, context building, queued chat retry support, and image understanding
+- A5 long-term memory extraction, memory retrieval/application, and AI self-diary generation
+- A6 queue worker, scheduler, proactive email notification, Gmail quota-safe sending, maintenance cleanup, and weekly backup orchestration
+- A7 QA artifacts, static audit tooling, self-test entry points, security review, acceptance test plan, integration report, and manual GAS validation plan
+
+## Not Yet Completed
+
+The repository now contains the code and test plans needed for MVP validation, but the following live checks still must be executed in the real Apps Script project:
+
+- Apps Script runtime execution
+- Web App deployment smoke test
+- Gemini API call with the configured Script Property
+- Gmail/MailApp quota and delivery behavior
+- Google Drive temporary image cleanup
+- Google Docs diary append behavior
+- Time-based trigger execution
+- Weekly backup creation and retention
+- End-to-end browser chat with real Sheets persistence
 
 ## Repository Layout
-All Apps Script source files live under [`src/`](src/).
 
 ```text
 src/
   PublicApi.gs
   Setup.gs
   appsscript.json
+  application/
   common/
   infrastructure/
+  jobs/
   tests/
   web/
+
+docs/
+  a1/
+  handoffs/
+  qa/
+
+tools/
+  validate_contracts.py
+  a7_static_audit.py
 ```
 
-Current WebUI files:
+## Runtime Platform
 
-- `src/web/WebController.gs`
-- `src/web/Index.html`
-- `src/web/Styles.html`
-- `src/web/Client.html`
+This project is a Google-account-only Apps Script system.
 
-## Current Behavior
+Core services:
 
-- The web app renders a responsive chat UI for desktop and smartphone browsers.
-- Initial load shows the latest conversation messages from `conversation_logs`.
-- Users can load older messages.
-- Users can send text and attach JPEG, PNG, or WebP images.
-- Image type and size are validated client-side before send.
-- Public browser-callable functions are defined in `src/PublicApi.gs`.
-- `sendChat(request)` now delegates to `ChatService.send(request, context)` for synchronous Gemini-backed replies when the request succeeds immediately.
-- `ChatService` stores the user message, builds bounded context, calls Gemini through `GeminiClient`, stores the assistant reply, and returns an A1-compatible `ChatResult`.
-- Temporary Gemini failures queue a `CHAT_REPLY` retry event instead of failing open.
-- Permanent Gemini failures return a failed `ChatResult` without enqueuing duplicate retry work.
-- Only image metadata and `image_summary` are stored in `conversation_logs`; raw image base64 stays out of Sheets and logs.
-- `MemoryService.enqueueExtraction(...)` and `DiaryService.enqueue(...)` can create A1-compatible queue events, but A6 still owns worker execution.
-- `MemoryService.extract(...)` uses `GeminiClient.generateStructured(...)` plus repository-only message loading to create, confirm, update, or ignore durable memories.
-- `ContextService` now prefers `MemoryService.findRelevant(...)` for cheap deterministic memory retrieval and falls back safely if memory lookup fails.
-- `DiaryService.generate(...)` produces a grounded AI self-diary entry, appends it through `DocumentRepository`, and updates `daily_summaries` idempotently.
-- Queue dedupe now reuses only active events (`PENDING`, `PROCESSING`, `RETRY_WAIT`) and does not reuse `DEAD` rows during normal enqueue.
-- `listClaimableEvents(...)` only claims due `PENDING` and due `RETRY_WAIT` rows.
-- Temporary Gemini failures can be retried by `processQueueJob()` through `QueueService`.
-- `schedulerJob()` can enqueue proactive messages, diary generation, memory extraction, and weekly backup work on time-based triggers.
-- `processQueueJob()` re-evaluates proactive conditions at send time so a saved prior-day proactive body is not resent blindly after a quota delay.
-- `ProactiveMessageService` evaluates quiet hours, cooldowns, daily caps, and MailApp quota before queueing or sending email.
-- Proactive email sending now writes a marker row before `MailApp.sendEmail(...)` and prefers suppressing duplicate mail over guaranteed resend after partial failure.
-- `MaintenanceService` handles temp image cleanup, debug log cleanup, and backup retention.
+- Google Apps Script V8 runtime
+- Apps Script HTML Service Web App
+- Google Sheets for structured state
+- Google Docs for AI diary output
+- Google Drive for temporary images and backups
+- MailApp for proactive email notifications
+- Gemini API through `GeminiClient`
 
-## Read Before Continuing
-1. [`docs/a1/01_ARCHITECTURE_BASELINE.md`](docs/a1/01_ARCHITECTURE_BASELINE.md)
-2. [`docs/a1/02_PUBLIC_API_CONTRACT.md`](docs/a1/02_PUBLIC_API_CONTRACT.md)
-3. [`docs/a1/03_SERVICE_CONTRACTS.md`](docs/a1/03_SERVICE_CONTRACTS.md)
-4. [`docs/a1/04_DATA_AND_EVENT_CONTRACTS.md`](docs/a1/04_DATA_AND_EVENT_CONTRACTS.md)
-5. [`docs/a1/05_ERROR_CONTRACT.md`](docs/a1/05_ERROR_CONTRACT.md)
-6. [`docs/a1/06_FILE_OWNERSHIP.md`](docs/a1/06_FILE_OWNERSHIP.md)
-7. [`docs/a1/07_INTEGRATION_GATES.md`](docs/a1/07_INTEGRATION_GATES.md)
-8. [`docs/handoffs/A1_HANDOFF.md`](docs/handoffs/A1_HANDOFF.md)
-9. [`docs/handoffs/A2_HANDOFF.md`](docs/handoffs/A2_HANDOFF.md)
+No standalone server is required.
 
-## Validation
-Install the dev dependencies:
+## Required Script Properties
 
-```bash
-python -m pip install -r requirements-dev.txt
+Set these in Apps Script Project Settings before setup/deployment.
+
+```text
+GEMINI_API_KEY
+OWNER_EMAIL
+APP_ENV
 ```
 
-Run the contract validator:
+The following properties are created or validated by setup/deployment flows.
+
+```text
+SPREADSHEET_ID
+DIARY_DOC_ID
+TEMP_FOLDER_ID
+BACKUP_FOLDER_ID
+SCHEMA_VERSION
+WEB_APP_URL
+```
+
+`APP_ENV` must be one of the values accepted by `Validators.validateScriptProperties`.
+
+## Main Public Functions
+
+Browser-callable WebUI functions:
+
+```text
+doGet()
+getInitialState()
+loadMessages(beforeMessageId, limit)
+sendChat(request)
+getRequestStatus(requestId)
+```
+
+Operational functions:
+
+```text
+setup()
+migrateSchema()
+validatePreSetupProperties()
+validatePostSetupProperties()
+validatePostDeployProperties()
+installTriggers()
+deleteProjectTriggers()
+listProjectTriggers()
+processQueueJob()
+schedulerJob()
+```
+
+Self-test functions:
+
+```text
+runAllSelfTests()
+runA7StaticSelfTest()
+runA7IntegrationSelfTest()
+```
+
+## Setup Outline
+
+1. Pull the latest `main`.
+2. Push `src/` to Apps Script using the repository's existing Apps Script workflow.
+3. Set `GEMINI_API_KEY`, `OWNER_EMAIL`, and `APP_ENV`.
+4. Run `setup()`.
+5. Run `validatePostSetupProperties()`.
+6. Deploy the Web App.
+7. Set `WEB_APP_URL` to the deployed `/exec` URL.
+8. Run `validatePostDeployProperties()`.
+9. Run `installTriggers()`.
+10. Run `listProjectTriggers()` and confirm only the intended project triggers exist.
+11. Execute the A7 manual test plan in `docs/qa/A7_MANUAL_GAS_TEST_PLAN.md`.
+
+## Validation Commands
+
+Run these locally before opening a PR.
 
 ```bash
 python tools/validate_contracts.py
+python tools/a7_static_audit.py
+node -e "const fs=require('fs'); const path=require('path'); const walk=d=>fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(d,e.name)):[path.join(d,e.name)]); const files=walk('src').filter(f=>f.endsWith('.gs')); for (const f of files) { new Function(fs.readFileSync(f,'utf8')); } console.log('syntax ok', files.length);"
 ```
 
-## Notes
+Live Apps Script, Gemini, Gmail, Drive, and Docs tests are not replaced by these local checks.
 
-- Keep secrets in Script Properties only.
-- Gemini API calls stay inside `src/infrastructure/GeminiClient.gs`.
-- Mail sending stays inside `src/infrastructure/GmailNotifier.gs`.
-- Do not treat the project as the full MVP yet. A6 adds scheduled execution and proactive behavior, but A7 still needs to perform QA, security review, acceptance tests, live environment validation, and integration hardening.
+## Safety Notes
+
+- Do not commit API keys, email addresses, OAuth tokens, or project-specific IDs.
+- Do not log full Gemini prompts, raw image base64, or secrets.
+- Do not run Drive cleanup or weekly backup tests against valuable data without confirming the configured folder IDs.
+- Prefer duplicate suppression over duplicate external side effects, especially for proactive email delivery.
+- Delete time-based triggers during teardown when manual validation is finished.
+
+## A7 Deliverables
+
+- `docs/handoffs/A7_HANDOFF.md`
+- `docs/qa/A7_ACCEPTANCE_TEST_PLAN.md`
+- `docs/qa/A7_SECURITY_REVIEW.md`
+- `docs/qa/A7_INTEGRATION_REPORT.md`
+- `docs/qa/A7_MANUAL_GAS_TEST_PLAN.md`
+- `tools/a7_static_audit.py`
+- `src/tests/RunAllTests.gs`
+- `src/tests/A7StaticSelfTest.gs`
+- `src/tests/A7IntegrationSelfTest.gs`
+
+## Go / No-Go
+
+Current A7 recommendation:
+
+- Go for controlled live validation in a personal Apps Script project.
+- No-go for production-ready claim until every live validation item in the A7 manual GAS test plan passes.

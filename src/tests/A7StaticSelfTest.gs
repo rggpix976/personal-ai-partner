@@ -1,0 +1,91 @@
+function runA7StaticSelfTest() {
+  var results = {
+    passes: [],
+    failures: []
+  };
+
+  function test(name, callback) {
+    try {
+      callback();
+      results.passes.push(name);
+    } catch (error) {
+      results.failures.push({
+        name: name,
+        message: error && error.message ? error.message : String(error)
+      });
+    }
+  }
+
+  function assert(condition, message) {
+    if (!condition) {
+      throw new Error(message || 'Assertion failed.');
+    }
+  }
+
+  function hasFunction(objectName, functionName) {
+    var obj = globalThis[objectName];
+    return obj && typeof obj[functionName] === 'function';
+  }
+
+  test('public web API globals are present', function() {
+    assert(typeof doGet === 'function', 'doGet is missing.');
+    assert(typeof getInitialState === 'function', 'getInitialState is missing.');
+    assert(typeof loadMessages === 'function', 'loadMessages is missing.');
+    assert(typeof sendChat === 'function', 'sendChat is missing.');
+    assert(typeof getRequestStatus === 'function', 'getRequestStatus is missing.');
+  });
+
+  test('operational job globals are present', function() {
+    assert(typeof processQueueJob === 'function', 'processQueueJob is missing.');
+    assert(typeof schedulerJob === 'function', 'schedulerJob is missing.');
+    assert(typeof installTriggers === 'function', 'installTriggers is missing.');
+    assert(typeof deleteProjectTriggers === 'function', 'deleteProjectTriggers is missing.');
+    assert(typeof listProjectTriggers === 'function', 'listProjectTriggers is missing.');
+  });
+
+  test('setup validation globals are present', function() {
+    assert(typeof setup === 'function', 'setup is missing.');
+    assert(typeof validatePreSetupProperties === 'function', 'validatePreSetupProperties is missing.');
+    assert(typeof validatePostSetupProperties === 'function', 'validatePostSetupProperties is missing.');
+    assert(typeof validatePostDeployProperties === 'function', 'validatePostDeployProperties is missing.');
+  });
+
+  test('A1 event constants are present', function() {
+    var eventTypes = APP_CONSTANTS.EVENT_TYPES;
+    var statuses = APP_CONSTANTS.EVENT_STATUSES;
+    ['CHAT_REPLY', 'MEMORY_EXTRACT', 'DIARY_GENERATE', 'PROACTIVE_SEND', 'WEEKLY_BACKUP'].forEach(function(type) {
+      assert(eventTypes.indexOf(type) !== -1, 'Missing event type: ' + type);
+    });
+    ['PENDING', 'PROCESSING', 'RETRY_WAIT', 'DONE', 'DEAD'].forEach(function(status) {
+      assert(statuses.indexOf(status) !== -1, 'Missing event status: ' + status);
+    });
+  });
+
+  test('core services expose A1 methods', function() {
+    assert(hasFunction('QueueService', 'enqueue'), 'QueueService.enqueue is missing.');
+    assert(hasFunction('QueueService', 'claimBatch'), 'QueueService.claimBatch is missing.');
+    assert(hasFunction('QueueService', 'markDone'), 'QueueService.markDone is missing.');
+    assert(hasFunction('QueueService', 'markRetry'), 'QueueService.markRetry is missing.');
+    assert(hasFunction('QueueService', 'markDead'), 'QueueService.markDead is missing.');
+    assert(hasFunction('QueueService', 'recoverStale'), 'QueueService.recoverStale is missing.');
+    assert(hasFunction('QueueService', 'requeueDeadAsNewEvent'), 'QueueService.requeueDeadAsNewEvent is missing.');
+    assert(hasFunction('MemoryService', 'extract'), 'MemoryService.extract is missing.');
+    assert(hasFunction('MemoryService', 'findRelevant'), 'MemoryService.findRelevant is missing.');
+    assert(hasFunction('DiaryService', 'generate'), 'DiaryService.generate is missing.');
+    assert(hasFunction('ProactiveMessageService', 'evaluateLocalConditions'), 'ProactiveMessageService.evaluateLocalConditions is missing.');
+    assert(hasFunction('ProactiveMessageService', 'send'), 'ProactiveMessageService.send is missing.');
+  });
+
+  test('infrastructure service boundaries are present', function() {
+    assert(hasFunction('GeminiClient', 'generateText'), 'GeminiClient.generateText is missing.');
+    assert(hasFunction('GeminiClient', 'generateWithImage'), 'GeminiClient.generateWithImage is missing.');
+    assert(hasFunction('GeminiClient', 'generateStructured'), 'GeminiClient.generateStructured is missing.');
+    assert(hasFunction('GmailNotifier', 'send'), 'GmailNotifier.send is missing.');
+    assert(hasFunction('GmailNotifier', 'getRemainingQuota'), 'GmailNotifier.getRemainingQuota is missing.');
+    assert(hasFunction('SheetRepository', 'insertEvent'), 'SheetRepository.insertEvent is missing.');
+    assert(hasFunction('DriveTempRepository', 'cleanupExpiredTempImages'), 'DriveTempRepository.cleanupExpiredTempImages is missing.');
+    assert(hasFunction('DocumentRepository', 'appendDiaryEntry'), 'DocumentRepository.appendDiaryEntry is missing.');
+  });
+
+  return results;
+}

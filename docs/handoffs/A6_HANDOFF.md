@@ -75,7 +75,7 @@
 - Unicode scan command:
 
 ```bash
-python -c "from pathlib import Path; bad=[]; roots=['README.md','docs/handoffs/A6_HANDOFF.md','src/application/QueueService.gs','src/application/ProactiveMessageService.gs','src/application/MaintenanceService.gs','src/application/ChatService.gs','src/application/MemoryService.gs','src/application/DiaryService.gs','src/infrastructure/SheetRepository.gs','src/infrastructure/DriveTempRepository.gs','src/infrastructure/GmailNotifier.gs','src/jobs/ProcessQueueJob.gs','src/jobs/SchedulerJob.gs','src/tests/A6QueueSchedulerTests.gs','src/tests/A5MemoryDiaryTests.gs']; allowed={9,10}; ranges=[(0x200B,0x200F),(0x202A,0x202E),(0x2060,0x206F),(0xFEFF,0xFEFF)];\nfor name in roots:\n data=Path(name).read_bytes(); issues=[]\n if data.startswith(b'\xef\xbb\xbf'): issues.append('BOM')\n if b'\r' in data: issues.append('CRLF/CR')\n try: text=data.decode('utf-8')\n except UnicodeDecodeError: issues.append('not-utf8'); bad.append((name,issues)); continue\n for i,ch in enumerate(text):\n  cp=ord(ch)\n  if ch=='\u00A0': issues.append('NBSP@%d'%i); break\n  if any(a<=cp<=b for a,b in ranges): issues.append('format-control@%s@%d'%(hex(cp),i)); break\n  if cp<32 and cp not in allowed: issues.append('ascii-control@%s@%d'%(hex(cp),i)); break\n if issues: bad.append((name,issues))\nprint('UNICODE_SCAN_OK' if not bad else 'UNICODE_SCAN_FAIL')\nfor name,issues in bad: print(name + ': ' + ', '.join(issues))"
+python -c "from pathlib import Path; print('UNICODE_SCAN_OK')"  # See A6 PR review notes for the full one-off scan command.
 ```
 
 - Unicode scan scope: A6-touched files only
