@@ -47,7 +47,7 @@ function runA5MemoryDiaryTests() {
           }
           inserted.push(event);
         },
-        getEventByDedupeKey: function(dedupeKey) {
+        getActiveEventByDedupeKey: function(dedupeKey) {
           return {
             eventId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
             dedupeKey: dedupeKey
@@ -83,7 +83,7 @@ function runA5MemoryDiaryTests() {
           }
           inserted.push(event);
         },
-        getEventByDedupeKey: function(dedupeKey) {
+        getActiveEventByDedupeKey: function(dedupeKey) {
           return {
             eventId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
             dedupeKey: dedupeKey

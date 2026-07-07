@@ -41,6 +41,7 @@ Current WebUI files:
 - `src/web/Client.html`
 
 ## Current Behavior
+
 - The web app renders a responsive chat UI for desktop and smartphone browsers.
 - Initial load shows the latest conversation messages from `conversation_logs`.
 - Users can load older messages.
@@ -56,9 +57,13 @@ Current WebUI files:
 - `MemoryService.extract(...)` uses `GeminiClient.generateStructured(...)` plus repository-only message loading to create, confirm, update, or ignore durable memories.
 - `ContextService` now prefers `MemoryService.findRelevant(...)` for cheap deterministic memory retrieval and falls back safely if memory lookup fails.
 - `DiaryService.generate(...)` produces a grounded AI self-diary entry, appends it through `DocumentRepository`, and updates `daily_summaries` idempotently.
+- Queue dedupe now reuses only active events (`PENDING`, `PROCESSING`, `RETRY_WAIT`) and does not reuse `DEAD` rows during normal enqueue.
+- `listClaimableEvents(...)` only claims due `PENDING` and due `RETRY_WAIT` rows.
 - Temporary Gemini failures can be retried by `processQueueJob()` through `QueueService`.
 - `schedulerJob()` can enqueue proactive messages, diary generation, memory extraction, and weekly backup work on time-based triggers.
+- `processQueueJob()` re-evaluates proactive conditions at send time so a saved prior-day proactive body is not resent blindly after a quota delay.
 - `ProactiveMessageService` evaluates quiet hours, cooldowns, daily caps, and MailApp quota before queueing or sending email.
+- Proactive email sending now writes a marker row before `MailApp.sendEmail(...)` and prefers suppressing duplicate mail over guaranteed resend after partial failure.
 - `MaintenanceService` handles temp image cleanup, debug log cleanup, and backup retention.
 
 ## Read Before Continuing
@@ -86,6 +91,7 @@ python tools/validate_contracts.py
 ```
 
 ## Notes
+
 - Keep secrets in Script Properties only.
 - Gemini API calls stay inside `src/infrastructure/GeminiClient.gs`.
 - Mail sending stays inside `src/infrastructure/GmailNotifier.gs`.

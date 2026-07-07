@@ -28,9 +28,10 @@ function processSingleQueueEvent_(event, correlationId) {
 }
 
 function dispatchQueueEvent_(event) {
+  var nowIso = toIsoStringInTokyo(new Date());
   if (event.eventType === 'CHAT_REPLY') {
     return ChatService.processQueuedReply(event.payload, {
-      now: toIsoStringInTokyo(new Date())
+      now: nowIso
     });
   }
   if (event.eventType === 'MEMORY_EXTRACT') {
@@ -40,7 +41,7 @@ function dispatchQueueEvent_(event) {
     return DiaryService.generate(event.payload);
   }
   if (event.eventType === 'PROACTIVE_SEND') {
-    return ProactiveMessageService.send(event.payload);
+    return dispatchProactiveSend_(event, nowIso);
   }
   if (event.eventType === 'WEEKLY_BACKUP') {
     return MaintenanceService.weeklyBackup(event.payload);
@@ -57,6 +58,26 @@ function postDispatchSuccess_(event, result) {
   if (event.eventType === 'PROACTIVE_SEND' && result && result.sent) {
     return;
   }
+}
+
+function dispatchProactiveSend_(event, nowIso) {
+  var evaluation = ProactiveMessageService.evaluateLocalConditions(nowIso);
+  if (evaluation.reason === 'MAIL_QUOTA_EXHAUSTED') {
+    throw createAppError('MAIL_QUOTA_EXHAUSTED', 'Mail quota is exhausted for proactive delivery.');
+  }
+  if (!evaluation.eligible || !evaluation.payload) {
+    return {
+      sent: false,
+      duplicate: false,
+      skipped: true,
+      reason: event.payload && event.payload.targetDate &&
+        event.payload.targetDate < formatDateInTokyo(parseIsoToDate(nowIso))
+        ? 'skipped_quota_expired'
+        : evaluation.reason,
+      createdAt: nowIso
+    };
+  }
+  return ProactiveMessageService.send(evaluation.payload);
 }
 
 function handleQueueFailure_(event, error, correlationId) {

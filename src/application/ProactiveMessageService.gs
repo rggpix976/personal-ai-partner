@@ -80,23 +80,22 @@ var ProactiveMessageService = (function() {
   function send(message) {
     var payload = normalizePayload_(message);
     var existing = payload.dedupeKey
-      ? SheetRepository.getMessageByRequestIdAndRole(payload.dedupeKey, 'system')
+      ? findExistingMarker_(payload.dedupeKey)
       : null;
     if (existing) {
       return {
         sent: false,
         duplicate: true,
         messageId: existing.messageId,
-        dedupeKey: payload.dedupeKey
+        dedupeKey: payload.dedupeKey,
+        markerStatus: existing.status || null
       };
     }
 
     var ownerEmail = PropertiesService.getScriptProperties().getProperty(APP_CONSTANTS.PROPERTY_KEYS.OWNER_EMAIL);
     ensure(ownerEmail, 'CONFIG_MISSING', 'OWNER_EMAIL is not configured.');
-    GmailNotifier.send(ownerEmail, payload.subject, payload.body, payload.options);
-
     var createdAt = payload.sentAt || toIsoStringInTokyo(new Date());
-    var messageRow = SheetRepository.appendConversation({
+    var markerRow = SheetRepository.appendConversation({
       messageId: generateUuidV4(),
       requestId: payload.dedupeKey || null,
       createdAt: createdAt,
@@ -104,8 +103,23 @@ var ProactiveMessageService = (function() {
       messageType: 'proactive',
       text: payload.body,
       image: null,
-      status: 'completed'
+      status: 'accepted'
     });
+    try {
+      GmailNotifier.send(ownerEmail, payload.subject, payload.body, payload.options);
+      markerRow = SheetRepository.updateConversationMessage(markerRow.messageId, {
+        status: 'completed'
+      });
+    } catch (error) {
+      var normalized = normalizeError(error);
+      SheetRepository.updateConversationMessage(markerRow.messageId, {
+        status: 'failed',
+        error: {
+          code: normalized.code
+        }
+      });
+      throw normalized;
+    }
 
     var today = payload.targetDate || formatDateInTokyo(parseIsoToDate(createdAt));
     var state = SheetRepository.ensureDefaultUserState();
@@ -124,7 +138,7 @@ var ProactiveMessageService = (function() {
     return {
       sent: true,
       duplicate: false,
-      messageId: messageRow.messageId,
+      messageId: markerRow.messageId,
       dedupeKey: payload.dedupeKey
     };
   }
@@ -153,6 +167,14 @@ var ProactiveMessageService = (function() {
       payload: payload || null,
       warnings: warnings || []
     };
+  }
+
+  function findExistingMarker_(dedupeKey) {
+    var marker = SheetRepository.getMessageByRequestIdAndRole(dedupeKey, 'system');
+    if (!marker || marker.messageType !== 'proactive') {
+      return null;
+    }
+    return marker;
   }
 
   function requireConfig_(key) {

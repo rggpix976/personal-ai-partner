@@ -8,7 +8,7 @@ var QueueService = (function() {
   function enqueue(event) {
     return LockManager.withScriptLock('queue-enqueue', function() {
       var normalized = normalizeEventForInsert_(event);
-      var existing = SheetRepository.getEventByDedupeKey(normalized.dedupeKey);
+      var existing = SheetRepository.getActiveEventByDedupeKey(normalized.dedupeKey);
       if (existing) {
         return existing;
       }

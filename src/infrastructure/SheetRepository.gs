@@ -183,9 +183,9 @@ var SheetRepository = (function() {
       normalized.completed_at = normalized.completedAt;
       delete normalized.completedAt;
     }
-    if (normalized.lastError) {
-      normalized.last_error_code = normalized.lastError.code;
-      normalized.last_error_message = normalized.lastError.message;
+    if (Object.prototype.hasOwnProperty.call(normalized, 'lastError')) {
+      normalized.last_error_code = normalized.lastError ? normalized.lastError.code : null;
+      normalized.last_error_message = normalized.lastError ? normalized.lastError.message : null;
       delete normalized.lastError;
     }
     return normalized;
@@ -406,10 +406,8 @@ var SheetRepository = (function() {
     Validators.assertUuidV4(event.eventId, 'event.eventId');
     Validators.assertEnum(event.eventType, APP_CONSTANTS.EVENT_TYPES, 'event.eventType');
     Validators.assertEnum(event.status, APP_CONSTANTS.EVENT_STATUSES, 'event.status');
-    var existing = getRows(APP_CONSTANTS.SHEETS.EVENT_QUEUE).filter(function(row) {
-      return row.dedupe_key === event.dedupeKey;
-    });
-    if (existing.length > 0) {
+    var existing = getActiveEventByDedupeKey(event.dedupeKey);
+    if (existing) {
       throw createAppError('DUPLICATE_REQUEST', 'Duplicate dedupe_key is not allowed.', {
         dedupeKey: event.dedupeKey
       });
@@ -484,7 +482,7 @@ var SheetRepository = (function() {
     return getRows(APP_CONSTANTS.SHEETS.EVENT_QUEUE)
       .filter(function(row) {
         if (row.status === 'PENDING') {
-          return true;
+          return !row.next_attempt_at || getIsoTimeMillis(row.next_attempt_at) <= nowTime;
         }
         if (row.status === 'RETRY_WAIT') {
           return row.next_attempt_at && getIsoTimeMillis(row.next_attempt_at) <= nowTime;
@@ -519,6 +517,18 @@ var SheetRepository = (function() {
       return null;
     }
     return toEventDto(rows[0]);
+  }
+
+  function getActiveEventByDedupeKey(dedupeKey) {
+    var rows = getRows(APP_CONSTANTS.SHEETS.EVENT_QUEUE)
+      .filter(function(row) {
+        return row.dedupe_key === dedupeKey &&
+          (row.status === 'PENDING' || row.status === 'PROCESSING' || row.status === 'RETRY_WAIT');
+      })
+      .sort(function(a, b) {
+        return compareIsoDatesDescending(a.updated_at, b.updated_at);
+      });
+    return rows.length > 0 ? toEventDto(rows[0]) : null;
   }
 
   function getEventById(eventId) {
@@ -752,6 +762,7 @@ var SheetRepository = (function() {
     updateEvent: updateEvent,
     getEventById: getEventById,
     getEventByDedupeKey: getEventByDedupeKey,
+    getActiveEventByDedupeKey: getActiveEventByDedupeKey,
     listEventsByType: listEventsByType,
     listStaleProcessingEvents: listStaleProcessingEvents,
     appendDebugLog: appendDebugLog,

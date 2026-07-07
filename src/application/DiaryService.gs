@@ -33,7 +33,7 @@ var DiaryService = (function() {
       if (normalized.code !== 'DUPLICATE_REQUEST') {
         throw normalized;
       }
-      var existing = SheetRepository.getEventByDedupeKey(dedupeKey);
+      var existing = SheetRepository.getActiveEventByDedupeKey(dedupeKey);
       return {
         enqueued: false,
         duplicate: true,
