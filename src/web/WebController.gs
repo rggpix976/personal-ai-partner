@@ -20,9 +20,7 @@ var WebController = (function() {
       .setTitle(DEFAULTS.appTitle)
       .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover')
       .addMetaTag('apple-mobile-web-app-capable', 'yes')
-      .addMetaTag('mobile-web-app-capable', 'yes')
-      .addMetaTag('apple-mobile-web-app-status-bar-style', 'black-translucent')
-      .addMetaTag('theme-color', '#f6efe6');
+      .addMetaTag('mobile-web-app-capable', 'yes');
   }
 
   function getInitialState() {
