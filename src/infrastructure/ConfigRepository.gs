@@ -43,9 +43,14 @@ var ConfigRepository = (function() {
     };
     var sheet = SheetRepository.getSheet(APP_CONSTANTS.SHEETS.CONFIG);
     var headers = SheetRepository.getHeaders(APP_CONSTANTS.SHEETS.CONFIG);
-    sheet.getRange(sheet.getLastRow() + 1, 1, 1, headers.length).setValues([[
+    var targetRow = sheet.getLastRow() + 1;
+    var valueColumn = headers.indexOf('value') + 1;
+    if (valueColumn > 0) {
+      sheet.getRange(targetRow, valueColumn).setNumberFormat('@');
+    }
+    sheet.getRange(targetRow, 1, 1, headers.length).setValues([[
       row.key,
-      row.value,
+      String(row.value),
       row.type,
       row.description,
       parseIsoToDate(row.updated_at)
