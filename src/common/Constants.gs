@@ -70,6 +70,9 @@ var APP_CONSTANTS = Object.freeze({
     { key: 'SILENCE_MINUTES', value: '240', type: 'int', description: 'Silence threshold for proactive messaging' },
     { key: 'PROACTIVE_COOLDOWN_MINUTES', value: '240', type: 'int', description: 'Cooldown between proactive messages' },
     { key: 'PROACTIVE_MAX_PER_DAY', value: '2', type: 'int', description: 'Daily proactive message cap' },
+    { key: 'PROACTIVE_SUBJECT_TEMPLATE', value: 'A check-in from {partnerName} ({targetDate})', type: 'string', description: 'Subject template for proactive messages. Placeholders: {partnerName}, {userName}, {lastUserMessageAt}, {now}, {targetDate}' },
+    { key: 'PROACTIVE_BODY_TEMPLATE', value: 'Hi {userName},\n\nThis is a small check-in from {partnerName}.\nIt has been quiet since your last message around {lastUserMessageAt} JST.\n\nGenerated at: {now}', type: 'string', description: 'Body template for proactive messages. Placeholders: {partnerName}, {userName}, {lastUserMessageAt}, {now}, {targetDate}' },
+    { key: 'PROACTIVE_MESSAGE_STYLE', value: 'Short, neutral, and considerate. Do not pressure the user to reply.', type: 'string', description: 'Style hint available to proactive message templates' },
     { key: 'QUIET_START', value: '23:00', type: 'time', description: 'Quiet hours start' },
     { key: 'QUIET_END', value: '08:00', type: 'time', description: 'Quiet hours end' },
     { key: 'PROACTIVE_RECHECK_MINUTES', value: '60', type: 'int', description: 'Proactive recheck interval' },
@@ -81,6 +84,7 @@ var APP_CONSTANTS = Object.freeze({
     { key: 'DIARY_DUE_TIME', value: '23:30', type: 'time', description: 'Diary due time' },
     { key: 'DIARY_MIN_CHARS', value: '300', type: 'int', description: 'Minimum diary length' },
     { key: 'DIARY_MAX_CHARS', value: '800', type: 'int', description: 'Maximum diary length' },
+    { key: 'DIARY_STYLE', value: 'Grounded, reflective, and concise diary entry in the configured partner voice.', type: 'string', description: 'Diary style instruction' },
     { key: 'LOG_RETENTION_DAYS', value: '30', type: 'int', description: 'Log retention period' },
     { key: 'BACKUP_RETENTION_COUNT', value: '4', type: 'int', description: 'Backup retention count' },
     { key: 'FREE_ONLY_MODE', value: 'true', type: 'bool', description: 'Disable paid-only features' }

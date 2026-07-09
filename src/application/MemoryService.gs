@@ -184,6 +184,7 @@ var MemoryService = (function() {
   }
 
   function buildExtractionRequest_(payload, messages) {
+    var identity = loadMemoryExtractionIdentity_();
     var memories = SheetRepository.listActiveMemories().map(function(row) {
       return {
         memoryId: row.memory_id,
@@ -200,7 +201,11 @@ var MemoryService = (function() {
         'Allowed actions: create, confirm, update, ignore.',
         'Use existingMemoryId only for confirm or update.',
         'Use create only when no existing memory matches.',
-        'Keep memories factual, grounded in the conversation, and safe for long-term recall.'
+        'User display name: ' + identity.userName,
+        'Partner display name: ' + identity.partnerName,
+        'Use the display names only to resolve references in the conversation.',
+        'Keep memories factual, neutral, grounded in the conversation, and safe for long-term recall.',
+        'Do not make stored memory content character-flavored.'
       ].join('\n'),
       contents: [{
         role: 'user',
@@ -215,6 +220,22 @@ var MemoryService = (function() {
         }]
       }]
     };
+  }
+
+  function loadMemoryExtractionIdentity_() {
+    return {
+      userName: getConfigString_('USER_NAME', 'You'),
+      partnerName: getConfigString_('PARTNER_NAME', 'Partner')
+    };
+  }
+
+  function getConfigString_(key, fallback) {
+    try {
+      var config = ConfigRepository.getByKey(key);
+      return config && config.value != null ? String(config.value) : fallback;
+    } catch (error) {
+      return fallback;
+    }
   }
 
   function validateCandidate_(candidate) {
@@ -544,6 +565,8 @@ var MemoryService = (function() {
     applyCandidates: applyCandidates,
     __test: {
       buildDedupeKey: buildDedupeKey_,
+      buildExtractionRequest: buildExtractionRequest_,
+      loadMemoryExtractionIdentity: loadMemoryExtractionIdentity_,
       normalizeCandidateList: normalizeCandidateList_,
       scoreMemory: scoreMemory_,
       normalizeMemoryKey: normalizeMemoryKey_,

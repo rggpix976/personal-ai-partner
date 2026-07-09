@@ -11,8 +11,8 @@ function schedulerJob() {
 
   summary.maintenance = MaintenanceService.runPeriodicMaintenance(now);
   summary.proactive = enqueueProactiveIfEligible_(now);
-  summary.diary = enqueueDiaryIfDue_(now);
   summary.memory = enqueueMemoryExtractionIfDue_(nowIso);
+  summary.diary = enqueueDiaryIfDue_(now);
   summary.weeklyBackup = enqueueWeeklyBackupIfDue_(now);
 
   return summary;

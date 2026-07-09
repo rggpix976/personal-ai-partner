@@ -57,8 +57,8 @@ var ProactiveMessageService = (function() {
         sequence: sequence,
         dedupeKey: dedupeKey,
         evaluatedAt: nowIso,
-        subject: buildSubject_(today),
-        body: buildBody_(state, nowIso),
+        subject: buildSubject_(today, state, nowIso),
+        body: buildBody_(state, nowIso, today),
         reason: 'local_silence_check'
       };
       return buildEvaluation_(true, 'ELIGIBLE', sequence, dedupeKey, warnings, payload);
@@ -192,6 +192,15 @@ var ProactiveMessageService = (function() {
     }
   }
 
+  function getConfigString_(key, fallback) {
+    try {
+      var config = ConfigRepository.getByKey(key);
+      return config && config.value != null ? String(config.value) : fallback;
+    } catch (error) {
+      return fallback;
+    }
+  }
+
   function isQuietHours_(nowDate, quietStart, quietEnd) {
     var minutes = getTokyoMinutesOfDay_(nowDate);
     var startMinutes = parseTimeMinutes_(quietStart);
@@ -216,26 +225,61 @@ var ProactiveMessageService = (function() {
     return Number(parts[0]) * 60 + Number(parts[1]);
   }
 
-  function buildSubject_(targetDate) {
-    return 'A gentle check-in from your AI partner (' + targetDate + ')';
+  function buildSubject_(targetDate, state, nowIso) {
+    var context = buildTemplateContext_(state || {}, nowIso || toIsoStringInTokyo(new Date()), targetDate || formatDateInTokyo(new Date()));
+    var template = getConfigString_(
+      'PROACTIVE_SUBJECT_TEMPLATE',
+      'A check-in from {partnerName} ({targetDate})'
+    );
+    var rendered = renderTemplate_(template, context).replace(/\s+/g, ' ').trim();
+    return rendered || ('A check-in from ' + context.partnerName + ' (' + context.targetDate + ')');
   }
 
-  function buildBody_(state, nowIso) {
-    var lastUserAt = state.last_user_message_at
+  function buildBody_(state, nowIso, targetDate) {
+    var context = buildTemplateContext_(state || {}, nowIso, targetDate);
+    var fallbackTemplate = [
+      'Hi {userName},',
+      '',
+      'This is a small check-in from {partnerName}.',
+      'It has been quiet since your last message around {lastUserMessageAt} JST.',
+      '',
+      'Generated at: {now}'
+    ].join('\n');
+    var template = getConfigString_('PROACTIVE_BODY_TEMPLATE', fallbackTemplate);
+    var rendered = renderTemplate_(template, context).trim();
+    return rendered || renderTemplate_(fallbackTemplate, context).trim();
+  }
+
+  function buildTemplateContext_(state, nowIso, targetDate) {
+    var lastUserAt = state && state.last_user_message_at
       ? Utilities.formatDate(parseIsoToDate(state.last_user_message_at), APP_CONSTANTS.TIME_ZONE, 'M/d H:mm')
       : 'earlier';
-    return [
-      'Just a gentle check-in from your AI partner.',
-      'It has been quiet since your last message around ' + lastUserAt + ' JST.',
-      'If you want, we can pick up where we left off whenever you are ready.',
-      '',
-      'Generated at: ' + nowIso
-    ].join('\n');
+    return {
+      partnerName: getConfigString_('PARTNER_NAME', 'Partner'),
+      userName: getConfigString_('USER_NAME', 'You'),
+      systemPersona: getConfigString_('SYSTEM_PERSONA', 'Supportive, proactive, and concise personal AI partner.'),
+      messageStyle: getConfigString_('PROACTIVE_MESSAGE_STYLE', 'Short, neutral, and considerate. Do not pressure the user to reply.'),
+      lastUserMessageAt: lastUserAt,
+      now: nowIso || toIsoStringInTokyo(new Date()),
+      targetDate: targetDate || formatDateInTokyo(new Date())
+    };
+  }
+
+  function renderTemplate_(template, context) {
+    return String(template || '').replace(/\{([a-zA-Z0-9_]+)\}/g, function(match, key) {
+      return Object.prototype.hasOwnProperty.call(context, key) ? String(context[key]) : match;
+    });
   }
 
   return {
     evaluateLocalConditions: evaluateLocalConditions,
     evaluateByAi: evaluateByAi,
-    send: send
+    send: send,
+    __test: {
+      buildSubject: buildSubject_,
+      buildBody: buildBody_,
+      buildTemplateContext: buildTemplateContext_,
+      renderTemplate: renderTemplate_
+    }
   };
 })();
