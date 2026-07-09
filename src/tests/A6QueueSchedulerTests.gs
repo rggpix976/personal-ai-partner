@@ -832,6 +832,44 @@ function runA6QueueSchedulerTests() {
     });
   });
 
+  test('ProactiveMessageService renders subject and body from spreadsheet config templates', function() {
+    withOverrides({
+      ConfigRepository: {
+        getByKey: function(key) {
+          var values = {
+            PARTNER_NAME: { value: 'PartnerX' },
+            USER_NAME: { value: 'UserY' },
+            SYSTEM_PERSONA: { value: 'Configured persona.' },
+            PROACTIVE_MESSAGE_STYLE: { value: 'Brief and calm.' },
+            PROACTIVE_SUBJECT_TEMPLATE: { value: '{partnerName} to {userName} ({targetDate})' },
+            PROACTIVE_BODY_TEMPLATE: { value: 'Hello {userName}. From {partnerName}. Last: {lastUserMessageAt}. Style: {messageStyle}. Now: {now}.' }
+          };
+          return values[key] || null;
+        }
+      }
+    }, function() {
+      var state = {
+        last_user_message_at: '2026-07-07T06:30:00+09:00'
+      };
+      var subject = ProactiveMessageService.__test.buildSubject(
+        '2026-07-07',
+        state,
+        '2026-07-07T12:00:00+09:00'
+      );
+      var body = ProactiveMessageService.__test.buildBody(
+        state,
+        '2026-07-07T12:00:00+09:00',
+        '2026-07-07'
+      );
+
+      assert(subject === 'PartnerX to UserY (2026-07-07)', 'Subject should use spreadsheet template placeholders.');
+      assert(body.indexOf('Hello UserY. From PartnerX.') !== -1, 'Body should include configured names.');
+      assert(body.indexOf('Last: 7/7 6:30.') !== -1, 'Body should include formatted last user message time.');
+      assert(body.indexOf('Style: Brief and calm.') !== -1, 'Body should expose proactive message style placeholder.');
+      assert(body.indexOf('Now: 2026-07-07T12:00:00+09:00.') !== -1, 'Body should include generation timestamp.');
+    });
+  });
+
   test('GmailNotifier does not send when quota is zero', function() {
     var thrown = null;
     withOverrides({

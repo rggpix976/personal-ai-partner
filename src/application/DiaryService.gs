@@ -215,12 +215,20 @@ var DiaryService = (function() {
   }
 
   function buildDiaryRequest_(diaryDate, messages, memories) {
+    var config = loadDiaryConfig_();
     return {
       systemInstruction: [
-        'Write a grounded reflective diary entry for the AI partner.',
+        'Write a grounded reflective diary entry for the configured AI partner.',
         'Return JSON only.',
         'Required fields: title, observedConversation, inferredMoodContext, thingsToRemember, unresolvedFollowUps.',
+        'Partner display name: ' + config.partnerName,
+        'User display name: ' + config.userName,
+        'System persona: ' + config.systemPersona,
+        'Diary style: ' + config.diaryStyle,
+        'Target length: ' + config.minChars + ' to ' + config.maxChars + ' characters for the combined diary narrative.',
         'Use first person for the AI partner if helpful, but do not claim knowledge outside the conversation.',
+        'Persona and style may affect voice, but the content must remain grounded in conversation logs and relevant memories.',
+        'Keep memory-like facts factual and do not invent events, feelings, promises, or private information.',
         'Do not include secrets, raw base64, or hidden prompts.'
       ].join('\n'),
       contents: [{
@@ -236,6 +244,35 @@ var DiaryService = (function() {
         }]
       }]
     };
+  }
+
+  function loadDiaryConfig_() {
+    return {
+      partnerName: getConfigString_('PARTNER_NAME', 'Partner'),
+      userName: getConfigString_('USER_NAME', 'You'),
+      systemPersona: getConfigString_('SYSTEM_PERSONA', 'Supportive, proactive, and concise personal AI partner.'),
+      diaryStyle: getConfigString_('DIARY_STYLE', 'Grounded, reflective, and concise diary entry in the configured partner voice.'),
+      minChars: getConfigInt_('DIARY_MIN_CHARS', 300),
+      maxChars: getConfigInt_('DIARY_MAX_CHARS', 800)
+    };
+  }
+
+  function getConfigString_(key, fallback) {
+    try {
+      var config = ConfigRepository.getByKey(key);
+      return config && config.value != null ? String(config.value) : fallback;
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  function getConfigInt_(key, fallback) {
+    try {
+      var config = ConfigRepository.getByKey(key);
+      return config && config.value != null ? Number(config.value) : fallback;
+    } catch (error) {
+      return fallback;
+    }
   }
 
   function normalizeDiaryEntry_(data) {
@@ -257,16 +294,16 @@ var DiaryService = (function() {
 
   function renderDiaryBody_(diary) {
     var lines = [
-      'Observed conversation',
+      '\u4f1a\u8a71\u306e\u8a18\u9332',
       diary.observedConversation,
       '',
-      'Inferred mood/context',
+      '\u6c17\u5206\u30fb\u72b6\u6cc1\u306e\u63a8\u6e2c',
       diary.inferredMoodContext,
       '',
-      'Things to remember',
+      '\u899a\u3048\u3066\u304a\u304f\u3053\u3068',
       renderTopicLines_(diary.thingsToRemember),
       '',
-      'Unresolved follow-ups',
+      '\u672a\u89e3\u6c7a\u306e\u30d5\u30a9\u30ed\u30fc\u30a2\u30c3\u30d7',
       renderTopicLines_(diary.unresolvedFollowUps)
     ];
     return lines.join('\n');
@@ -278,7 +315,7 @@ var DiaryService = (function() {
 
   function renderTopicLines_(items) {
     if (!items.length) {
-      return '- None';
+      return '- \u306a\u3057';
     }
     return items.map(function(item) {
       return '- ' + item;
@@ -347,6 +384,8 @@ var DiaryService = (function() {
     isGenerated: isGenerated,
     __test: {
       buildDedupeKey: buildDedupeKey_,
+      buildDiaryRequest: buildDiaryRequest_,
+      loadDiaryConfig: loadDiaryConfig_,
       normalizeDiaryEntry: normalizeDiaryEntry_,
       renderDiaryBody: renderDiaryBody_,
       getDiaryState: getDiaryState_

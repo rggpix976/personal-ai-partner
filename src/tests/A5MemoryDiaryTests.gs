@@ -358,6 +358,87 @@ function runA5MemoryDiaryTests() {
     });
   });
 
+  test('DiaryService diary request uses spreadsheet personalization config', function() {
+    withOverrides({
+      ConfigRepository: {
+        getByKey: function(key) {
+          var values = {
+            PARTNER_NAME: { value: 'PartnerX' },
+            USER_NAME: { value: 'UserY' },
+            SYSTEM_PERSONA: { value: 'Configured persona for tests.' },
+            DIARY_STYLE: { value: 'Quiet, grounded, and concise.' },
+            DIARY_MIN_CHARS: { value: 120 },
+            DIARY_MAX_CHARS: { value: 240 }
+          };
+          return values[key] || null;
+        }
+      }
+    }, function() {
+      var request = DiaryService.__test.buildDiaryRequest(
+        '2026-07-07',
+        [{
+          createdAt: '2026-07-07T10:00:00+09:00',
+          role: 'user',
+          text: 'Today I talked about a small plan.'
+        }],
+        [{
+          normalizedKey: 'test preference',
+          content: 'UserY prefers concise replies.'
+        }]
+      );
+      var instruction = request.systemInstruction;
+
+      assert(instruction.indexOf('Partner display name: PartnerX') !== -1, 'Diary prompt should include partner name.');
+      assert(instruction.indexOf('User display name: UserY') !== -1, 'Diary prompt should include user name.');
+      assert(instruction.indexOf('System persona: Configured persona for tests.') !== -1, 'Diary prompt should include system persona.');
+      assert(instruction.indexOf('Diary style: Quiet, grounded, and concise.') !== -1, 'Diary prompt should include diary style.');
+      assert(instruction.indexOf('Target length: 120 to 240 characters') !== -1, 'Diary prompt should include configured length range.');
+      assert(instruction.indexOf('must remain grounded') !== -1, 'Diary prompt should require grounded content.');
+    });
+  });
+
+  test('MemoryService extraction request uses identity context without character-flavored memories', function() {
+    withOverrides({
+      ConfigRepository: {
+        getByKey: function(key) {
+          var values = {
+            USER_NAME: { value: 'UserY' },
+            PARTNER_NAME: { value: 'PartnerX' }
+          };
+          return values[key] || null;
+        }
+      },
+      SheetRepository: {
+        listActiveMemories: function() {
+          return [{
+            memory_id: '11111111-1111-4111-8111-111111111111',
+            category: 'preference',
+            normalized_key: 'reply style',
+            content: 'UserY prefers concise replies.'
+          }];
+        }
+      }
+    }, function() {
+      var request = MemoryService.__test.buildExtractionRequest(
+        {
+          sourceMessageIds: ['22222222-2222-4222-8222-222222222222']
+        },
+        [{
+          createdAt: '2026-07-07T10:00:00+09:00',
+          role: 'user',
+          text: 'Please remember that I prefer concise replies.'
+        }]
+      );
+      var instruction = request.systemInstruction;
+
+      assert(instruction.indexOf('User display name: UserY') !== -1, 'Memory prompt should include user name.');
+      assert(instruction.indexOf('Partner display name: PartnerX') !== -1, 'Memory prompt should include partner name.');
+      assert(instruction.indexOf('Use the display names only to resolve references') !== -1, 'Memory prompt should limit identity usage.');
+      assert(instruction.indexOf('factual, neutral, grounded') !== -1, 'Memory prompt should keep memory content neutral.');
+      assert(instruction.indexOf('Do not make stored memory content character-flavored.') !== -1, 'Memory prompt should reject character-flavored storage.');
+    });
+  });
+
   test('DiaryService.isGenerated checks summaries and document markers', function() {
     withOverrides({
       SheetRepository: {
