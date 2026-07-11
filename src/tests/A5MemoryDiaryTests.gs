@@ -368,7 +368,11 @@ function runA5MemoryDiaryTests() {
             SYSTEM_PERSONA: { value: 'Configured persona for tests.' },
             DIARY_STYLE: { value: 'Quiet, grounded, and concise.' },
             DIARY_MIN_CHARS: { value: 120 },
-            DIARY_MAX_CHARS: { value: 240 }
+            DIARY_MAX_CHARS: { value: 240 },
+            PARTNER_WORLD_ENABLED: { value: true },
+            PARTNER_WORLD_DIARY_FREQUENCY: { value: 0.75 },
+            PARTNER_WORLD_STYLE: { value: 'A quiet fictional city with changing weather and ordinary daily life.' },
+            PARTNER_WORLD_RECENT_DIARY_LIMIT: { value: 2 }
           };
           return values[key] || null;
         }
@@ -384,6 +388,10 @@ function runA5MemoryDiaryTests() {
         [{
           normalizedKey: 'test preference',
           content: 'UserY prefers concise replies.'
+        }],
+        [{
+          summary_date: '2026-07-06',
+          summary_text: 'Grounded: UserY discussed a small plan. Partner World fiction: PartnerX watched rain from the window.'
         }]
       );
       var instruction = request.systemInstruction;
@@ -393,10 +401,88 @@ function runA5MemoryDiaryTests() {
       assert(instruction.indexOf('System persona: Configured persona for tests.') !== -1, 'Diary prompt should include system persona.');
       assert(instruction.indexOf('Diary style: Quiet, grounded, and concise.') !== -1, 'Diary prompt should include diary style.');
       assert(instruction.indexOf('Target length: 120 to 240 characters') !== -1, 'Diary prompt should include configured length range.');
+      assert(instruction.indexOf('Partner World enabled: true') !== -1, 'Diary prompt should include the Partner World enabled setting.');
+      assert(instruction.indexOf('Partner World diary frequency: 0.75') !== -1, 'Diary prompt should include the configured Partner World frequency.');
+      assert(instruction.indexOf('Partner World style: A quiet fictional city with changing weather and ordinary daily life.') !== -1, 'Diary prompt should include the configured Partner World style.');
+      assert(instruction.indexOf('Partner-side fictional events are allowed') !== -1, 'Diary prompt should explicitly allow fictional partner-side events.');
+      assert(instruction.indexOf('User-side facts require evidence') !== -1, 'Diary prompt should require evidence for user-side facts.');
       assert(instruction.indexOf('must remain grounded') !== -1, 'Diary prompt should require grounded content.');
+
+      var promptText = request.contents[0].parts[0].text;
+      assert(promptText.indexOf('Recent completed diary summaries:') !== -1, 'Diary prompt should include recent diary continuity context.');
+      assert(promptText.indexOf('2026-07-06') !== -1, 'Diary prompt should include the recent diary date.');
+      assert(promptText.indexOf('Partner World fiction: PartnerX watched rain from the window.') !== -1, 'Diary prompt should include prior Partner World context.');
     });
   });
 
+  test('DiaryService Partner World inclusion is deterministic', function() {
+    var enabledConfig = {
+      partnerWorldEnabled: true,
+      partnerWorldDiaryFrequency: 0.65
+    };
+
+    var first = DiaryService.__test.shouldIncludePartnerWorld(
+      '2026-07-07',
+      enabledConfig
+    );
+    var second = DiaryService.__test.shouldIncludePartnerWorld(
+      '2026-07-07',
+      enabledConfig
+    );
+
+    assert(first === second, 'The same diary date and config must always produce the same decision.');
+    assert(
+      DiaryService.__test.shouldIncludePartnerWorld('2026-07-07', {
+        partnerWorldEnabled: false,
+        partnerWorldDiaryFrequency: 1
+      }) === false,
+      'Disabled Partner World must never be included.'
+    );
+    assert(
+      DiaryService.__test.shouldIncludePartnerWorld('2026-07-07', {
+        partnerWorldEnabled: true,
+        partnerWorldDiaryFrequency: 0
+      }) === false,
+      'Zero frequency must never include Partner World.'
+    );
+    assert(
+      DiaryService.__test.shouldIncludePartnerWorld('2026-07-07', {
+        partnerWorldEnabled: true,
+        partnerWorldDiaryFrequency: 1
+      }) === true,
+      'Frequency one must always include Partner World.'
+    );
+  });
+  test('DiaryService rejects Partner World events when not selected', function() {
+    var response = {
+      title: 'Unexpected rain',
+      narrative: 'Rain fell outside the window.',
+      groundedSummary: '',
+      partnerWorldEvents: [
+        'The partner experienced fictional rain.'
+      ],
+      thingsToRemember: [],
+      unresolvedFollowUps: []
+    };
+    var rejected = null;
+
+    try {
+      DiaryService.__test.normalizeDiaryEntry(response, false);
+    } catch (error) {
+      rejected = error;
+    }
+
+    assert(
+      rejected && rejected.code === 'GEMINI_BAD_RESPONSE',
+      'Partner World events must be rejected when Partner World was not selected.'
+    );
+
+    var accepted = DiaryService.__test.normalizeDiaryEntry(response, true);
+    assert(
+      accepted.partnerWorldEvents.length === 1,
+      'Partner World events should be accepted when Partner World was selected.'
+    );
+  });
   test('MemoryService extraction request uses identity context without character-flavored memories', function() {
     withOverrides({
       ConfigRepository: {
@@ -461,6 +547,7 @@ function runA5MemoryDiaryTests() {
   test('DiaryService.generate appends once and skips duplicates', function() {
     var summaryRow = null;
     var appended = 0;
+    var appendedEntry = null;
     var locks = [];
     withOverrides({
       LockManager: {
@@ -510,8 +597,9 @@ function runA5MemoryDiaryTests() {
         findDiaryEntryAnchor: function() {
           return summaryRow && summaryRow.diary_status === 'DONE' ? 'AI Diary - 2026-07-07' : null;
         },
-        appendDiaryEntry: function() {
+        appendDiaryEntry: function(entry) {
           appended += 1;
+          appendedEntry = entry;
           return {
             documentId: 'doc-1',
             anchor: 'AI Diary - 2026-07-07',
@@ -523,9 +611,12 @@ function runA5MemoryDiaryTests() {
         generateStructured: function() {
           return {
             data: {
-              title: 'Quiet progress',
-              observedConversation: 'We talked about planning a Kyoto trip for the fall.',
-              inferredMoodContext: 'The user seemed hopeful and practical, based only on the planning tone.',
+              title: 'Rain after dusk',
+              narrative: 'Rain began after dusk, so I stayed by the window for a while. Later, I thought again about the autumn Kyoto plan we discussed.',
+              groundedSummary: 'The user wants to plan a Kyoto trip this fall.',
+              partnerWorldEvents: [
+                'The partner experienced fictional rain after dusk and stayed by the window.'
+              ],
               thingsToRemember: ['Kyoto trip in autumn'],
               unresolvedFollowUps: ['Help build an itinerary later']
             }
@@ -549,10 +640,142 @@ function runA5MemoryDiaryTests() {
       assert(first.generated === true && first.skipped === false, 'First generation should append the diary.');
       assert(second.generated === false && second.skipped === true, 'Second generation should skip duplicates.');
       assert(appended === 1, 'Diary should be appended only once.');
+      assert(appendedEntry != null, 'The rendered diary entry should be passed to the document repository.');
+      assert(
+        appendedEntry.body === 'Rain began after dusk, so I stayed by the window for a while. Later, I thought again about the autumn Kyoto plan we discussed.',
+        'Google Docs should receive the natural diary narrative without fixed report headings.'
+      );
+      assert(
+        summaryRow.summary_text.indexOf('Grounded: The user wants to plan a Kyoto trip this fall.') !== -1,
+        'The stored summary should label grounded user information.'
+      );
+      assert(
+        summaryRow.summary_text.indexOf('Partner World fiction: The partner experienced fictional rain after dusk and stayed by the window.') !== -1,
+        'The stored summary should label fictional partner-side events.'
+      );
       assert(locks.indexOf('diary-generate-2026-07-07') !== -1, 'Diary generation should use a per-date lock.');
     });
   });
 
+  test('DiaryService.generate writes selected Partner World diary without conversation', function() {
+    var summaryRow = null;
+    var appendedEntry = null;
+    var capturedRequest = null;
+    var memorySearchCalls = 0;
+
+    withOverrides({
+      ConfigRepository: {
+        getByKey: function(key) {
+          var values = {
+            PARTNER_NAME: { value: 'PartnerX' },
+            USER_NAME: { value: 'UserY' },
+            SYSTEM_PERSONA: { value: 'Configured persona for tests.' },
+            DIARY_STYLE: { value: 'Natural private diary.' },
+            DIARY_MIN_CHARS: { value: 120 },
+            DIARY_MAX_CHARS: { value: 240 },
+            PARTNER_WORLD_ENABLED: { value: true },
+            PARTNER_WORLD_DIARY_FREQUENCY: { value: 1 },
+            PARTNER_WORLD_STYLE: { value: 'A quiet fictional city with ordinary daily life.' },
+            PARTNER_WORLD_RECENT_DIARY_LIMIT: { value: 0 }
+          };
+          return values[key] || null;
+        }
+      },
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      SheetRepository: {
+        listMessagesByDate: function() {
+          return [];
+        },
+        getDailySummary: function() {
+          return summaryRow;
+        },
+        upsertDailySummary: function(summary) {
+          summaryRow = {
+            summary_date: summary.summaryDate,
+            conversation_count: summary.conversationCount,
+            summary_text: summary.summaryText,
+            key_topics_json: summary.keyTopics,
+            memory_candidate_count: summary.memoryCandidateCount,
+            diary_status: summary.diaryStatus,
+            diary_doc_anchor: summary.diaryDocAnchor,
+            created_at: summary.createdAt,
+            updated_at: summary.updatedAt
+          };
+          return summaryRow;
+        },
+        updateUserState: function() {
+          return true;
+        }
+      },
+      DocumentRepository: {
+        findDiaryEntryAnchor: function() {
+          return null;
+        },
+        appendDiaryEntry: function(entry) {
+          appendedEntry = entry;
+          return {
+            documentId: 'doc-1',
+            anchor: 'AI Diary - 2026-07-08',
+            appended: true
+          };
+        }
+      },
+      GeminiClient: {
+        generateStructured: function(request) {
+          capturedRequest = request;
+          return {
+            data: {
+              title: 'Rain at the window',
+              narrative: 'Rain began in the evening. I listened to it against the window and spent the rest of the night reading quietly.',
+              groundedSummary: '',
+              partnerWorldEvents: [
+                'The partner experienced fictional evening rain and read by the window.'
+              ],
+              thingsToRemember: [],
+              unresolvedFollowUps: []
+            }
+          };
+        }
+      },
+      MemoryService: {
+        findRelevant: function() {
+          memorySearchCalls += 1;
+          return [];
+        }
+      }
+    }, function() {
+      var result = DiaryService.generate({
+        diaryDate: '2026-07-08',
+        requestedAt: '2026-07-08T23:30:00+09:00'
+      });
+
+      assert(result.generated === true, 'Selected Partner World diary should be generated without conversation.');
+      assert(result.skipped === false, 'Selected Partner World diary should not be skipped.');
+      assert(appendedEntry != null, 'Partner World diary should be sent to the document repository.');
+      assert(
+        appendedEntry.body === 'Rain began in the evening. I listened to it against the window and spent the rest of the night reading quietly.',
+        'Google Docs should receive the natural Partner World narrative.'
+      );
+      assert(summaryRow.conversation_count === 0, 'Conversation count should remain zero.');
+      assert(
+        summaryRow.summary_text.indexOf('Grounded: none') !== -1,
+        'Missing grounded user information should be stored explicitly as none.'
+      );
+      assert(
+        summaryRow.summary_text.indexOf('Partner World fiction: The partner experienced fictional evening rain and read by the window.') !== -1,
+        'The fictional partner-side event should remain clearly separated.'
+      );
+      assert(memorySearchCalls === 0, 'Empty conversation must not trigger relevant-memory search.');
+      assert(
+        capturedRequest.systemInstruction.indexOf('Partner World selected for this diary: true') !== -1,
+        'The prompt should identify this diary as a selected Partner World day.'
+      );
+    });
+  });
   test('DiaryService repairs DONE summary state when doc anchor already exists', function() {
     var summaryRow = {
       summary_date: '2026-07-07',

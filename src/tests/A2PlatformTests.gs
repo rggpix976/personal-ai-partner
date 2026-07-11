@@ -140,6 +140,43 @@ function runA2PlatformTests() {
     assert(String(payload.details).indexOf('[REDACTED_DRIVE_ID:3456]') !== -1, 'Drive ID in details should be masked.');
   });
 
+  test('sheet repository selects recent completed diary summaries', function() {
+    var rows = [{
+      summary_date: '2026-07-01',
+      diary_status: 'DONE',
+      summary_text: 'Old completed diary.'
+    }, {
+      summary_date: '2026-07-03',
+      diary_status: 'DONE',
+      summary_text: 'Most recent completed diary.'
+    }, {
+      summary_date: '2026-07-02',
+      diary_status: 'PENDING',
+      summary_text: 'Pending diary.'
+    }, {
+      summary_date: '2026-07-04',
+      diary_status: 'DONE',
+      summary_text: 'Target-date diary.'
+    }, {
+      summary_date: '2026-06-30',
+      diary_status: 'DONE',
+      summary_text: '   '
+    }];
+
+    var selected = SheetRepository.__test.selectRecentDiarySummariesBefore(
+      rows,
+      '2026-07-04',
+      2
+    );
+
+    assert(selected.length === 2, 'Only two eligible summaries should be returned.');
+    assert(selected[0].summary_date === '2026-07-03', 'Newest eligible summary should be first.');
+    assert(selected[1].summary_date === '2026-07-01', 'Older eligible summary should be second.');
+    assert(
+      SheetRepository.__test.selectRecentDiarySummariesBefore(rows, '2026-07-04', 0).length === 0,
+      'Non-positive limits should return no summaries.'
+    );
+  });
   test('config default metadata validation', function() {
     APP_CONSTANTS.CONFIG_DEFAULTS.forEach(function(entry) {
       Validators.validateConfigEntry(entry);

@@ -710,6 +710,37 @@ var SheetRepository = (function() {
     return memory;
   }
 
+  function listRecentDiarySummariesBefore(summaryDate, limit) {
+    Validators.assertDateString(summaryDate, 'summaryDate');
+    return selectRecentDiarySummariesBefore_(
+      getRows(APP_CONSTANTS.SHEETS.DAILY_SUMMARIES),
+      summaryDate,
+      limit
+    );
+  }
+
+  function selectRecentDiarySummariesBefore_(rows, summaryDate, limit) {
+    var normalizedLimit = Number(limit || 0);
+    if (!isFinite(normalizedLimit) || normalizedLimit <= 0) {
+      return [];
+    }
+    normalizedLimit = Math.floor(normalizedLimit);
+
+    return (rows || [])
+      .filter(function(row) {
+        return row.summary_date < summaryDate &&
+          row.diary_status === 'DONE' &&
+          String(row.summary_text || '').trim() !== '';
+      })
+      .sort(function(a, b) {
+        if (a.summary_date === b.summary_date) {
+          return 0;
+        }
+        return a.summary_date < b.summary_date ? 1 : -1;
+      })
+      .slice(0, normalizedLimit);
+  }
+
   function getDailySummary(summaryDate) {
     Validators.assertDateString(summaryDate, 'summaryDate');
     var rows = getRows(APP_CONSTANTS.SHEETS.DAILY_SUMMARIES).filter(function(row) {
@@ -770,11 +801,15 @@ var SheetRepository = (function() {
     getMemoryById: getMemoryById,
     findActiveMemoryByNormalizedKey: findActiveMemoryByNormalizedKey,
     upsertMemory: upsertMemory,
+    listRecentDiarySummariesBefore: listRecentDiarySummariesBefore,
     getDailySummary: getDailySummary,
     upsertDailySummary: upsertDailySummary,
     getUsageDaily: getUsageDaily,
     upsertUsageDaily: upsertUsageDaily,
     incrementUsageDaily: incrementUsageDaily,
-    deleteDebugLogsOlderThan: deleteDebugLogsOlderThan
+    deleteDebugLogsOlderThan: deleteDebugLogsOlderThan,
+    __test: {
+      selectRecentDiarySummariesBefore: selectRecentDiarySummariesBefore_
+    }
   };
 })();
