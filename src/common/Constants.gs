@@ -85,6 +85,10 @@ var APP_CONSTANTS = Object.freeze({
     { key: 'DIARY_MIN_CHARS', value: '300', type: 'int', description: 'Minimum diary length' },
     { key: 'DIARY_MAX_CHARS', value: '800', type: 'int', description: 'Maximum diary length' },
     { key: 'DIARY_STYLE', value: 'Grounded, reflective, and concise diary entry in the configured partner voice.', type: 'string', description: 'Diary style instruction' },
+    { key: 'PARTNER_WORLD_ENABLED', value: 'true', type: 'bool', description: 'Enable fictional partner-side daily life in diary generation' },
+    { key: 'PARTNER_WORLD_DIARY_FREQUENCY', value: '0.65', type: 'float', description: 'Approximate frequency of diary modes that include Partner World narrative' },
+    { key: 'PARTNER_WORLD_STYLE', value: 'A subtle, lived-in fictional world with varied weather, meals, reading, walking, bathing, sleep, room atmosphere, and small daily events. Favor ordinary sensory details over dramatic events.', type: 'string', description: 'Partner World narrative style instruction' },
+    { key: 'PARTNER_WORLD_RECENT_DIARY_LIMIT', value: '3', type: 'int', description: 'Recent completed diary summaries used for Partner World continuity' },
     { key: 'LOG_RETENTION_DAYS', value: '30', type: 'int', description: 'Log retention period' },
     { key: 'BACKUP_RETENTION_COUNT', value: '4', type: 'int', description: 'Backup retention count' },
     { key: 'FREE_ONLY_MODE', value: 'true', type: 'bool', description: 'Disable paid-only features' }
