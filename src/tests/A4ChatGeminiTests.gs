@@ -153,6 +153,40 @@ function runA4ChatGeminiTests() {
     assert(error.retryable === false, 'Auth failures should not be retryable.');
   });
 
+  test('Gemini diary structured schema requires array fields', function() {
+    var schema = GeminiClient.__test.getStructuredResponseSchema('diary-entry');
+
+    assert(schema.type === 'object', 'Diary schema must be an object.');
+    assert(schema.additionalProperties === false, 'Diary schema must reject additional properties.');
+    assert(schema.properties.partnerWorldEvents.type === 'array', 'partnerWorldEvents must be an array.');
+    assert(schema.properties.thingsToRemember.type === 'array', 'thingsToRemember must be an array.');
+    assert(schema.properties.unresolvedFollowUps.type === 'array', 'unresolvedFollowUps must be an array.');
+    assert(
+      schema.required.indexOf('partnerWorldEvents') !== -1,
+      'partnerWorldEvents must be required.'
+    );
+
+    var body = GeminiClient.__test.buildRequestBody({
+      systemInstruction: 'test',
+      contents: [{
+        role: 'user',
+        parts: [{ text: 'test' }]
+      }]
+    }, null, {
+      responseMimeType: 'application/json',
+      responseJsonSchema: schema
+    });
+
+    assert(
+      body.generationConfig.responseMimeType === 'application/json',
+      'Structured response MIME type must be application/json.'
+    );
+    assert(
+      body.generationConfig.responseJsonSchema === schema,
+      'Structured response schema must be included in the Gemini request.'
+    );
+  });
+
   test('duplicate request helper yields positive retry seconds', function() {
     var seconds = ChatService.__test.computeRetryAfterSeconds({
       nextAttemptAt: '2099-01-01T00:00:10+09:00'

@@ -10,8 +10,10 @@ var GeminiClient = (function() {
   }
 
   function generateStructured(request, schemaName) {
+    var responseJsonSchema = getStructuredResponseSchema_(schemaName);
     var response = generateContent_(request, request && request.image ? request.image : null, {
-      responseMimeType: 'application/json'
+      responseMimeType: 'application/json',
+      responseJsonSchema: responseJsonSchema
     });
     try {
       response.data = JsonUtil.parse(response.text, {
@@ -67,7 +69,46 @@ var GeminiClient = (function() {
     if (extraConfig && extraConfig.responseMimeType) {
       body.generationConfig.responseMimeType = extraConfig.responseMimeType;
     }
+    if (extraConfig && extraConfig.responseJsonSchema) {
+      body.generationConfig.responseJsonSchema = extraConfig.responseJsonSchema;
+    }
     return body;
+  }
+
+  function getStructuredResponseSchema_(schemaName) {
+    if (schemaName === 'diary-entry') {
+      return {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          title: { type: 'string' },
+          narrative: { type: 'string' },
+          groundedSummary: { type: 'string' },
+          partnerWorldEvents: {
+            type: 'array',
+            items: { type: 'string' }
+          },
+          thingsToRemember: {
+            type: 'array',
+            items: { type: 'string' }
+          },
+          unresolvedFollowUps: {
+            type: 'array',
+            items: { type: 'string' }
+          }
+        },
+        required: [
+          'title',
+          'narrative',
+          'groundedSummary',
+          'partnerWorldEvents',
+          'thingsToRemember',
+          'unresolvedFollowUps'
+        ]
+      };
+    }
+
+    return null;
   }
 
   function cloneContents_(contents) {
@@ -255,7 +296,9 @@ var GeminiClient = (function() {
     generateWithImage: generateWithImage,
     __test: {
       mapHttpError: mapHttpError_,
-      extractTextFromCandidate: extractTextFromCandidate_
+      extractTextFromCandidate: extractTextFromCandidate_,
+      buildRequestBody: buildRequestBody_,
+      getStructuredResponseSchema: getStructuredResponseSchema_
     }
   };
 })();
