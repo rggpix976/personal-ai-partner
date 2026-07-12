@@ -404,6 +404,8 @@ function runA5MemoryDiaryTests() {
       assert(instruction.indexOf('Partner World enabled: true') !== -1, 'Diary prompt should include the Partner World enabled setting.');
       assert(instruction.indexOf('Partner World diary frequency: 0.75') !== -1, 'Diary prompt should include the configured Partner World frequency.');
       assert(instruction.indexOf('Partner World style: A quiet fictional city with changing weather and ordinary daily life.') !== -1, 'Diary prompt should include the configured Partner World style.');
+      assert(instruction.indexOf('partnerWorldEvents, thingsToRemember, and unresolvedFollowUps must be arrays of strings') !== -1, 'Diary prompt should explicitly require array fields.');
+      assert(instruction.indexOf('use [] when empty') !== -1, 'Diary prompt should specify empty arrays.');
       assert(instruction.indexOf('Partner-side fictional events are allowed') !== -1, 'Diary prompt should explicitly allow fictional partner-side events.');
       assert(instruction.indexOf('User-side facts require evidence') !== -1, 'Diary prompt should require evidence for user-side facts.');
       assert(instruction.indexOf('must remain grounded') !== -1, 'Diary prompt should require grounded content.');
@@ -451,6 +453,27 @@ function runA5MemoryDiaryTests() {
         partnerWorldDiaryFrequency: 1
       }) === true,
       'Frequency one must always include Partner World.'
+    );
+  });
+  test('DiaryService rejects non-array Partner World events', function() {
+    var rejected = null;
+
+    try {
+      DiaryService.__test.normalizeDiaryEntry({
+        title: 'Invalid structured response',
+        narrative: 'A quiet evening passed.',
+        groundedSummary: '',
+        partnerWorldEvents: 'The partner read a book.',
+        thingsToRemember: [],
+        unresolvedFollowUps: []
+      }, true);
+    } catch (error) {
+      rejected = error;
+    }
+
+    assert(
+      rejected && rejected.code === 'GEMINI_BAD_RESPONSE',
+      'partnerWorldEvents must be rejected when it is not an array.'
     );
   });
   test('DiaryService rejects Partner World events when not selected', function() {

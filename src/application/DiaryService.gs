@@ -242,7 +242,9 @@ var DiaryService = (function() {
       systemInstruction: [
         'Write a private diary entry for the configured AI partner.',
         'Return JSON only.',
-        'Required fields: title, narrative, groundedSummary, partnerWorldEvents, thingsToRemember, unresolvedFollowUps.',
+        'Return exactly one JSON object with this shape: {"title":"string","narrative":"string","groundedSummary":"string","partnerWorldEvents":["string"],"thingsToRemember":["string"],"unresolvedFollowUps":["string"]}.',
+        'All six fields are required. title, narrative, and groundedSummary must be strings.',
+        'partnerWorldEvents, thingsToRemember, and unresolvedFollowUps must be arrays of strings; use [] when empty.',
         'narrative is the natural private diary text rendered to Google Docs.',
         'groundedSummary must contain only facts supported by conversation logs or relevant memories.',
         'When there are no supported user facts, groundedSummary must be an empty string.',
