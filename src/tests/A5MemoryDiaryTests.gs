@@ -400,7 +400,10 @@ function runA5MemoryDiaryTests() {
       assert(instruction.indexOf('User display name: UserY') !== -1, 'Diary prompt should include user name.');
       assert(instruction.indexOf('System persona: Configured persona for tests.') !== -1, 'Diary prompt should include system persona.');
       assert(instruction.indexOf('Diary style: Quiet, grounded, and concise.') !== -1, 'Diary prompt should include diary style.');
-      assert(instruction.indexOf('Target length: 120 to 240 characters') !== -1, 'Diary prompt should include configured length range.');
+      assert(
+        instruction.indexOf('The narrative field alone must be 120 to 240 characters after trimming.') !== -1,
+        'Diary prompt should define the configured length range for the narrative field alone.'
+      );
       assert(instruction.indexOf('Partner World enabled: true') !== -1, 'Diary prompt should include the Partner World enabled setting.');
       assert(instruction.indexOf('Partner World diary frequency: 0.75') !== -1, 'Diary prompt should include the configured Partner World frequency.');
       assert(instruction.indexOf('Partner World style: A quiet fictional city with changing weather and ordinary daily life.') !== -1, 'Diary prompt should include the configured Partner World style.');
@@ -466,7 +469,10 @@ function runA5MemoryDiaryTests() {
         partnerWorldEvents: 'The partner read a book.',
         thingsToRemember: [],
         unresolvedFollowUps: []
-      }, true);
+      }, true, {
+        minChars: 1,
+        maxChars: 200
+      });
     } catch (error) {
       rejected = error;
     }
@@ -490,7 +496,10 @@ function runA5MemoryDiaryTests() {
     var rejected = null;
 
     try {
-      DiaryService.__test.normalizeDiaryEntry(response, false);
+      DiaryService.__test.normalizeDiaryEntry(response, false, {
+        minChars: 1,
+        maxChars: 200
+      });
     } catch (error) {
       rejected = error;
     }
@@ -500,10 +509,89 @@ function runA5MemoryDiaryTests() {
       'Partner World events must be rejected when Partner World was not selected.'
     );
 
-    var accepted = DiaryService.__test.normalizeDiaryEntry(response, true);
+    var accepted = DiaryService.__test.normalizeDiaryEntry(response, true, {
+      minChars: 1,
+      maxChars: 200
+    });
     assert(
       accepted.partnerWorldEvents.length === 1,
       'Partner World events should be accepted when Partner World was selected.'
+    );
+  });
+  test('DiaryService enforces configured narrative length after trimming', function() {
+    function buildResponse(narrative) {
+      return {
+        title: 'Length boundary',
+        narrative: narrative,
+        groundedSummary: '',
+        partnerWorldEvents: [],
+        thingsToRemember: [],
+        unresolvedFollowUps: []
+      };
+    }
+
+    var config = {
+      minChars: 5,
+      maxChars: 10
+    };
+    var shortError = null;
+    var longError = null;
+
+    try {
+      DiaryService.__test.normalizeDiaryEntry(
+        buildResponse('1234'),
+        false,
+        config
+      );
+    } catch (error) {
+      shortError = error;
+    }
+
+    try {
+      DiaryService.__test.normalizeDiaryEntry(
+        buildResponse('12345678901'),
+        false,
+        config
+      );
+    } catch (error) {
+      longError = error;
+    }
+
+    assert(
+      shortError && shortError.code === 'GEMINI_BAD_RESPONSE',
+      'Narratives below the configured minimum must be rejected.'
+    );
+    assert(
+      shortError.message.indexOf('configured minimum of 5') !== -1,
+      'Minimum-length rejection should identify the configured boundary.'
+    );
+    assert(
+      longError && longError.code === 'GEMINI_BAD_RESPONSE',
+      'Narratives above the configured maximum must be rejected.'
+    );
+    assert(
+      longError.message.indexOf('configured maximum of 10') !== -1,
+      'Maximum-length rejection should identify the configured boundary.'
+    );
+
+    var minimum = DiaryService.__test.normalizeDiaryEntry(
+      buildResponse(' 12345 '),
+      false,
+      config
+    );
+    var maximum = DiaryService.__test.normalizeDiaryEntry(
+      buildResponse('1234567890'),
+      false,
+      config
+    );
+
+    assert(
+      minimum.narrative === '12345',
+      'Trimming should occur before minimum-length validation.'
+    );
+    assert(
+      maximum.narrative === '1234567890',
+      'A narrative exactly at the configured maximum should be accepted.'
     );
   });
   test('MemoryService extraction request uses identity context without character-flavored memories', function() {
@@ -753,7 +841,7 @@ function runA5MemoryDiaryTests() {
           return {
             data: {
               title: 'Rain at the window',
-              narrative: 'Rain began in the evening. I listened to it against the window and spent the rest of the night reading quietly.',
+              narrative: 'Rain began in the evening. I listened to it against the window and spent the rest of the night reading quietly. The room felt calm.',
               groundedSummary: '',
               partnerWorldEvents: [
                 'The partner experienced fictional evening rain and read by the window.'
@@ -780,7 +868,7 @@ function runA5MemoryDiaryTests() {
       assert(result.skipped === false, 'Selected Partner World diary should not be skipped.');
       assert(appendedEntry != null, 'Partner World diary should be sent to the document repository.');
       assert(
-        appendedEntry.body === 'Rain began in the evening. I listened to it against the window and spent the rest of the night reading quietly.',
+        appendedEntry.body === 'Rain began in the evening. I listened to it against the window and spent the rest of the night reading quietly. The room felt calm.',
         'Google Docs should receive the natural Partner World narrative.'
       );
       assert(summaryRow.conversation_count === 0, 'Conversation count should remain zero.');

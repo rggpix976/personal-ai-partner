@@ -111,7 +111,11 @@ var DiaryService = (function() {
       ),
       'diary-entry'
     );
-    var diary = normalizeDiaryEntry_(generation.data, includePartnerWorld);
+    var diary = normalizeDiaryEntry_(
+      generation.data,
+      includePartnerWorld,
+      diaryConfig
+    );
     return LockManager.withScriptLock('diary-generate-' + diaryDate, function() {
       var currentState = getDiaryState_(diaryDate);
       if (currentState.generated) {
@@ -253,7 +257,7 @@ var DiaryService = (function() {
         'User display name: ' + config.userName,
         'System persona: ' + config.systemPersona,
         'Diary style: ' + config.diaryStyle,
-        'Target length: ' + config.minChars + ' to ' + config.maxChars + ' characters for the combined diary narrative.',
+        'The narrative field alone must be ' + config.minChars + ' to ' + config.maxChars + ' characters after trimming.',
         'Partner World enabled: ' + config.partnerWorldEnabled,
         'Partner World diary frequency: ' + config.partnerWorldDiaryFrequency,
         'Partner World selected for this diary: ' + includePartnerWorld,
@@ -426,7 +430,8 @@ var DiaryService = (function() {
     return (hash >>> 0) / 4294967296;
   }
 
-  function normalizeDiaryEntry_(data, includePartnerWorld) {
+  function normalizeDiaryEntry_(data, includePartnerWorld, configOverride) {
+    var config = configOverride || loadDiaryConfig_();
     var entry = data && data.entry ? data.entry : data;
     ensure(entry && typeof entry === 'object', 'GEMINI_BAD_RESPONSE', 'Diary generation did not return an object.');
     ensure(typeof entry.title === 'string' && entry.title.trim() !== '', 'GEMINI_BAD_RESPONSE', 'Diary title is required.');
@@ -435,6 +440,20 @@ var DiaryService = (function() {
     ensure(Array.isArray(entry.partnerWorldEvents), 'GEMINI_BAD_RESPONSE', 'partnerWorldEvents must be an array.');
     ensure(Array.isArray(entry.thingsToRemember), 'GEMINI_BAD_RESPONSE', 'thingsToRemember must be an array.');
     ensure(Array.isArray(entry.unresolvedFollowUps), 'GEMINI_BAD_RESPONSE', 'unresolvedFollowUps must be an array.');
+
+    var narrative = String(entry.narrative).trim();
+    ensure(
+      narrative.length >= config.minChars,
+      'GEMINI_BAD_RESPONSE',
+      'narrative length ' + narrative.length +
+        ' is below the configured minimum of ' + config.minChars + ' characters.'
+    );
+    ensure(
+      narrative.length <= config.maxChars,
+      'GEMINI_BAD_RESPONSE',
+      'narrative length ' + narrative.length +
+        ' exceeds the configured maximum of ' + config.maxChars + ' characters.'
+    );
 
     var partnerWorldEvents = normalizeTopics_(entry.partnerWorldEvents);
     ensure(
@@ -445,7 +464,7 @@ var DiaryService = (function() {
 
     return {
       title: String(entry.title).trim(),
-      narrative: String(entry.narrative).trim(),
+      narrative: narrative,
       groundedSummary: String(entry.groundedSummary).replace(/\s+/g, ' ').trim(),
       partnerWorldEvents: partnerWorldEvents,
       thingsToRemember: normalizeTopics_(entry.thingsToRemember),
