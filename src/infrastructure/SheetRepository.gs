@@ -205,6 +205,13 @@ var SheetRepository = (function() {
         summary: row.image_summary || ''
       } : null,
       status: row.status,
+      model: row.model || null,
+      inputTokens: row.input_tokens == null
+        ? null
+        : Number(row.input_tokens),
+      outputTokens: row.output_tokens == null
+        ? null
+        : Number(row.output_tokens),
       error: row.error_code ? {
         code: row.error_code,
         message: row.error_code
@@ -477,23 +484,39 @@ var SheetRepository = (function() {
     };
   }
 
-  function listClaimableEvents(limit, now) {
-    var nowTime = now instanceof Date ? now.getTime() : getIsoTimeMillis(now);
-    return getRows(APP_CONSTANTS.SHEETS.EVENT_QUEUE)
+  function selectClaimableEvents_(rows, limit, now) {
+    var nowTime = now instanceof Date
+      ? now.getTime()
+      : getIsoTimeMillis(now);
+
+    return (rows || [])
       .filter(function(row) {
         if (row.status === 'PENDING') {
-          return !row.next_attempt_at || getIsoTimeMillis(row.next_attempt_at) <= nowTime;
+          return !row.next_attempt_at ||
+            getIsoTimeMillis(row.next_attempt_at) <= nowTime;
         }
         if (row.status === 'RETRY_WAIT') {
-          return row.next_attempt_at && getIsoTimeMillis(row.next_attempt_at) <= nowTime;
+          return row.next_attempt_at &&
+            getIsoTimeMillis(row.next_attempt_at) <= nowTime;
         }
         return false;
       })
       .sort(function(a, b) {
-        return compareIsoDatesAscending(a.created_at, b.created_at);
+        return compareIsoDatesAscending(
+          a.created_at,
+          b.created_at
+        );
       })
       .slice(0, limit)
       .map(toEventDto);
+  }
+
+  function listClaimableEvents(limit, now) {
+    return selectClaimableEvents_(
+      getRows(APP_CONSTANTS.SHEETS.EVENT_QUEUE),
+      limit,
+      now
+    );
   }
 
   function updateEvent(eventId, patch) {
@@ -575,24 +598,49 @@ var SheetRepository = (function() {
   function listMessagesAfter(messageId, limit) {
     Validators.assertUuidV4(messageId, 'messageId');
     var rows = getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS);
-    var pivot = null;
-    rows.forEach(function(row) {
+    var pivotTime = null;
+    var pivotIndex = -1;
+
+    rows.forEach(function(row, index) {
       if (row.message_id === messageId) {
-        pivot = getIsoTimeMillis(row.created_at);
+        pivotTime = getIsoTimeMillis(row.created_at);
+        pivotIndex = index;
       }
     });
-    if (pivot == null) {
+
+    if (pivotTime == null) {
       return [];
     }
+
     return rows
-      .filter(function(row) {
-        return row.created_at && getIsoTimeMillis(row.created_at) > pivot;
+      .map(function(row, index) {
+        return {
+          row: row,
+          index: index,
+          createdAtMillis: row.created_at
+            ? getIsoTimeMillis(row.created_at)
+            : 0
+        };
       })
-      .sort(function(a, b) {
-        return compareIsoDatesAscending(a.created_at, b.created_at);
+      .filter(function(entry) {
+        return entry.row.created_at && (
+          entry.createdAtMillis > pivotTime ||
+          (
+            entry.createdAtMillis === pivotTime &&
+            entry.index > pivotIndex
+          )
+        );
+      })
+      .sort(function(left, right) {
+        if (left.createdAtMillis !== right.createdAtMillis) {
+          return left.createdAtMillis - right.createdAtMillis;
+        }
+        return left.index - right.index;
       })
       .slice(0, limit || rows.length)
-      .map(toMessageDto);
+      .map(function(entry) {
+        return toMessageDto(entry.row);
+      });
   }
 
   function getUsageDaily(usageDate) {
@@ -809,6 +857,7 @@ var SheetRepository = (function() {
     incrementUsageDaily: incrementUsageDaily,
     deleteDebugLogsOlderThan: deleteDebugLogsOlderThan,
     __test: {
+      selectClaimableEvents: selectClaimableEvents_,
       selectRecentDiarySummariesBefore: selectRecentDiarySummariesBefore_
     }
   };

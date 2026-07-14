@@ -145,63 +145,74 @@ function runA6QueueSchedulerTests() {
   });
 
   test('listClaimableEvents respects PENDING nextAttemptAt due time', function() {
-    withOverrides({
-      SheetRepository: {
-        getRows: function() {
-          return [{
-            event_id: '11111111-1111-4111-8111-111111111111',
-            event_type: 'CHAT_REPLY',
-            dedupe_key: 'CHAT_REPLY:1',
-            payload_json: {},
-            status: 'PENDING',
-            attempt_count: 0,
-            next_attempt_at: null,
-            locked_at: null,
-            locked_by: null,
-            created_at: '2026-07-07T09:00:00+09:00',
-            updated_at: '2026-07-07T09:00:00+09:00',
-            completed_at: null,
-            last_error_code: null,
-            last_error_message: null
-          }, {
-            event_id: '22222222-2222-4222-8222-222222222222',
-            event_type: 'CHAT_REPLY',
-            dedupe_key: 'CHAT_REPLY:2',
-            payload_json: {},
-            status: 'PENDING',
-            attempt_count: 0,
-            next_attempt_at: '2026-07-07T09:05:00+09:00',
-            locked_at: null,
-            locked_by: null,
-            created_at: '2026-07-07T09:01:00+09:00',
-            updated_at: '2026-07-07T09:01:00+09:00',
-            completed_at: null,
-            last_error_code: null,
-            last_error_message: null
-          }, {
-            event_id: '33333333-3333-4333-8333-333333333333',
-            event_type: 'CHAT_REPLY',
-            dedupe_key: 'CHAT_REPLY:3',
-            payload_json: {},
-            status: 'PENDING',
-            attempt_count: 0,
-            next_attempt_at: '2026-07-07T08:55:00+09:00',
-            locked_at: null,
-            locked_by: null,
-            created_at: '2026-07-07T09:02:00+09:00',
-            updated_at: '2026-07-07T09:02:00+09:00',
-            completed_at: null,
-            last_error_code: null,
-            last_error_message: null
-          }];
-        }
-      }
-    }, function() {
-      var claimable = SheetRepository.listClaimableEvents(10, '2026-07-07T09:00:00+09:00');
-      assert(claimable.length === 2, 'Only due PENDING events should be claimable.');
-      assert(claimable[0].eventId === '11111111-1111-4111-8111-111111111111', 'Null nextAttemptAt PENDING should be claimable.');
-      assert(claimable[1].eventId === '33333333-3333-4333-8333-333333333333', 'Past-due PENDING should be claimable.');
-    });
+    var rows = [{
+      event_id: '11111111-1111-4111-8111-111111111111',
+      event_type: 'CHAT_REPLY',
+      dedupe_key: 'CHAT_REPLY:1',
+      payload_json: {},
+      status: 'PENDING',
+      attempt_count: 0,
+      next_attempt_at: null,
+      locked_at: null,
+      locked_by: null,
+      created_at: '2026-07-07T09:00:00+09:00',
+      updated_at: '2026-07-07T09:00:00+09:00',
+      completed_at: null,
+      last_error_code: null,
+      last_error_message: null
+    }, {
+      event_id: '22222222-2222-4222-8222-222222222222',
+      event_type: 'CHAT_REPLY',
+      dedupe_key: 'CHAT_REPLY:2',
+      payload_json: {},
+      status: 'PENDING',
+      attempt_count: 0,
+      next_attempt_at: '2026-07-07T09:05:00+09:00',
+      locked_at: null,
+      locked_by: null,
+      created_at: '2026-07-07T09:01:00+09:00',
+      updated_at: '2026-07-07T09:01:00+09:00',
+      completed_at: null,
+      last_error_code: null,
+      last_error_message: null
+    }, {
+      event_id: '33333333-3333-4333-8333-333333333333',
+      event_type: 'CHAT_REPLY',
+      dedupe_key: 'CHAT_REPLY:3',
+      payload_json: {},
+      status: 'PENDING',
+      attempt_count: 0,
+      next_attempt_at: '2026-07-07T08:55:00+09:00',
+      locked_at: null,
+      locked_by: null,
+      created_at: '2026-07-07T09:02:00+09:00',
+      updated_at: '2026-07-07T09:02:00+09:00',
+      completed_at: null,
+      last_error_code: null,
+      last_error_message: null
+    }];
+
+    var claimable =
+      SheetRepository.__test.selectClaimableEvents(
+        rows,
+        10,
+        '2026-07-07T09:00:00+09:00'
+      );
+
+    assert(
+      claimable.length === 2,
+      'Only due PENDING events should be claimable.'
+    );
+    assert(
+      claimable[0].eventId ===
+        '11111111-1111-4111-8111-111111111111',
+      'Null nextAttemptAt PENDING should be claimable.'
+    );
+    assert(
+      claimable[1].eventId ===
+        '33333333-3333-4333-8333-333333333333',
+      'Past-due PENDING should be claimable.'
+    );
   });
 
   test('DONE and DEAD are not claimable', function() {
@@ -439,6 +450,10 @@ function runA6QueueSchedulerTests() {
 
   test('MAIL_QUOTA_EXHAUSTED uses next-day retry window instead of short retry', function() {
     var retried = null;
+    var targetDate = formatDateInTokyo(
+      new Date(new Date().getTime() + 2 * 24 * 60 * 60 * 1000)
+    );
+
     withOverrides({
       QueueService: {
         recoverStale: function() {},
@@ -448,7 +463,7 @@ function runA6QueueSchedulerTests() {
             eventType: 'PROACTIVE_SEND',
             attemptCount: 0,
             payload: {
-              targetDate: '2026-07-07'
+              targetDate: targetDate
             }
           }];
         },
@@ -464,19 +479,15 @@ function runA6QueueSchedulerTests() {
       },
       ProactiveMessageService: {
         evaluateLocalConditions: function() {
-          return {
-            eligible: true,
-            reason: 'ELIGIBLE',
-            payload: {
-              targetDate: '2026-07-07',
-              dedupeKey: 'PROACTIVE_SEND:2026-07-07:1',
-              subject: 'fresh',
-              body: 'fresh body'
-            }
-          };
+          throw new Error('Dispatch must not rerun enqueue probability.');
         },
-        send: function() {
-          throw createAppError('MAIL_QUOTA_EXHAUSTED', 'quota');
+        prepareDispatch: function() {
+          return {
+            eligible: false,
+            reason: 'MAIL_QUOTA_EXHAUSTED',
+            message: null,
+            createdAt: toIsoStringInTokyo(new Date())
+          };
         }
       },
       RetryPolicy: RetryPolicy,
@@ -486,13 +497,33 @@ function runA6QueueSchedulerTests() {
     }, function() {
       processQueueJob();
       assert(retried != null, 'Mail quota failures should be retried.');
-      assert(toIsoStringInTokyo(retried.nextAttemptAt) === '2026-07-08T08:05:00+09:00', 'Mail quota retry should move to the next daily window.');
+      assert(
+        Utilities.formatDate(
+          retried.nextAttemptAt,
+          APP_CONSTANTS.TIME_ZONE,
+          'HH:mm'
+        ) === APP_CONSTANTS.DAILY_MAIL_RETRY_TIME,
+        'Mail quota retry should use the configured daily retry window.'
+      );
     });
   });
 
-  test('PROACTIVE_SEND reevaluates and skips stale saved body after quota retry', function() {
+  test('PROACTIVE_SEND preserves the enqueue decision and skips after new user activity', function() {
     var done = [];
-    var sentBodies = [];
+    var sendCalls = 0;
+    var originalPayload = {
+      targetDate: '2099-07-07',
+      sequence: 1,
+      requestedAt: '2099-07-07T09:00:00+09:00',
+      decisionSlot: '11355801',
+      messageDedupeKey: 'PROACTIVE_MESSAGE:2099-07-07:1',
+      probability: 0.5,
+      sample: 0.25,
+      elapsedMinutes: 300,
+      timeWeight: 1,
+      reason: 'deterministic_probability_hit'
+    };
+
     withOverrides({
       QueueService: {
         recoverStale: function() {},
@@ -501,10 +532,7 @@ function runA6QueueSchedulerTests() {
             eventId: '11111111-1111-4111-8111-111111111111',
             eventType: 'PROACTIVE_SEND',
             attemptCount: 1,
-            payload: {
-              targetDate: '2026-07-07',
-              body: 'old body'
-            }
+            payload: originalPayload
           }];
         },
         markDone: function(eventId) {
@@ -519,17 +547,22 @@ function runA6QueueSchedulerTests() {
       },
       ProactiveMessageService: {
         evaluateLocalConditions: function() {
+          throw new Error('Dispatch must not rerun enqueue probability.');
+        },
+        prepareDispatch: function(payload) {
+          assert(
+            payload === originalPayload,
+            'Dispatch must use the queued decision payload.'
+          );
           return {
             eligible: false,
-            reason: 'COOLDOWN_ACTIVE',
-            payload: null
+            reason: 'USER_ACTIVITY_AFTER_ENQUEUE',
+            message: null,
+            createdAt: '2099-07-07T09:05:00+09:00'
           };
         },
-        send: function(payload) {
-          sentBodies.push(payload.body);
-          return {
-            sent: true
-          };
+        send: function() {
+          sendCalls += 1;
         }
       },
       AppLogger: {
@@ -537,13 +570,26 @@ function runA6QueueSchedulerTests() {
       }
     }, function() {
       processQueueJob();
-      assert(done.length === 1, 'Non-eligible re-evaluation should finish the stale proactive event.');
-      assert(sentBodies.length === 0, 'Old saved proactive body should not be sent after stale quota retry.');
+      assert(done.length === 1, 'A safety skip should finish the event.');
+      assert(sendCalls === 0, 'A safety skip must not send a message.');
     });
   });
 
-  test('PROACTIVE_SEND reevaluates and sends refreshed payload when eligible again', function() {
+  test('PROACTIVE_SEND sends without rerolling the queued probability decision', function() {
     var sentBodies = [];
+    var originalPayload = {
+      targetDate: '2099-07-08',
+      sequence: 1,
+      requestedAt: '2099-07-08T08:00:00+09:00',
+      decisionSlot: '11355824',
+      messageDedupeKey: 'PROACTIVE_MESSAGE:2099-07-08:1',
+      probability: 0.6,
+      sample: 0.2,
+      elapsedMinutes: 360,
+      timeWeight: 1,
+      reason: 'deterministic_probability_hit'
+    };
+
     withOverrides({
       QueueService: {
         recoverStale: function() {},
@@ -552,10 +598,7 @@ function runA6QueueSchedulerTests() {
             eventId: '11111111-1111-4111-8111-111111111111',
             eventType: 'PROACTIVE_SEND',
             attemptCount: 1,
-            payload: {
-              targetDate: '2026-07-07',
-              body: 'old body'
-            }
+            payload: originalPayload
           }];
         },
         markDone: function() {},
@@ -568,22 +611,34 @@ function runA6QueueSchedulerTests() {
       },
       ProactiveMessageService: {
         evaluateLocalConditions: function() {
+          throw new Error('Dispatch must not rerun enqueue probability.');
+        },
+        prepareDispatch: function(payload) {
+          assert(
+            payload.sample === 0.2 &&
+              payload.probability === 0.6 &&
+              payload.decisionSlot === '11355824',
+            'Dispatch must retain the original probability decision.'
+          );
           return {
             eligible: true,
-            reason: 'ELIGIBLE',
-            payload: {
-              targetDate: '2026-07-08',
-              dedupeKey: 'PROACTIVE_SEND:2026-07-08:1',
-              subject: 'fresh',
-              body: 'fresh body'
-            }
+            reason: 'READY',
+            message: {
+              targetDate: payload.targetDate,
+              sequence: payload.sequence,
+              dedupeKey: payload.messageDedupeKey,
+              subject: 'Prepared',
+              body: 'Prepared from the original decision.',
+              sentAt: '2099-07-08T08:05:00+09:00'
+            },
+            createdAt: '2099-07-08T08:05:00+09:00'
           };
         },
         send: function(payload) {
           sentBodies.push(payload.body);
           return {
             sent: true,
-            createdAt: '2026-07-08T08:05:00+09:00'
+            createdAt: payload.sentAt
           };
         }
       },
@@ -592,13 +647,17 @@ function runA6QueueSchedulerTests() {
       }
     }, function() {
       processQueueJob();
-      assert(sentBodies.length === 1, 'Refreshed proactive payload should be sent once.');
-      assert(sentBodies[0] === 'fresh body', 'Refreshed proactive payload should replace the saved body.');
+      assert(sentBodies.length === 1, 'Prepared proactive message should be sent once.');
+      assert(
+        sentBodies[0] === 'Prepared from the original decision.',
+        'The dispatch-prepared body should be sent.'
+      );
     });
   });
 
   test('schedulerJob avoids duplicate diary, memory, proactive, and weekly backup insertions', function() {
     var queued = [];
+    var proactiveEvent = null;
     withOverrides({
       MaintenanceService: {
         runPeriodicMaintenance: function() {
@@ -610,19 +669,27 @@ function runA6QueueSchedulerTests() {
           return {
             eligible: true,
             reason: 'ELIGIBLE',
-            dedupeKey: 'PROACTIVE_SEND:2026-07-07:1',
+            dedupeKey: 'PROACTIVE_SEND:2026-07-07:1:495720',
             payload: {
               targetDate: '2026-07-07',
               sequence: 1,
-              evaluatedAt: '2026-07-07T09:00:00+09:00',
-              subject: 'Hi',
-              body: 'Hello'
+              requestedAt: '2026-07-07T09:00:00+09:00',
+              decisionSlot: '495720',
+              messageDedupeKey: 'PROACTIVE_MESSAGE:2026-07-07:1',
+              probability: 1,
+              sample: 0,
+              elapsedMinutes: 240,
+              timeWeight: 1,
+              reason: 'local_silence_threshold'
             }
           };
         }
       },
       QueueService: {
         enqueue: function(event) {
+          if (event.eventType === 'PROACTIVE_SEND') {
+            proactiveEvent = event;
+          }
           queued.push(event.dedupeKey);
           return {
             eventId: generateUuidV4(),
@@ -706,7 +773,17 @@ function runA6QueueSchedulerTests() {
       }
     }, function() {
       schedulerJob();
-      assert(queued.indexOf('PROACTIVE_SEND:2026-07-07:1') !== -1, 'Proactive event should be queued.');
+      assert(queued.indexOf('PROACTIVE_SEND:2026-07-07:1:495720') !== -1, 'Proactive event should be queued.');
+      assert(
+        proactiveEvent != null &&
+          proactiveEvent.nextAttemptAt ===
+            '2026-07-07T09:00:00+09:00' &&
+          proactiveEvent.createdAt ===
+            '2026-07-07T09:00:00+09:00' &&
+          proactiveEvent.updatedAt ===
+            '2026-07-07T09:00:00+09:00',
+        'Proactive queue timestamps must use requestedAt.'
+      );
       assert(queued.some(function(item) { return item.indexOf('DIARY_GENERATE:') === 0; }), 'Diary event should be queued.');
       assert(queued.some(function(item) { return item.indexOf('MEMORY_EXTRACT:') === 0; }), 'Memory extraction should be queued.');
       assert(queued.some(function(item) { return item.indexOf('WEEKLY_BACKUP:') === 0; }) === false, 'Weekly backup should respect the current window.');
@@ -891,10 +968,18 @@ function runA6QueueSchedulerTests() {
     });
   });
 
-  test('ProactiveMessageService.send persists marker before MailApp send and updates it on success', function() {
-    var writes = [];
-    var updates = [];
+  test('ProactiveMessageService.send claims a marker before mail and completes it after success', function() {
+    var storedMarker = null;
+    var appendCalls = 0;
+    var updateCalls = [];
+    var usageCalls = 0;
+
     withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
       PropertiesService: {
         getScriptProperties: function() {
           return {
@@ -909,34 +994,46 @@ function runA6QueueSchedulerTests() {
       },
       SheetRepository: {
         getMessageByRequestIdAndRole: function() {
-          return null;
+          return storedMarker;
         },
         appendConversation: function(message) {
-          writes.push(message);
-          return {
+          appendCalls += 1;
+          storedMarker = {
             messageId: message.messageId,
+            requestId: message.requestId,
+            createdAt: message.createdAt,
             status: message.status,
-            messageType: message.messageType
+            messageType: message.messageType,
+            text: message.text,
+            model: message.model || null,
+            inputTokens: message.inputTokens,
+            outputTokens: message.outputTokens
           };
+          return storedMarker;
         },
         updateConversationMessage: function(messageId, patch) {
-          updates.push({
-            messageId: messageId,
-            patch: patch
+          updateCalls.push(patch);
+          Object.keys(patch).forEach(function(key) {
+            if (key === 'error') {
+              storedMarker.error = patch.error;
+            } else {
+              storedMarker[key] = patch[key];
+            }
           });
-          return {
-            messageId: messageId,
-            status: patch.status
-          };
+          return storedMarker;
         },
         ensureDefaultUserState: function() {
           return {
             proactive_count_date: '2026-07-08',
-            proactive_count: 0
+            proactive_count: 0,
+            last_proactive_at: null,
+            next_proactive_check_at: null
           };
         },
         updateUserState: function() {},
-        incrementUsageDaily: function() {}
+        incrementUsageDaily: function() {
+          usageCalls += 1;
+        }
       },
       GmailNotifier: {
         send: function() {
@@ -948,20 +1045,39 @@ function runA6QueueSchedulerTests() {
     }, function() {
       var result = ProactiveMessageService.send({
         targetDate: '2026-07-08',
-        dedupeKey: 'PROACTIVE_SEND:2026-07-08:1',
+        sequence: 1,
+        dedupeKey: 'PROACTIVE_MESSAGE:2026-07-08:1',
         subject: 'Hello',
-        body: 'Fresh proactive mail'
+        body: 'Fresh proactive mail',
+        sentAt: '2026-07-08T08:05:00+09:00'
       });
+
       assert(result.sent === true, 'Send should succeed.');
-      assert(writes.length === 1 && writes[0].status === 'accepted', 'Marker should be written before mail send.');
-      assert(updates.length === 1 && updates[0].patch.status === 'completed', 'Successful send should mark the marker completed.');
+      assert(appendCalls === 1, 'One marker should be appended.');
+      assert(
+        updateCalls.some(function(patch) {
+          return patch.status === 'completed';
+        }),
+        'Successful send should mark the marker completed.'
+      );
+      assert(storedMarker.status === 'completed', 'The marker should be completed.');
+      assert(usageCalls === 1, 'Mail usage should be recorded once.');
     });
   });
 
-  test('ProactiveMessageService.send keeps marker and skips duplicate resend after failure', function() {
+  test('ProactiveMessageService.send retries a failed marker with the stored body and current attempt time', function() {
     var storedMarker = null;
+    var appendCalls = 0;
     var sendCalls = 0;
+    var sentBodies = [];
+    var latestStatePatch = null;
+
     withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
       PropertiesService: {
         getScriptProperties: function() {
           return {
@@ -979,59 +1095,104 @@ function runA6QueueSchedulerTests() {
           return storedMarker;
         },
         appendConversation: function(message) {
+          appendCalls += 1;
           storedMarker = {
             messageId: message.messageId,
+            requestId: message.requestId,
+            createdAt: message.createdAt,
             status: message.status,
-            messageType: message.messageType
+            messageType: message.messageType,
+            text: message.text,
+            model: message.model || null,
+            inputTokens: message.inputTokens,
+            outputTokens: message.outputTokens
           };
           return storedMarker;
         },
         updateConversationMessage: function(messageId, patch) {
-          storedMarker = {
-            messageId: messageId,
-            status: patch.status,
-            messageType: 'proactive'
-          };
+          Object.keys(patch).forEach(function(key) {
+            if (key === 'error') {
+              storedMarker.error = patch.error;
+            } else {
+              storedMarker[key] = patch[key];
+            }
+          });
           return storedMarker;
         },
         ensureDefaultUserState: function() {
           return {
             proactive_count_date: '2026-07-08',
-            proactive_count: 0
+            proactive_count: 0,
+            last_proactive_at: null,
+            next_proactive_check_at: null
           };
         },
-        updateUserState: function() {},
+        updateUserState: function(patch) {
+          latestStatePatch = patch;
+        },
         incrementUsageDaily: function() {}
       },
       GmailNotifier: {
-        send: function() {
+        send: function(ownerEmail, subject, body) {
           sendCalls += 1;
-          throw createAppError('MAIL_QUOTA_EXHAUSTED', 'quota');
+          sentBodies.push(body);
+          if (sendCalls === 1) {
+            throw createAppError('MAIL_QUOTA_EXHAUSTED', 'quota');
+          }
+          return {
+            sent: true
+          };
         }
       }
     }, function() {
-      var thrown = null;
+      var firstError = null;
       try {
         ProactiveMessageService.send({
           targetDate: '2026-07-08',
-          dedupeKey: 'PROACTIVE_SEND:2026-07-08:1',
+          sequence: 1,
+          dedupeKey: 'PROACTIVE_MESSAGE:2026-07-08:1',
           subject: 'Hello',
-          body: 'Fresh proactive mail'
+          body: 'Stored proactive mail',
+          sentAt: '2026-07-08T08:05:00+09:00'
         });
       } catch (error) {
-        thrown = error;
+        firstError = error;
       }
-      assert(thrown && thrown.code === 'MAIL_QUOTA_EXHAUSTED', 'Original send should surface the failure.');
-      assert(storedMarker && storedMarker.status === 'failed', 'Failed send should leave a persisted marker.');
 
-      var duplicate = ProactiveMessageService.send({
+      assert(
+        firstError && firstError.code === 'MAIL_QUOTA_EXHAUSTED',
+        'The first failure should be surfaced.'
+      );
+      assert(storedMarker.status === 'failed', 'The marker should be failed.');
+
+      var result = ProactiveMessageService.send({
         targetDate: '2026-07-08',
-        dedupeKey: 'PROACTIVE_SEND:2026-07-08:1',
+        sequence: 1,
+        dedupeKey: 'PROACTIVE_MESSAGE:2026-07-08:1',
         subject: 'Hello',
-        body: 'Fresh proactive mail'
+        body: 'A replacement body that must not be used',
+        sentAt: '2026-07-08T10:05:00+09:00'
       });
-      assert(duplicate.duplicate === true, 'Existing marker should suppress duplicate resend.');
-      assert(sendCalls === 1, 'Mail send should not be attempted twice for the same dedupe key.');
+
+      assert(result.sent === true, 'The failed marker should be retried.');
+      assert(result.duplicate === false, 'A failed marker is not completed.');
+      assert(sendCalls === 2, 'Mail should be attempted twice.');
+      assert(appendCalls === 1, 'Retry must reuse the original marker.');
+      assert(
+        sentBodies[1] === 'Stored proactive mail',
+        'Retry must reuse the stored body.'
+      );
+      assert(
+        storedMarker.createdAt === '2026-07-08T10:05:00+09:00',
+        'Retry must update the marker to the actual attempt time.'
+      );
+      assert(storedMarker.status === 'completed', 'Retry should complete the marker.');
+      assert(
+        latestStatePatch &&
+          latestStatePatch.last_proactive_at ===
+            '2026-07-08T10:05:00+09:00',
+        'Cooldown state must use the successful retry time.'
+      );
     });
   });
 
@@ -1084,6 +1245,98 @@ function runA6QueueSchedulerTests() {
       var result = DriveTempRepository.cleanupExpiredTempImages(new Date('2026-07-07T09:00:00+09:00'), 24);
       assert(result.deletedCount === 0, 'Fresh temp files should not be deleted.');
       assert(trashed === 0, 'Fresh temp files should not be trashed.');
+    });
+  });
+
+  test('QueueService.enqueue rejects incomplete PROACTIVE_SEND decision payloads', function() {
+    var inserted = false;
+    var thrown = null;
+
+    withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      SheetRepository: {
+        getActiveEventByDedupeKey: function() {
+          return null;
+        },
+        insertEvent: function() {
+          inserted = true;
+        }
+      }
+    }, function() {
+      try {
+        QueueService.enqueue({
+          eventType: 'PROACTIVE_SEND',
+          payload: {
+            targetDate: '2026-07-08',
+            sequence: 1,
+            requestedAt: '2026-07-08T08:00:00+09:00'
+          }
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      assert(
+        thrown && thrown.code === 'VALIDATION_REQUEST_INVALID',
+        'Incomplete proactive decisions must be rejected.'
+      );
+      assert(inserted === false, 'Invalid payloads must not be inserted.');
+    });
+  });
+
+  test('ProactiveMessageService.send suppresses a concurrent accepted marker', function() {
+    var sendCalls = 0;
+
+    withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      PropertiesService: {
+        getScriptProperties: function() {
+          return {
+            getProperty: function() {
+              return 'owner@example.com';
+            }
+          };
+        }
+      },
+      SheetRepository: {
+        getMessageByRequestIdAndRole: function() {
+          return {
+            messageId: '11111111-1111-4111-8111-111111111111',
+            requestId: 'PROACTIVE_MESSAGE:2026-07-08:1',
+            createdAt: '2026-07-08T08:05:00+09:00',
+            role: 'system',
+            messageType: 'proactive',
+            text: 'Claimed proactive body',
+            status: 'accepted'
+          };
+        }
+      },
+      GmailNotifier: {
+        send: function() {
+          sendCalls += 1;
+        }
+      }
+    }, function() {
+      var result = ProactiveMessageService.send({
+        targetDate: '2026-07-08',
+        sequence: 1,
+        dedupeKey: 'PROACTIVE_MESSAGE:2026-07-08:1',
+        subject: 'Hello',
+        body: 'Claimed proactive body',
+        sentAt: '2026-07-08T08:05:00+09:00'
+      });
+
+      assert(result.sent === false, 'The second claimant must not send.');
+      assert(result.duplicate === true, 'The accepted marker must be treated as claimed.');
+      assert(sendCalls === 0, 'Gmail must not be called by the second claimant.');
     });
   });
 

@@ -10,6 +10,10 @@ function loadMessages(beforeMessageId, limit) {
   return WebController.loadMessages(beforeMessageId, limit);
 }
 
+function loadNewMessages(afterMessageId, limit) {
+  return WebController.loadNewMessages(afterMessageId, limit);
+}
+
 function sendChat(request) {
   return WebController.sendChat(request);
 }

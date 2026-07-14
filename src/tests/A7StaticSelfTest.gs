@@ -31,6 +31,7 @@ function runA7StaticSelfTest() {
     assert(typeof doGet === 'function', 'doGet is missing.');
     assert(typeof getInitialState === 'function', 'getInitialState is missing.');
     assert(typeof loadMessages === 'function', 'loadMessages is missing.');
+    assert(typeof loadNewMessages === 'function', 'loadNewMessages is missing.');
     assert(typeof sendChat === 'function', 'sendChat is missing.');
     assert(typeof getRequestStatus === 'function', 'getRequestStatus is missing.');
   });

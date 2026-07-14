@@ -8,7 +8,8 @@ var WebController = (function() {
     tempImageTtlHours: 24,
     partnerName: 'Partner',
     userName: 'You',
-    pendingRetrySeconds: 3
+    pendingRetrySeconds: 3,
+    proactiveWebPollSeconds: 60
   });
 
   function doGet() {
@@ -61,6 +62,23 @@ var WebController = (function() {
       };
     }
     return listMessagePage_(beforeMessageId, limit);
+  }
+
+
+  function loadNewMessages(afterMessageId, limit) {
+    assertWebAccess_();
+    var system = buildSystemState_();
+
+    if (system.status === 'stopped') {
+      return {
+        ok: true,
+        messages: [],
+        hasMore: false,
+        nextAfterMessageId: afterMessageId || null
+      };
+    }
+
+    return listNewMessagePage_(afterMessageId, limit);
   }
 
   function sendChat(request) {
@@ -211,6 +229,12 @@ var WebController = (function() {
       imageMaxBytes: getConfigInt_('IMAGE_MAX_BYTES', DEFAULTS.imageMaxBytes),
       allowedMimeTypes: APP_CONSTANTS.MIME_TYPES.slice(),
       pendingRetrySeconds: DEFAULTS.pendingRetrySeconds,
+      proactiveWebPollSeconds: normalizePollSeconds_(
+        getConfigInt_(
+          'PROACTIVE_WEB_POLL_SECONDS',
+          DEFAULTS.proactiveWebPollSeconds
+        )
+      ),
       hasChatReplyWorker: hasChatReplyWorker_()
     };
   }
@@ -266,6 +290,44 @@ var WebController = (function() {
         hasMore: hasMore,
         nextBeforeMessageId: hasMore && ascending.length > 0 ? ascending[0].messageId : null
       }
+    };
+  }
+
+
+  function listNewMessagePage_(afterMessageId, limit) {
+    var normalizedLimit = normalizeLimit_(limit);
+    var queryLimit = normalizedLimit + 1;
+    var messages;
+
+    if (afterMessageId) {
+      ensure(
+        Validators.isUuidV4(afterMessageId),
+        'VALIDATION_REQUEST_INVALID',
+        'afterMessageId must be a UUID v4.'
+      );
+      messages = SheetRepository.listMessagesAfter(
+        afterMessageId,
+        queryLimit
+      );
+    } else {
+      messages = SheetRepository
+        .listRecentMessages(queryLimit)
+        .slice()
+        .reverse();
+    }
+
+    var hasMore = messages.length > normalizedLimit;
+    var slice = hasMore
+      ? messages.slice(0, normalizedLimit)
+      : messages;
+
+    return {
+      ok: true,
+      messages: slice,
+      hasMore: hasMore,
+      nextAfterMessageId: slice.length > 0
+        ? slice[slice.length - 1].messageId
+        : (afterMessageId || null)
     };
   }
 
@@ -445,6 +507,15 @@ var WebController = (function() {
     return Math.min(Math.floor(numeric), DEFAULTS.maxPageSize);
   }
 
+
+  function normalizePollSeconds_(value) {
+    var numeric = Number(value);
+    if (!isFinite(numeric)) {
+      numeric = DEFAULTS.proactiveWebPollSeconds;
+    }
+    return Math.min(300, Math.max(15, Math.floor(numeric)));
+  }
+
   function ensurePlatformReadyForSend_() {
     Validators.validateScriptProperties(PropertiesService.getScriptProperties().getProperties(), 'postSetup');
     SheetRepository.ensureDefaultUserState();
@@ -564,12 +635,15 @@ var WebController = (function() {
     doGet: doGet,
     getInitialState: getInitialState,
     loadMessages: loadMessages,
+    loadNewMessages: loadNewMessages,
     sendChat: sendChat,
     getRequestStatus: getRequestStatus,
     includePartial_: includePartial_,
     __test: {
       computeRetryAfterSeconds: computeRetryAfterSeconds_,
-      toSafeInlineJson: toSafeInlineJson_
+      toSafeInlineJson: toSafeInlineJson_,
+      listNewMessagePage: listNewMessagePage_,
+      normalizePollSeconds: normalizePollSeconds_
     }
   };
 })();

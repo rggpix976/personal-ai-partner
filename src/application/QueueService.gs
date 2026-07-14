@@ -142,8 +142,22 @@ var QueueService = (function() {
     Validators.assertEnum(eventType, APP_CONSTANTS.EVENT_TYPES, 'event.eventType');
     var nowIso = normalizeNow_(event.createdAt || event.updatedAt);
     var payload = normalizePayload_(eventType, event.payload);
-    var dedupeKey = String(event.dedupeKey || buildDedupeKey_(eventType, payload)).trim();
-    ensure(dedupeKey !== '', 'VALIDATION_REQUEST_INVALID', 'dedupeKey is required.');
+    var generatedDedupeKey = buildDedupeKey_(eventType, payload);
+    var dedupeKey = String(
+      event.dedupeKey || generatedDedupeKey
+    ).trim();
+    ensure(
+      dedupeKey !== '',
+      'VALIDATION_REQUEST_INVALID',
+      'dedupeKey is required.'
+    );
+    if (eventType === 'PROACTIVE_SEND') {
+      ensure(
+        dedupeKey === generatedDedupeKey,
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND dedupeKey must match its decision payload.'
+      );
+    }
     return {
       eventId: event.eventId && Validators.isUuidV4(event.eventId) ? event.eventId : generateUuidV4(),
       eventType: eventType,
@@ -189,14 +203,114 @@ var QueueService = (function() {
       };
     }
     if (eventType === 'PROACTIVE_SEND') {
-      ensure(Validators.isDateString(payload.targetDate), 'VALIDATION_REQUEST_INVALID', 'PROACTIVE_SEND payload.targetDate must be a yyyy-MM-dd string.');
+      var hasOwn = Object.prototype.hasOwnProperty;
+
+      ensure(
+        Validators.isDateString(payload.targetDate),
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.targetDate must be a yyyy-MM-dd string.'
+      );
+      ensure(
+        hasOwn.call(payload, 'sequence'),
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.sequence is required.'
+      );
+      ensure(
+        hasOwn.call(payload, 'requestedAt') &&
+          Validators.isIsoDateTimeString(payload.requestedAt),
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.requestedAt must be an ISO 8601 string.'
+      );
+      ensure(
+        hasOwn.call(payload, 'decisionSlot') &&
+          /^[0-9]+$/.test(String(payload.decisionSlot)),
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.decisionSlot must contain digits only.'
+      );
+      ensure(
+        hasOwn.call(payload, 'messageDedupeKey'),
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.messageDedupeKey is required.'
+      );
+      ensure(
+        hasOwn.call(payload, 'probability'),
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.probability is required.'
+      );
+      ensure(
+        hasOwn.call(payload, 'sample'),
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.sample is required.'
+      );
+      ensure(
+        hasOwn.call(payload, 'elapsedMinutes'),
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.elapsedMinutes is required.'
+      );
+      ensure(
+        hasOwn.call(payload, 'timeWeight'),
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.timeWeight is required.'
+      );
+
+      var sequence = Number(payload.sequence);
+      var decisionSlot = String(payload.decisionSlot);
+      var probability = Number(payload.probability);
+      var sample = Number(payload.sample);
+      var elapsedMinutes = Number(payload.elapsedMinutes);
+      var timeWeight = Number(payload.timeWeight);
+      var expectedMessageDedupeKey =
+        'PROACTIVE_MESSAGE:' +
+        payload.targetDate +
+        ':' +
+        sequence;
+
+      ensure(
+        isFinite(sequence) &&
+          sequence >= 1 &&
+          Math.floor(sequence) === sequence,
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.sequence must be a positive integer.'
+      );
+      ensure(
+        String(payload.messageDedupeKey) ===
+          expectedMessageDedupeKey,
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.messageDedupeKey is invalid.'
+      );
+      ensure(
+        isFinite(probability) &&
+          probability >= 0 &&
+          probability <= 1,
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.probability must be between 0 and 1.'
+      );
+      ensure(
+        isFinite(sample) && sample >= 0 && sample < 1,
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.sample must be in the range [0, 1).'
+      );
+      ensure(
+        isFinite(elapsedMinutes) && elapsedMinutes >= 0,
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.elapsedMinutes must be non-negative.'
+      );
+      ensure(
+        isFinite(timeWeight) && timeWeight >= 0,
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.timeWeight must be non-negative.'
+      );
+
       return {
         targetDate: payload.targetDate,
-        sequence: Number(payload.sequence || 1),
-        dedupeKey: payload.dedupeKey || null,
-        evaluatedAt: payload.evaluatedAt || toIsoStringInTokyo(new Date()),
-        subject: payload.subject || null,
-        body: payload.body || payload.message || '',
+        sequence: sequence,
+        requestedAt: payload.requestedAt,
+        decisionSlot: decisionSlot,
+        messageDedupeKey: expectedMessageDedupeKey,
+        probability: probability,
+        sample: sample,
+        elapsedMinutes: elapsedMinutes,
+        timeWeight: timeWeight,
         reason: payload.reason || null
       };
     }
@@ -224,7 +338,10 @@ var QueueService = (function() {
       return 'DIARY_GENERATE:' + payload.diaryDate;
     }
     if (eventType === 'PROACTIVE_SEND') {
-      return 'PROACTIVE_SEND:' + payload.targetDate + ':' + Number(payload.sequence || 1);
+      return 'PROACTIVE_SEND:' +
+        payload.targetDate + ':' +
+        Number(payload.sequence) + ':' +
+        String(payload.decisionSlot);
     }
     if (eventType === 'WEEKLY_BACKUP') {
       return 'WEEKLY_BACKUP:' + payload.backupDate;

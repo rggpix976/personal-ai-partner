@@ -7,7 +7,13 @@
   "required": [
     "targetDate",
     "sequence",
-    "requestedAt"
+    "requestedAt",
+    "decisionSlot",
+    "messageDedupeKey",
+    "probability",
+    "sample",
+    "elapsedMinutes",
+    "timeWeight"
   ],
   "properties": {
     "targetDate": {
@@ -22,6 +28,36 @@
     "requestedAt": {
       "type": "string",
       "format": "date-time"
+    },
+    "decisionSlot": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "messageDedupeKey": {
+      "type": "string",
+      "pattern": "^PROACTIVE_MESSAGE:[0-9]{4}-[0-9]{2}-[0-9]{2}:[1-9][0-9]*$",
+      "maxLength": 200
+    },
+    "probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "sample": {
+      "type": "number",
+      "minimum": 0,
+      "exclusiveMaximum": 1
+    },
+    "elapsedMinutes": {
+      "type": "number",
+      "minimum": 0
+    },
+    "timeWeight": {
+      "type": "number",
+      "minimum": 0
+    },
+    "reason": {
+      "type": ["string", "null"]
     }
   }
 }
