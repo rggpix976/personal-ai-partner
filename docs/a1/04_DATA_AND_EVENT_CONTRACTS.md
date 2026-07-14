@@ -74,9 +74,26 @@ CHAT_REPLY:{requestId}
 CHAT_REPLY_MANUAL:{requestId}:{manualRequestId}
 MEMORY_EXTRACT:{firstMessageId}:{lastMessageId}
 DIARY_GENERATE:{yyyy-MM-dd}
-PROACTIVE_SEND:{yyyy-MM-dd}:{sequence}
+PROACTIVE_SEND:{yyyy-MM-dd}:{sequence}:{decisionSlot}
 WEEKLY_BACKUP:{yyyy-MM-dd}
 ```
+
+For `PROACTIVE_SEND`, the deterministic probability decision is made only
+when the scheduler enqueues the event. Queue retries reuse the persisted
+`probability`, `sample`, `decisionSlot`, and `requestedAt`; dispatch never
+reruns or rerolls the probability decision.
+
+Dispatch performs only hard safety checks: quiet hours, `quiet_until`,
+cooldown, daily cap, mail quota, target-date expiry, and whether the user
+spoke after `requestedAt`. The queue event is deduplicated by
+`PROACTIVE_SEND:{targetDate}:{sequence}:{decisionSlot}`, while actual
+conversation delivery is deduplicated separately by
+`PROACTIVE_MESSAGE:{targetDate}:{sequence}`.
+
+Web clients fetch newly appended conversation messages with
+`loadNewMessages(afterMessageId, limit)`. Clients deduplicate by `messageId`,
+pause polling while the page is hidden, and resume immediately when it
+becomes visible.
 
 `DEAD` の手動再試行は `CHAT_REPLY_MANUAL` を使い、既存 `dedupe_key` を再利用しない。
 

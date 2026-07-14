@@ -124,6 +124,10 @@ function runA2PlatformTests() {
     assert(masked.indexOf('22222222-2222-4222-8222-222222222222') !== -1, 'messageId should remain visible.');
     assert(masked.indexOf('[REDACTED_DRIVE_ID:3456]') !== -1, 'Drive ID should keep suffix.');
     assert(masked.indexOf('[REDACTED_BASE64]') !== -1, 'Base64 should be masked.');
+    assert(
+      AppLogger.mask(null) === null,
+      'Null log values should remain null.'
+    );
   });
 
   test('debug log payload builder', function() {

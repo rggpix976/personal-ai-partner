@@ -511,6 +511,22 @@ function runA4ChatGeminiTests() {
 
   test('context builder appends current user message after prior messages only', function() {
     var originalSheetRepository = SheetRepository;
+    var originalConfigRepository = ConfigRepository;
+    ConfigRepository = {
+      getByKey: function(key) {
+        if (key === 'RECENT_MESSAGE_LIMIT') {
+          return {
+            value: 3
+          };
+        }
+        if (key === 'MEMORY_CONTEXT_LIMIT') {
+          return {
+            value: 0
+          };
+        }
+        return null;
+      }
+    };
     SheetRepository = {
       listMessagesBefore: function(messageId, limit) {
         assert(messageId === '33333333-3333-4333-8333-333333333333', 'Context should anchor on current user message.');
@@ -560,6 +576,7 @@ function runA4ChatGeminiTests() {
       assert(context.recentMessages[2].text === 'Current', 'Current user message should be last.');
     } finally {
       SheetRepository = originalSheetRepository;
+      ConfigRepository = originalConfigRepository;
     }
   });
 

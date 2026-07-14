@@ -317,7 +317,18 @@ def check_event_contract(results: Results) -> None:
             "sourceMessageIds": [UUID_1, UUID_2], "requestedAt": NOW,
         },
         "DIARY_GENERATE": {"diaryDate": "2026-07-05", "requestedAt": NOW},
-        "PROACTIVE_SEND": {"targetDate": "2026-07-05", "sequence": 1, "requestedAt": NOW},
+        "PROACTIVE_SEND": {
+            "targetDate": "2026-07-05",
+            "sequence": 1,
+            "requestedAt": NOW,
+            "decisionSlot": "495708",
+            "messageDedupeKey": "PROACTIVE_MESSAGE:2026-07-05:1",
+            "probability": 0.5,
+            "sample": 0.25,
+            "elapsedMinutes": 300,
+            "timeWeight": 1.0,
+            "reason": "deterministic_probability_hit",
+        },
         "WEEKLY_BACKUP": {"backupDate": "2026-07-05", "requestedAt": NOW},
     }
     for event_type, payload in samples.items():

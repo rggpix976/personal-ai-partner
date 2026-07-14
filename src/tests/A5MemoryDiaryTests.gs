@@ -661,6 +661,28 @@ function runA5MemoryDiaryTests() {
     var appendedEntry = null;
     var locks = [];
     withOverrides({
+      ConfigRepository: {
+        getByKey: function(key) {
+          var values = {
+            DIARY_MIN_CHARS: {
+              value: 100
+            },
+            DIARY_MAX_CHARS: {
+              value: 1000
+            },
+            PARTNER_WORLD_ENABLED: {
+              value: true
+            },
+            PARTNER_WORLD_DIARY_FREQUENCY: {
+              value: 1
+            },
+            PARTNER_WORLD_RECENT_DIARY_LIMIT: {
+              value: 0
+            }
+          };
+          return values[key] || null;
+        }
+      },
       LockManager: {
         withScriptLock: function(name, callback) {
           locks.push(name);

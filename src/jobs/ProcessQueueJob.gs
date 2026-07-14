@@ -61,23 +61,29 @@ function postDispatchSuccess_(event, result) {
 }
 
 function dispatchProactiveSend_(event, nowIso) {
-  var evaluation = ProactiveMessageService.evaluateLocalConditions(nowIso);
-  if (evaluation.reason === 'MAIL_QUOTA_EXHAUSTED') {
-    throw createAppError('MAIL_QUOTA_EXHAUSTED', 'Mail quota is exhausted for proactive delivery.');
+  var preparation = ProactiveMessageService.prepareDispatch(
+    event.payload,
+    nowIso
+  );
+
+  if (preparation.reason === 'MAIL_QUOTA_EXHAUSTED') {
+    throw createAppError(
+      'MAIL_QUOTA_EXHAUSTED',
+      'Mail quota is exhausted for proactive delivery.'
+    );
   }
-  if (!evaluation.eligible || !evaluation.payload) {
+
+  if (!preparation.eligible || !preparation.message) {
     return {
       sent: false,
       duplicate: false,
       skipped: true,
-      reason: event.payload && event.payload.targetDate &&
-        event.payload.targetDate < formatDateInTokyo(parseIsoToDate(nowIso))
-        ? 'skipped_quota_expired'
-        : evaluation.reason,
-      createdAt: nowIso
+      reason: preparation.reason,
+      createdAt: preparation.createdAt || nowIso
     };
   }
-  return ProactiveMessageService.send(evaluation.payload);
+
+  return ProactiveMessageService.send(preparation.message);
 }
 
 function handleQueueFailure_(event, error, correlationId) {

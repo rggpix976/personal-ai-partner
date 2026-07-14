@@ -6,7 +6,8 @@ function runAllSelfTests() {
     'runA5MemoryDiaryTests',
     'runA6QueueSchedulerTests',
     'runA7StaticSelfTest',
-    'runA7IntegrationSelfTest'
+    'runA7IntegrationSelfTest',
+    'runA8ProactiveConversationTests'
   ];
   var summary = {
     ok: true,
@@ -68,4 +69,34 @@ function runSelfTestSuiteByName_(name) {
       }]
     };
   }
+}
+
+function runAllSelfTestsAndLog() {
+  var summary = runAllSelfTests();
+  var report = {
+    ok: summary.ok,
+    totalPasses: summary.totalPasses,
+    totalFailures: summary.totalFailures,
+    checkedAt: summary.checkedAt,
+    suites: summary.suites.map(function(suite) {
+      return {
+        name: suite.name,
+        skipped: suite.skipped,
+        passCount: suite.passes.length,
+        failures: suite.failures
+      };
+    })
+  };
+
+  console.log('SELF_TEST_RESULT ' + JSON.stringify(report));
+
+  if (!summary.ok) {
+    throw new Error(
+      'Self-tests failed: ' +
+        summary.totalFailures +
+        ' failure(s). See SELF_TEST_RESULT in the execution log.'
+    );
+  }
+
+  return summary;
 }

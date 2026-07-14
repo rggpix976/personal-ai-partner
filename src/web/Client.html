@@ -41,7 +41,11 @@
     sending: false,
     selectedImage: null,
     activeRequestId: null,
-    pollTimer: null
+    pollTimer: null,
+    backgroundPollTimer: null,
+    backgroundPollInFlight: false,
+    backgroundPollToken: 0,
+    backgroundPollingEnabled: false
   };
 
   var elements = {};
@@ -86,10 +90,15 @@
     elements.loadOlderButton.addEventListener('click', onLoadOlder);
     elements.refreshButton.addEventListener('click', loadInitialState);
     elements.messageInput.addEventListener('input', autoResizeTextarea);
+    document.addEventListener(
+      'visibilitychange',
+      onVisibilityChange
+    );
   }
 
   function loadInitialState() {
     clearPoll();
+    resetBackgroundPolling();
     setBusyState(false);
     setStatus('loading', '更新中', '最新の会話を確認しています。');
 
@@ -98,6 +107,8 @@
         var system = response.system || {};
 
         state.system = normalizeSystemConfig(system);
+        state.backgroundPollingEnabled =
+          system.status !== 'stopped';
         state.messages = Array.isArray(response.messages) ? response.messages.slice() : [];
         state.pagination = response.pagination || {
           hasMore: false,
@@ -115,6 +126,7 @@
         }
 
         setComposerEnabled(true);
+        scheduleBackgroundPoll();
 
         if (system.status === 'degraded') {
           setStatus('succeeded', 'キューモード', joinWarnings(system.warnings, 'メッセージは送信できますが、返信生成は制限されています。'));
@@ -313,6 +325,123 @@
     }
   }
 
+  function resetBackgroundPolling() {
+    state.backgroundPollToken += 1;
+    state.backgroundPollingEnabled = false;
+    state.backgroundPollInFlight = false;
+    clearBackgroundPoll();
+  }
+
+  function clearBackgroundPoll() {
+    if (state.backgroundPollTimer) {
+      window.clearTimeout(state.backgroundPollTimer);
+      state.backgroundPollTimer = null;
+    }
+  }
+
+  function scheduleBackgroundPoll(delaySeconds) {
+    clearBackgroundPoll();
+
+    if (
+      !state.backgroundPollingEnabled ||
+      document.hidden
+    ) {
+      return;
+    }
+
+    var token = state.backgroundPollToken;
+    var configuredDelay = Number(
+      bootstrap.proactiveWebPollSeconds || 60
+    );
+    var delay = delaySeconds == null
+      ? configuredDelay
+      : Number(delaySeconds);
+
+    if (!isFinite(delay) || delay < 0) {
+      delay = configuredDelay;
+    }
+
+    state.backgroundPollTimer = window.setTimeout(
+      function() {
+        runBackgroundPoll(token);
+      },
+      delay * 1000
+    );
+  }
+
+  function runBackgroundPoll(token) {
+    if (
+      token !== state.backgroundPollToken ||
+      !state.backgroundPollingEnabled ||
+      document.hidden ||
+      state.backgroundPollInFlight
+    ) {
+      return;
+    }
+
+    state.backgroundPollInFlight = true;
+    var nextDelay = Number(
+      bootstrap.proactiveWebPollSeconds || 60
+    );
+
+    callServer('loadNewMessages', [
+      getLatestMessageId(),
+      bootstrap.pageSize || 20
+    ])
+      .then(function(response) {
+        if (token !== state.backgroundPollToken) {
+          return;
+        }
+
+        var messages = Array.isArray(response.messages)
+          ? response.messages
+          : [];
+        var changed = false;
+
+        messages.forEach(function(message) {
+          changed = upsertMessage(message) || changed;
+        });
+
+        if (changed) {
+          renderMessages('new');
+        }
+
+        if (response.hasMore) {
+          nextDelay = 1;
+        }
+      })
+      .catch(function() {
+        nextDelay = Number(
+          bootstrap.proactiveWebPollSeconds || 60
+        );
+      })
+      .finally(function() {
+        if (token !== state.backgroundPollToken) {
+          return;
+        }
+        state.backgroundPollInFlight = false;
+        scheduleBackgroundPoll(nextDelay);
+      });
+  }
+
+  function getLatestMessageId() {
+    if (!state.messages.length) {
+      return null;
+    }
+    return state.messages[state.messages.length - 1].messageId || null;
+  }
+
+  function onVisibilityChange() {
+    if (document.hidden) {
+      clearBackgroundPoll();
+      return;
+    }
+
+    if (state.backgroundPollingEnabled) {
+      scheduleBackgroundPoll(0);
+    }
+  }
+
   function onImageSelected(event) {
     var file = event.target.files && event.target.files[0];
 
@@ -387,6 +516,11 @@
   function renderMessages(scrollMode) {
     var previousHeight = elements.messages.scrollHeight;
     var previousTop = elements.messages.scrollTop;
+    var wasNearBottom =
+      previousHeight -
+        previousTop -
+        elements.messages.clientHeight <=
+      80;
 
     while (elements.messages.firstChild) {
       elements.messages.removeChild(elements.messages.firstChild);
@@ -414,7 +548,17 @@
     });
 
     if (scrollMode === 'preserve') {
-      elements.messages.scrollTop = elements.messages.scrollHeight - previousHeight + previousTop;
+      elements.messages.scrollTop =
+        elements.messages.scrollHeight -
+        previousHeight +
+        previousTop;
+      return;
+    }
+
+    if (scrollMode === 'new') {
+      elements.messages.scrollTop = wasNearBottom
+        ? elements.messages.scrollHeight
+        : previousTop;
       return;
     }
 
@@ -424,7 +568,12 @@
   function createMessageNode(message) {
     var row = document.createElement('article');
     row.className = 'message-row';
-    row.setAttribute('data-role', message.role || 'system');
+    row.setAttribute(
+      'data-role',
+      message.messageType === 'proactive'
+        ? 'assistant'
+        : (message.role || 'system')
+    );
 
     var bubble = document.createElement('div');
     bubble.className = 'bubble';
@@ -433,7 +582,7 @@
     meta.className = 'bubble-meta';
 
     var author = document.createElement('span');
-    author.textContent = formatRoleLabel(message.role);
+    author.textContent = formatRoleLabel(message.role, message.messageType);
 
     var timestamp = document.createElement('time');
     timestamp.dateTime = message.createdAt || '';
@@ -497,14 +646,17 @@
 
   function upsertMessage(message) {
     if (!message || !message.messageId) {
-      return;
+      return false;
     }
 
     var found = false;
+    var changed = false;
 
     state.messages = state.messages.map(function(existing) {
       if (existing.messageId === message.messageId) {
         found = true;
+        changed =
+          JSON.stringify(existing) !== JSON.stringify(message);
         return message;
       }
 
@@ -513,10 +665,19 @@
 
     if (!found) {
       state.messages.push(message);
+      changed = true;
+    }
+
+    if (changed) {
       state.messages.sort(function(left, right) {
-        return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+        return (
+          new Date(left.createdAt).getTime() -
+          new Date(right.createdAt).getTime()
+        );
       });
     }
+
+    return changed;
   }
 
   function callServer(functionName, args) {
@@ -611,12 +772,15 @@
     };
   }
 
-  function formatRoleLabel(role) {
+  function formatRoleLabel(role, messageType) {
     if (role === 'user') {
       return state.system.userName;
     }
 
-    if (role === 'assistant') {
+    if (
+      role === 'assistant' ||
+      messageType === 'proactive'
+    ) {
       return state.system.partnerName;
     }
 

@@ -19,7 +19,7 @@ var AppLogger = (function() {
     return text.split(secretValue).join(replacement);
   }
 
-  function mask(value) {
+  function maskWithoutEmail_(value) {
     if (value == null) {
       return value;
     }
@@ -50,6 +50,17 @@ var AppLogger = (function() {
     text = replaceIfPresent(text, ownerEmail, '[REDACTED_OWNER_EMAIL]');
     text = replaceIfPresent(text, apiKey, '[REDACTED_API_KEY]');
     return text;
+  }
+
+  function mask(value) {
+    var masked = maskWithoutEmail_(value);
+    if (masked == null) {
+      return masked;
+    }
+    return String(masked).replace(
+      /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,
+      '[REDACTED_EMAIL]'
+    );
   }
 
   function buildPayload(level, operation, message, details, correlationId, eventId) {

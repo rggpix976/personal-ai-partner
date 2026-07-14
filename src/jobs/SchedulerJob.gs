@@ -28,9 +28,9 @@ function enqueueProactiveIfEligible_(now) {
     dedupeKey: evaluation.dedupeKey,
     payload: evaluation.payload,
     status: 'PENDING',
-    nextAttemptAt: evaluation.payload.evaluatedAt,
-    createdAt: evaluation.payload.evaluatedAt,
-    updatedAt: evaluation.payload.evaluatedAt
+    nextAttemptAt: evaluation.payload.requestedAt,
+    createdAt: evaluation.payload.requestedAt,
+    updatedAt: evaluation.payload.requestedAt
   });
   return {
     eligible: true,
