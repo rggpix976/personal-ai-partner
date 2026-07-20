@@ -116,13 +116,43 @@ function runA4ChatGeminiTests() {
     assert(Array.isArray(result.warnings), 'Warnings must be an array.');
   });
 
-  test('image metadata validation accepts supported temp file flow', function() {
-    var image = {
-      name: 'photo.jpg',
-      mimeType: 'image/jpeg',
-      tempFileId: 'temp-file-id'
-    };
-    assert(ImageService.validateImageMetadata(image) === true, 'Temp-file-backed image should validate.');
+  test('image metadata validation accepts every supported base64 image type', function() {
+    var supportedImages = [
+      { name: 'photo.jpg', mimeType: 'image/jpeg' },
+      { name: 'photo.png', mimeType: 'image/png' },
+      { name: 'photo.webp', mimeType: 'image/webp' }
+    ];
+
+    assert(
+      APP_CONSTANTS.MIME_TYPES.join(',') === supportedImages.map(function(image) {
+        return image.mimeType;
+      }).join(','),
+      'The image validation test matrix must match the application MIME type contract.'
+    );
+
+    supportedImages.forEach(function(image) {
+      assert(
+        ImageService.validateImageMetadata({
+          name: image.name,
+          mimeType: image.mimeType,
+          base64: 'Zm9v'
+        }) === true,
+        image.mimeType + ' base64 input should validate.'
+      );
+    });
+  });
+
+  test('image metadata validation accepts every supported temp file type', function() {
+    APP_CONSTANTS.MIME_TYPES.forEach(function(mimeType) {
+      assert(
+        ImageService.validateImageMetadata({
+          name: 'temporary-image',
+          mimeType: mimeType,
+          tempFileId: 'temp-file-id'
+        }) === true,
+        mimeType + ' temp-file-backed input should validate.'
+      );
+    });
   });
 
   expectThrows('image metadata validation rejects unsupported MIME type', function() {

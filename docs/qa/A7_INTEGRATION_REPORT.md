@@ -29,6 +29,38 @@ A7 live checks:
 - Duplicate `requestId` does not duplicate messages.
 - Temporary Gemini failures create `CHAT_REPLY` events.
 
+### Image Chat
+
+```text
+Browser file input
+  -> Client MIME and byte-size validation
+  -> sendChat(request.image)
+  -> WebController validation
+  -> ImageService
+  -> temporary Drive file
+  -> Gemini inline image input
+  -> conversation_logs image metadata and bounded summary
+  -> temporary file cleanup
+```
+
+Status: implemented and live-verified in the production Web App on 2026-07-21.
+
+Privacy-safe live acceptance evidence:
+
+- JPEG, PNG, and WebP each displayed an attachment preview, submitted
+  successfully, and produced a completed assistant response.
+- An unsupported text file was rejected before submission and did not add a
+  conversation message.
+- The three corresponding `sendChat` executions completed, reply polling
+  completed, and no failed execution was visible in the reviewed history.
+- The latest visible queue and scheduler executions were completed.
+- Synthetic local test files were deleted after validation. No message
+  content, raw image data, resource ID, URL, or account address was retained
+  in this report.
+
+The separate maintenance acceptance case remains responsible for proving the
+scheduled expiry cleanup of abandoned temporary Drive images.
+
 ### Queued Chat Retry
 
 ```text
