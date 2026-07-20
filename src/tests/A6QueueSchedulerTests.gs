@@ -383,6 +383,9 @@ function runA6QueueSchedulerTests() {
             }
           };
         },
+        getEventByDedupeKey: function() {
+          return null;
+        },
         insertEvent: function(event) {
           inserted = event;
         }
@@ -395,6 +398,97 @@ function runA6QueueSchedulerTests() {
       );
       assert(inserted.eventId !== 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Requeue must create a new event id.');
       assert(event.dedupeKey === 'CHAT_REPLY_MANUAL:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222', 'Manual retry should use the manual dedupe format.');
+    });
+  });
+
+  test('requeueDeadAsNewEvent is idempotent for the same manual request id', function() {
+    var existingRetry = {
+      eventId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      eventType: 'CHAT_REPLY',
+      status: 'DONE',
+      dedupeKey: 'CHAT_REPLY_MANUAL:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222'
+    };
+    withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      SheetRepository: {
+        getEventById: function() {
+          return {
+            eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            eventType: 'CHAT_REPLY',
+            status: 'DEAD',
+            payload: {
+              requestId: '11111111-1111-4111-8111-111111111111'
+            }
+          };
+        },
+        getEventByDedupeKey: function() {
+          return existingRetry;
+        },
+        insertEvent: function() {
+          throw new Error('An idempotent retry must not insert another event.');
+        }
+      }
+    }, function() {
+      var result = QueueService.requeueDeadAsNewEvent(
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        '22222222-2222-4222-8222-222222222222',
+        '2026-07-07T09:00:00+09:00'
+      );
+      assert(result.eventId === existingRetry.eventId, 'The existing manual retry should be returned.');
+    });
+  });
+
+  test('assessDeadEventRecovery blocks replay of side-effecting events', function() {
+    withOverrides({
+      SheetRepository: {
+        getEventById: function() {
+          return {
+            eventType: 'PROACTIVE_SEND',
+            status: 'DEAD'
+          };
+        }
+      }
+    }, function() {
+      var result = QueueService.assessDeadEventRecovery(
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+      );
+      assert(result.action === 'DO_NOT_REPLAY', 'Proactive sends must not be replayed from DEAD.');
+      assert(!Object.prototype.hasOwnProperty.call(result, 'eventId'), 'Assessment must not expose an event id.');
+      assert(!Object.prototype.hasOwnProperty.call(result, 'payload'), 'Assessment must not expose a payload.');
+    });
+  });
+
+  test('processQueueJob safely skips overlapping workers when the queue lock is busy', function() {
+    var logged = null;
+    withOverrides({
+      QueueService: {
+        recoverStale: function() {
+          throw createAppError('QUEUE_LOCK_BUSY', 'busy');
+        },
+        claimBatch: function() {
+          throw new Error('claimBatch should not run after a lock conflict.');
+        }
+      },
+      AppLogger: {
+        writeDebugLog: function(level, operation, message, details) {
+          logged = {
+            level: level,
+            operation: operation,
+            message: message,
+            details: details
+          };
+        }
+      }
+    }, function() {
+      var result = processQueueJob();
+      assert(result.skipped === true, 'The overlapping worker should be skipped.');
+      assert(result.reason === 'QUEUE_LOCK_BUSY', 'The skip reason should be machine-readable.');
+      assert(result.claimedCount === 0, 'A skipped worker must not claim events.');
+      assert(logged && logged.level === 'WARN', 'The safe skip should be recorded as a warning.');
     });
   });
 
@@ -491,6 +585,9 @@ function runA6QueueSchedulerTests() {
         }
       },
       RetryPolicy: RetryPolicy,
+      SheetRepository: {
+        incrementUsageDaily: function() {}
+      },
       AppLogger: {
         writeDebugLog: function() {}
       }
@@ -770,6 +867,26 @@ function runA6QueueSchedulerTests() {
             enqueued: true
           };
         }
+      },
+      OperationalHealthService: {
+        run: function() {
+          return {
+            status: 'OK'
+          };
+        }
+      },
+      ScriptApp: {
+        getProjectTriggers: function() {
+          return [{
+            getHandlerFunction: function() {
+              return 'processQueueJob';
+            }
+          }, {
+            getHandlerFunction: function() {
+              return 'schedulerJob';
+            }
+          }];
+        }
       }
     }, function() {
       schedulerJob();
@@ -787,6 +904,184 @@ function runA6QueueSchedulerTests() {
       assert(queued.some(function(item) { return item.indexOf('DIARY_GENERATE:') === 0; }), 'Diary event should be queued.');
       assert(queued.some(function(item) { return item.indexOf('MEMORY_EXTRACT:') === 0; }), 'Memory extraction should be queued.');
       assert(queued.some(function(item) { return item.indexOf('WEEKLY_BACKUP:') === 0; }) === false, 'Weekly backup should respect the current window.');
+    });
+  });
+
+  test('OperationalHealthService reports only aggregate queue and trigger health', function() {
+    withOverrides({
+      ConfigRepository: {
+        getByKey: function(key) {
+          var values = {
+            OPS_QUEUE_DELAY_GRACE_MINUTES: { value: 20 },
+            QUEUE_STALE_MINUTES: { value: 15 },
+            OPS_DEAD_LOOKBACK_HOURS: { value: 168 }
+          };
+          return values[key] || null;
+        }
+      },
+      SheetRepository: {
+        listEvents: function() {
+          return [{
+            eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            eventType: 'CHAT_REPLY',
+            status: 'PROCESSING',
+            lockedAt: '2026-07-07T08:30:00+09:00',
+            createdAt: '2026-07-07T08:30:00+09:00',
+            payload: { privateText: 'must-not-appear' }
+          }, {
+            eventId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            eventType: 'DIARY_GENERATE',
+            status: 'DEAD',
+            completedAt: '2026-07-07T08:45:00+09:00',
+            createdAt: '2026-07-07T08:00:00+09:00',
+            lastError: {
+              code: 'GEMINI_BAD_RESPONSE',
+              message: 'private failure detail'
+            }
+          }, {
+            eventId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+            eventType: 'MEMORY_EXTRACT',
+            status: 'PENDING',
+            createdAt: '2026-07-07T08:00:00+09:00'
+          }];
+        }
+      }
+    }, function() {
+      var report = OperationalHealthService.inspect(
+        new Date('2026-07-07T09:00:00+09:00'),
+        {
+          required: {
+            processQueueJob: { count: 1 },
+            schedulerJob: { count: 1 }
+          },
+          missingCount: 0,
+          duplicateCount: 0,
+          unexpectedCount: 0
+        }
+      );
+      var serialized = JSON.stringify(report);
+      assert(report.status === 'CRITICAL', 'A stale PROCESSING event should be critical.');
+      assert(report.queue.recentDead.total === 1, 'Recent DEAD events should be counted.');
+      assert(report.queue.overdue.pending === 1, 'Overdue PENDING events should be counted.');
+      assert(serialized.indexOf('must-not-appear') === -1, 'Payload content must not appear in health output.');
+      assert(serialized.indexOf('private failure detail') === -1, 'Error messages must not appear in health output.');
+      assert(serialized.indexOf('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa') === -1, 'Event ids must not appear in health output.');
+    });
+  });
+
+  test('OperationalHealthService rate-limits sanitized reports and keeps email opt-in', function() {
+    var propertyValue = null;
+    var logCount = 0;
+    var emailCount = 0;
+    withOverrides({
+      ConfigRepository: {
+        getByKey: function(key) {
+          var values = {
+            OPS_QUEUE_DELAY_GRACE_MINUTES: { value: 20 },
+            QUEUE_STALE_MINUTES: { value: 15 },
+            OPS_DEAD_LOOKBACK_HOURS: { value: 168 },
+            OPS_ALERT_COOLDOWN_MINUTES: { value: 720 },
+            OPS_ALERT_EMAIL_ENABLED: { value: false }
+          };
+          return values[key] || null;
+        }
+      },
+      SheetRepository: {
+        listEvents: function() {
+          return [];
+        }
+      },
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      PropertiesService: {
+        getScriptProperties: function() {
+          return {
+            getProperty: function(key) {
+              return key === APP_CONSTANTS.PROPERTY_KEYS.OPS_ALERT_STATE
+                ? propertyValue
+                : null;
+            },
+            setProperty: function(key, value) {
+              if (key === APP_CONSTANTS.PROPERTY_KEYS.OPS_ALERT_STATE) {
+                propertyValue = value;
+              }
+            }
+          };
+        }
+      },
+      AppLogger: {
+        writeDebugLog: function() {
+          logCount += 1;
+        }
+      },
+      GmailNotifier: {
+        send: function() {
+          emailCount += 1;
+        }
+      }
+    }, function() {
+      var triggerHealth = {
+        required: {
+          processQueueJob: { count: 0 },
+          schedulerJob: { count: 1 }
+        },
+        unexpectedCount: 0
+      };
+      var first = OperationalHealthService.run(
+        new Date('2026-07-07T09:00:00+09:00'),
+        triggerHealth
+      );
+      var second = OperationalHealthService.run(
+        new Date('2026-07-07T09:15:00+09:00'),
+        triggerHealth
+      );
+      assert(first.status === 'CRITICAL', 'A missing trigger should be critical.');
+      assert(first.notification.logged === true, 'The first incident should be logged.');
+      assert(second.notification.logged === false, 'The repeated incident should respect cooldown.');
+      assert(logCount === 1, 'Only one incident log should be written during cooldown.');
+      assert(emailCount === 0, 'Operational email must remain disabled by default.');
+    });
+  });
+
+  test('OperationalHealthService defers reporting safely when the script lock is busy', function() {
+    var warnings = 0;
+    withOverrides({
+      ConfigRepository: {
+        getByKey: function() {
+          return null;
+        }
+      },
+      SheetRepository: {
+        listEvents: function() {
+          return [];
+        }
+      },
+      LockManager: {
+        withScriptLock: function() {
+          throw createAppError('QUEUE_LOCK_BUSY', 'busy');
+        }
+      },
+      AppLogger: {
+        warn: function() {
+          warnings += 1;
+        }
+      }
+    }, function() {
+      var result = OperationalHealthService.run(
+        new Date('2026-07-07T09:00:00+09:00'),
+        {
+          required: {
+            processQueueJob: { count: 1 },
+            schedulerJob: { count: 1 }
+          }
+        }
+      );
+      assert(result.status === 'OK', 'The read-only health result should still be returned.');
+      assert(result.notification.reason === 'QUEUE_LOCK_BUSY', 'Reporting should be deferred explicitly.');
+      assert(warnings === 1, 'The deferred report should write one console warning.');
     });
   });
 

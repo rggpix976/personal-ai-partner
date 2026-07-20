@@ -56,6 +56,7 @@ function runA7IntegrationSelfTest() {
     assert(typeof DiaryService.enqueue === 'function', 'Diary enqueue target is missing.');
     assert(typeof ProactiveMessageService.evaluateLocalConditions === 'function', 'Proactive evaluation target is missing.');
     assert(typeof QueueService.enqueue === 'function', 'Queue enqueue target is missing.');
+    assert(typeof OperationalHealthService.run === 'function', 'Operational health target is missing.');
   });
 
   test('A7 local self-tests are non-live checks', function() {

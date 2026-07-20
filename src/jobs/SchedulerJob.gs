@@ -6,7 +6,8 @@ function schedulerJob() {
     diary: null,
     memory: null,
     weeklyBackup: null,
-    maintenance: null
+    maintenance: null,
+    health: null
   };
 
   summary.maintenance = MaintenanceService.runPeriodicMaintenance(now);
@@ -14,8 +15,48 @@ function schedulerJob() {
   summary.memory = enqueueMemoryExtractionIfDue_(nowIso);
   summary.diary = enqueueDiaryIfDue_(now);
   summary.weeklyBackup = enqueueWeeklyBackupIfDue_(now);
+  summary.health = OperationalHealthService.run(now, getOperationalTriggerHealth_());
 
   return summary;
+}
+
+function runOperationalHealthCheck() {
+  return OperationalHealthService.run(new Date(), getOperationalTriggerHealth_());
+}
+
+function getOperationalTriggerHealth_() {
+  var requiredHandlers = ['processQueueJob', 'schedulerJob'];
+  var counts = {
+    processQueueJob: 0,
+    schedulerJob: 0
+  };
+  var unexpectedCount = 0;
+  ScriptApp.getProjectTriggers().forEach(function(trigger) {
+    var handler = trigger.getHandlerFunction();
+    if (Object.prototype.hasOwnProperty.call(counts, handler)) {
+      counts[handler] += 1;
+    } else {
+      unexpectedCount += 1;
+    }
+  });
+  var missingCount = 0;
+  var duplicateCount = 0;
+  requiredHandlers.forEach(function(handler) {
+    if (counts[handler] === 0) {
+      missingCount += 1;
+    } else if (counts[handler] > 1) {
+      duplicateCount += counts[handler] - 1;
+    }
+  });
+  return {
+    required: {
+      processQueueJob: { count: counts.processQueueJob },
+      schedulerJob: { count: counts.schedulerJob }
+    },
+    missingCount: missingCount,
+    duplicateCount: duplicateCount,
+    unexpectedCount: unexpectedCount
+  };
 }
 
 function enqueueProactiveIfEligible_(now) {

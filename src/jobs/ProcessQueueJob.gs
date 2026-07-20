@@ -2,15 +2,43 @@ function processQueueJob() {
   var workerId = 'processQueueJob:' + generateUuidV4();
   var now = new Date();
   var correlationId = generateUuidV4();
-  QueueService.recoverStale(now);
-  var claimed = QueueService.claimBatch(getQueueBatchSize_(), workerId, now);
+  var recovered = null;
+  var claimed = null;
+  try {
+    recovered = QueueService.recoverStale(now) || [];
+    claimed = QueueService.claimBatch(getQueueBatchSize_(), workerId, now) || [];
+  } catch (error) {
+    var normalized = normalizeError(error);
+    if (normalized.code !== 'QUEUE_LOCK_BUSY') {
+      throw normalized;
+    }
+    AppLogger.writeDebugLog('WARN', 'processQueueJob', 'Queue worker skipped because another worker owns the script lock.', {
+      code: normalized.code
+    }, correlationId);
+    return {
+      workerId: workerId,
+      recoveredCount: 0,
+      claimedCount: 0,
+      skipped: true,
+      reason: 'QUEUE_LOCK_BUSY'
+    };
+  }
   claimed.forEach(function(event) {
     processSingleQueueEvent_(event, correlationId);
   });
   return {
     workerId: workerId,
+    recoveredCount: recovered.length,
     claimedCount: claimed.length
   };
+}
+
+function assessDeadQueueEvent(eventId) {
+  return QueueService.assessDeadEventRecovery(eventId);
+}
+
+function requeueDeadChatReply(eventId, manualRequestId) {
+  return QueueService.requeueDeadAsNewEvent(eventId, manualRequestId, new Date());
 }
 
 function processSingleQueueEvent_(event, correlationId) {

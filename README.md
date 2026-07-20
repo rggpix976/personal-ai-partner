@@ -154,6 +154,9 @@ deleteProjectTriggers()
 listProjectTriggers()
 processQueueJob()
 schedulerJob()
+runOperationalHealthCheck()
+assessDeadQueueEvent(eventId)
+requeueDeadChatReply(eventId, manualRequestId)
 ```
 
 Self-test functions:
@@ -193,12 +196,35 @@ Install development dependencies in an isolated Python environment, then run:
 ```text
 python tools/validate_contracts.py
 python tools/a7_static_audit.py
+node tools/run_apps_script_unit_tests.js
 git diff --check
 ```
 
 Also run Apps Script and Client JavaScript syntax checks and the Apps Script
 self-test suites. Local checks do not replace live Apps Script, Gemini,
 MailApp, Drive, Docs, Web App, and time-driven trigger validation.
+
+## Operational health and recovery
+
+`schedulerJob()` records a sanitized queue and trigger health report.
+`runOperationalHealthCheck()` provides the same read-only report on demand.
+Reports contain aggregate counts and controlled error codes only; they exclude
+message content, event payloads, IDs, URLs, and email addresses.
+
+Operational alert email is disabled by default. Enable it only as a separate
+production configuration change:
+
+```text
+OPS_ALERT_EMAIL_ENABLED=true
+```
+
+Repeated reports are rate-limited by `OPS_ALERT_COOLDOWN_MINUTES`. A `DEAD`
+row remains terminal. Use `assessDeadQueueEvent(eventId)` before recovery.
+Only `CHAT_REPLY` supports `requeueDeadChatReply(...)`; the function creates a
+new event and is idempotent for the same `manualRequestId`.
+
+See [Release operations](docs/operations/RELEASE_OPERATIONS.md) for the
+deployment, recovery, backup/restore, and rollback checklist.
 
 ## Proactive operation and rollback
 
