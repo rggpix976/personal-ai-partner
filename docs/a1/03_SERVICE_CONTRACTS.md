@@ -122,11 +122,23 @@ QueueService.markRetry(eventId, error, nextAttemptAt)
 QueueService.markDead(eventId, error)
 QueueService.recoverStale(now)
 QueueService.requeueDeadAsNewEvent(eventId, manualRequestId, now)
+QueueService.assessDeadEventRecovery(eventId)
 ```
 
-`requeueDeadAsNewEvent` は既存 `DEAD` 行を変更しない。新しい `event_id` と新しい手動再試行用 `dedupe_key` を生成して新規イベントを登録する。
+`requeueDeadAsNewEvent` は既存 `DEAD` 行を変更しない。新しい `event_id` と新しい手動再試行用 `dedupe_key` を生成して新規イベントを登録する。同じ `manualRequestId` の再呼び出しでは既存の手動再試行イベントを返し、二重起票しない。
 
-## 3.8 Repository
+`assessDeadEventRecovery` は本文、payload、各種IDを返さず、イベント種別、状態、安全な復旧アクション、理由コードだけを返す。自発送信イベントは再送せず、新しい適格性評価を待つ。
+
+## 3.8 `OperationalHealthService`
+
+```javascript
+OperationalHealthService.inspect(now, triggerHealth)
+OperationalHealthService.run(now, triggerHealth)
+```
+
+`inspect` はキューと必須トリガーの状態を集約し、`OK`、`DEGRADED`、`CRITICAL` のいずれかを返す。出力と通知には集計件数と管理されたエラーコードだけを含め、本文、payload、各種ID、URL、メールアドレスを含めない。
+
+## 3.9 Repository
 
 各Repositoryは、呼出し側へシート行番号を公開しない。戻り値はオブジェクトとする。
 
@@ -140,6 +152,7 @@ SheetRepository.updateUserState(patch)
 SheetRepository.insertEvent(event)
 SheetRepository.listClaimableEvents(limit, now)
 SheetRepository.updateEvent(eventId, patch)
+SheetRepository.listEvents()
 SheetRepository.listActiveMemories()
 SheetRepository.upsertMemory(memory)
 ```

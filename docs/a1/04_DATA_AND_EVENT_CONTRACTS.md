@@ -95,7 +95,7 @@ Web clients fetch newly appended conversation messages with
 pause polling while the page is hidden, and resume immediately when it
 becomes visible.
 
-`DEAD` の手動再試行は `CHAT_REPLY_MANUAL` を使い、既存 `dedupe_key` を再利用しない。
+`DEAD` の手動再試行は `CHAT_REPLY_MANUAL` を使い、既存 `dedupe_key` を再利用しない。同じ `manualRequestId` は同じ手動再試行イベントを返し、新しい行を追加しない。
 
 ## 4.6 イベント状態遷移
 
@@ -114,6 +114,7 @@ PROCESSING(stale) -> RETRY_WAIT
 - `DONE` は終端状態であり、他状態へ戻さない。
 - `DEAD` は終端状態であり、`PROCESSING` へ戻さない。
 - `DEAD` の手動再試行は既存行を更新せず、新規イベントとして再起票する。
+- 汎用復旧操作は `DEAD` を自動再起票しない。`PROACTIVE_SEND` は再送せず、新しい適格性評価を待つ。
 - stale回収は `attemptCount` を成功扱いにせず、ロック情報をクリアして `RETRY_WAIT` にする。
 
 ## 4.7 再試行

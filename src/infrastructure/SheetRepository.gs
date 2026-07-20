@@ -573,6 +573,14 @@ var SheetRepository = (function() {
       .map(toEventDto);
   }
 
+  function listEvents() {
+    return getRows(APP_CONSTANTS.SHEETS.EVENT_QUEUE)
+      .sort(function(a, b) {
+        return compareIsoDatesDescending(a.created_at, b.created_at);
+      })
+      .map(toEventDto);
+  }
+
   function listStaleProcessingEvents(now, staleMinutes) {
     var referenceTime = now instanceof Date ? now.getTime() : getIsoTimeMillis(now);
     var staleBefore = referenceTime - Math.max(Number(staleMinutes || 0), 0) * 60 * 1000;
@@ -842,6 +850,7 @@ var SheetRepository = (function() {
     getEventById: getEventById,
     getEventByDedupeKey: getEventByDedupeKey,
     getActiveEventByDedupeKey: getActiveEventByDedupeKey,
+    listEvents: listEvents,
     listEventsByType: listEventsByType,
     listStaleProcessingEvents: listStaleProcessingEvents,
     appendDebugLog: appendDebugLog,

@@ -13,7 +13,8 @@ var APP_CONSTANTS = Object.freeze({
     TEMP_FOLDER_ID: 'TEMP_FOLDER_ID',
     BACKUP_FOLDER_ID: 'BACKUP_FOLDER_ID',
     SCHEMA_VERSION: 'SCHEMA_VERSION',
-    WEB_APP_URL: 'WEB_APP_URL'
+    WEB_APP_URL: 'WEB_APP_URL',
+    OPS_ALERT_STATE: 'OPS_ALERT_STATE'
   }),
   APP_ENVS: Object.freeze(['prod', 'test']),
   MESSAGE_ROLES: Object.freeze(['user', 'assistant', 'system']),
@@ -93,6 +94,10 @@ var APP_CONSTANTS = Object.freeze({
     { key: 'TEMP_IMAGE_TTL_HOURS', value: '24', type: 'int', description: 'Temporary image TTL' },
     { key: 'QUEUE_BATCH_SIZE', value: '3', type: 'int', description: 'Queue batch size' },
     { key: 'QUEUE_STALE_MINUTES', value: '15', type: 'int', description: 'Queue stale timeout minutes' },
+    { key: 'OPS_QUEUE_DELAY_GRACE_MINUTES', value: '20', type: 'int', description: 'Queue delay grace period before operational warning' },
+    { key: 'OPS_DEAD_LOOKBACK_HOURS', value: '168', type: 'int', description: 'Recent DEAD event lookback window for operational health' },
+    { key: 'OPS_ALERT_EMAIL_ENABLED', value: 'false', type: 'bool', description: 'Send sanitized operational health alerts to OWNER_EMAIL' },
+    { key: 'OPS_ALERT_COOLDOWN_MINUTES', value: '720', type: 'int', description: 'Minimum interval between repeated operational health alerts' },
     { key: 'DIARY_DUE_TIME', value: '23:30', type: 'time', description: 'Diary due time' },
     { key: 'DIARY_MIN_CHARS', value: '300', type: 'int', description: 'Minimum diary length' },
     { key: 'DIARY_MAX_CHARS', value: '800', type: 'int', description: 'Maximum diary length' },

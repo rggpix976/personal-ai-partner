@@ -116,9 +116,14 @@ var QueueService = (function() {
       var requestId = event.payload && event.payload.requestId;
       ensure(Validators.isUuidV4(requestId), 'VALIDATION_REQUEST_INVALID', 'Original requestId is missing.');
       var nowIso = normalizeNow_(now);
+      var manualDedupeKey = 'CHAT_REPLY_MANUAL:' + requestId + ':' + manualRequestId;
+      var existingManualRetry = SheetRepository.getEventByDedupeKey(manualDedupeKey);
+      if (existingManualRetry) {
+        return existingManualRetry;
+      }
       var nextEvent = normalizeEventForInsert_({
         eventType: 'CHAT_REPLY',
-        dedupeKey: 'CHAT_REPLY_MANUAL:' + requestId + ':' + manualRequestId,
+        dedupeKey: manualDedupeKey,
         payload: mergePayload_(event.payload, {
           requestId: requestId,
           manualRequestId: manualRequestId,
@@ -134,6 +139,52 @@ var QueueService = (function() {
       SheetRepository.insertEvent(nextEvent);
       return nextEvent;
     });
+  }
+
+  function assessDeadEventRecovery(eventId) {
+    var event = SheetRepository.getEventById(eventId);
+    ensure(event, 'CONFIG_MISSING', 'Event was not found.');
+    if (event.status !== 'DEAD') {
+      return {
+        eventType: event.eventType,
+        status: event.status,
+        action: 'NO_ACTION',
+        reason: 'EVENT_IS_NOT_DEAD'
+      };
+    }
+
+    var assessments = {
+      CHAT_REPLY: {
+        action: 'REQUEUE_AS_NEW_EVENT',
+        reason: 'USE_UNIQUE_MANUAL_REQUEST_ID'
+      },
+      MEMORY_EXTRACT: {
+        action: 'MANUAL_REVIEW_REQUIRED',
+        reason: 'VERIFY_SOURCE_RANGE_BEFORE_RETRY'
+      },
+      DIARY_GENERATE: {
+        action: 'MANUAL_REVIEW_REQUIRED',
+        reason: 'USE_DIARY_REPAIR_WORKFLOW'
+      },
+      PROACTIVE_SEND: {
+        action: 'DO_NOT_REPLAY',
+        reason: 'WAIT_FOR_FRESH_ELIGIBILITY_EVALUATION'
+      },
+      WEEKLY_BACKUP: {
+        action: 'MANUAL_REVIEW_REQUIRED',
+        reason: 'VERIFY_EXISTING_BACKUP_BEFORE_RETRY'
+      }
+    };
+    var assessment = assessments[event.eventType] || {
+      action: 'MANUAL_REVIEW_REQUIRED',
+      reason: 'UNRECOGNIZED_EVENT_TYPE'
+    };
+    return {
+      eventType: event.eventType,
+      status: event.status,
+      action: assessment.action,
+      reason: assessment.reason
+    };
   }
 
   function normalizeEventForInsert_(event) {
@@ -433,6 +484,7 @@ var QueueService = (function() {
     markDead: markDead,
     recoverStale: recoverStale,
     requeueDeadAsNewEvent: requeueDeadAsNewEvent,
+    assessDeadEventRecovery: assessDeadEventRecovery,
     __test: {
       buildDedupeKey: buildDedupeKey_,
       normalizePayload: normalizePayload_

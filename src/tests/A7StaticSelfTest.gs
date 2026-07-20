@@ -42,6 +42,9 @@ function runA7StaticSelfTest() {
     assert(typeof installTriggers === 'function', 'installTriggers is missing.');
     assert(typeof deleteProjectTriggers === 'function', 'deleteProjectTriggers is missing.');
     assert(typeof listProjectTriggers === 'function', 'listProjectTriggers is missing.');
+    assert(typeof runOperationalHealthCheck === 'function', 'runOperationalHealthCheck is missing.');
+    assert(typeof assessDeadQueueEvent === 'function', 'assessDeadQueueEvent is missing.');
+    assert(typeof requeueDeadChatReply === 'function', 'requeueDeadChatReply is missing.');
   });
 
   test('setup validation globals are present', function() {
@@ -70,6 +73,9 @@ function runA7StaticSelfTest() {
     assert(hasFunction('QueueService', 'markDead'), 'QueueService.markDead is missing.');
     assert(hasFunction('QueueService', 'recoverStale'), 'QueueService.recoverStale is missing.');
     assert(hasFunction('QueueService', 'requeueDeadAsNewEvent'), 'QueueService.requeueDeadAsNewEvent is missing.');
+    assert(hasFunction('QueueService', 'assessDeadEventRecovery'), 'QueueService.assessDeadEventRecovery is missing.');
+    assert(hasFunction('OperationalHealthService', 'inspect'), 'OperationalHealthService.inspect is missing.');
+    assert(hasFunction('OperationalHealthService', 'run'), 'OperationalHealthService.run is missing.');
     assert(hasFunction('MemoryService', 'extract'), 'MemoryService.extract is missing.');
     assert(hasFunction('MemoryService', 'findRelevant'), 'MemoryService.findRelevant is missing.');
     assert(hasFunction('DiaryService', 'generate'), 'DiaryService.generate is missing.');
