@@ -115,7 +115,8 @@ var DiaryService = (function() {
     var diary = normalizeDiaryEntry_(
       generation.data,
       includePartnerWorld,
-      diaryConfig
+      diaryConfig,
+      warnings
     );
     return LockManager.withScriptLock('diary-generate-' + diaryDate, function() {
       var currentState = getDiaryState_(diaryDate);
@@ -856,8 +857,9 @@ var DiaryService = (function() {
     return (hash >>> 0) / 4294967296;
   }
 
-  function normalizeDiaryEntry_(data, includePartnerWorld, configOverride) {
+  function normalizeDiaryEntry_(data, includePartnerWorld, configOverride, warnings) {
     var config = configOverride || loadDiaryConfig_();
+    var normalizedWarnings = warnings || [];
     var entry = data && data.entry ? data.entry : data;
     ensure(entry && typeof entry === 'object', 'GEMINI_BAD_RESPONSE', 'Diary generation did not return an object.');
     ensure(typeof entry.title === 'string' && entry.title.trim() !== '', 'GEMINI_BAD_RESPONSE', 'Diary title is required.');
@@ -868,12 +870,11 @@ var DiaryService = (function() {
     ensure(Array.isArray(entry.unresolvedFollowUps), 'GEMINI_BAD_RESPONSE', 'unresolvedFollowUps must be an array.');
 
     var narrative = String(entry.narrative).trim();
-    ensure(
-      narrative.length >= config.minChars,
-      'GEMINI_BAD_RESPONSE',
-      'narrative length ' + narrative.length +
-        ' is below the configured minimum of ' + config.minChars + ' characters.'
-    );
+    if (narrative.length < config.minChars) {
+      normalizedWarnings.push(
+        'Diary narrative was shorter than the configured target and was accepted as non-empty content.'
+      );
+    }
     ensure(
       narrative.length <= config.maxChars,
       'GEMINI_BAD_RESPONSE',

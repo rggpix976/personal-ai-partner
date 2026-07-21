@@ -50,6 +50,7 @@ function runA7StaticSelfTest() {
     assert(typeof assessCompletedDiaryGeneration === 'function', 'assessCompletedDiaryGeneration is missing.');
     assert(typeof reconcileCompletedDiaryGeneration === 'function', 'reconcileCompletedDiaryGeneration is missing.');
     assert(typeof repairDiaryGenerationBacklog === 'function', 'repairDiaryGenerationBacklog is missing.');
+    assert(typeof resumeDiaryNarrativeLengthRetries === 'function', 'resumeDiaryNarrativeLengthRetries is missing.');
   });
 
   test('setup validation globals are present', function() {
@@ -77,6 +78,7 @@ function runA7StaticSelfTest() {
     assert(hasFunction('QueueService', 'markRetry'), 'QueueService.markRetry is missing.');
     assert(hasFunction('QueueService', 'markDead'), 'QueueService.markDead is missing.');
     assert(hasFunction('QueueService', 'recoverStale'), 'QueueService.recoverStale is missing.');
+    assert(hasFunction('QueueService', 'expediteDiaryNarrativeLengthRetries'), 'QueueService.expediteDiaryNarrativeLengthRetries is missing.');
     assert(hasFunction('QueueService', 'requeueDeadAsNewEvent'), 'QueueService.requeueDeadAsNewEvent is missing.');
     assert(hasFunction('QueueService', 'requeueDeadDiaryAsNewEvent'), 'QueueService.requeueDeadDiaryAsNewEvent is missing.');
     assert(hasFunction('QueueService', 'assessDeadEventRecovery'), 'QueueService.assessDeadEventRecovery is missing.');

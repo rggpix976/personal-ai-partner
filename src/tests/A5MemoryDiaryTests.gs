@@ -523,7 +523,7 @@ function runA5MemoryDiaryTests() {
       'Partner World events should be accepted when Partner World was selected.'
     );
   });
-  test('DiaryService enforces configured narrative length after trimming', function() {
+  test('DiaryService accepts non-empty short narratives and enforces maximum length after trimming', function() {
     function buildResponse(narrative) {
       return {
         title: 'Length boundary',
@@ -539,18 +539,14 @@ function runA5MemoryDiaryTests() {
       minChars: 5,
       maxChars: 10
     };
-    var shortError = null;
+    var warnings = [];
     var longError = null;
-
-    try {
-      DiaryService.__test.normalizeDiaryEntry(
-        buildResponse('1234'),
-        false,
-        config
-      );
-    } catch (error) {
-      shortError = error;
-    }
+    var shortEntry = DiaryService.__test.normalizeDiaryEntry(
+      buildResponse('1234'),
+      false,
+      config,
+      warnings
+    );
 
     try {
       DiaryService.__test.normalizeDiaryEntry(
@@ -563,12 +559,12 @@ function runA5MemoryDiaryTests() {
     }
 
     assert(
-      shortError && shortError.code === 'GEMINI_BAD_RESPONSE',
-      'Narratives below the configured minimum must be rejected.'
+      shortEntry.narrative === '1234',
+      'Non-empty narratives below the configured target should be accepted.'
     );
     assert(
-      shortError.message.indexOf('configured minimum of 5') !== -1,
-      'Minimum-length rejection should identify the configured boundary.'
+      warnings.length === 1 && warnings[0].indexOf('shorter than the configured target') !== -1,
+      'A short accepted narrative should add a controlled warning.'
     );
     assert(
       longError && longError.code === 'GEMINI_BAD_RESPONSE',

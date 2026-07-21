@@ -141,6 +141,8 @@ A7 live checks:
 - A newer successful repair resolves the old immutable `DEAD` for health status.
 - Historical `DONE` queue events left with a non-terminal summary can be
   reconciled without exposing dates, IDs, or content in operator results.
+- A valid non-empty narrative below the configured target no longer creates a
+  terminal queue failure; the configured maximum remains enforced.
 
 ### Proactive Email
 
