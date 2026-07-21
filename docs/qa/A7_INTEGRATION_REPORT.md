@@ -144,6 +144,22 @@ A7 live checks:
 - A valid non-empty narrative below the configured target no longer creates a
   terminal queue failure; the configured maximum remains enforced.
 
+Production recovery evidence (2026-07-22 JST):
+
+- Apps Script immutable version 11 is active for the maintained library and
+  web app deployments.
+- The diary queue contains 18 events: 15 `DONE`, 3 immutable historical
+  `DEAD`, and 0 active. All 3 dedicated repair events are `DONE`, their dedupe
+  keys are unique, and each retained `DEAD` has a later successful event.
+- All 14 daily summaries are terminal `DONE` with document anchors; there are
+  no pending diary summaries.
+- The diary document contains 14 anchors, all unique, with no duplicate date.
+  The latest generated date is 2026-07-20 and is `DONE` with its anchor present.
+- Exactly one `schedulerJob` trigger and one `processQueueJob` trigger are
+  configured. The 50 visible recent executions are complete with no failed or
+  running execution; the targeted retry resume and queue worker both completed.
+- The post-recovery operational health check reports `OK`.
+
 ### Proactive Email
 
 ```text
