@@ -108,6 +108,30 @@ var QueueService = (function() {
     });
   }
 
+  function expediteDiaryNarrativeLengthRetries(now) {
+    var nowIso = normalizeNow_(now);
+    return LockManager.withScriptLock('queue-expedite-diary-length-retry', function() {
+      var events = SheetRepository.listEventsByType('DIARY_GENERATE');
+      var eligible = events.filter(function(event) {
+        var lastError = event.lastError || {};
+        return event.status === 'RETRY_WAIT' &&
+          String(event.dedupeKey || '').indexOf('DIARY_GENERATE_REPAIR:') === 0 &&
+          lastError.code === 'GEMINI_BAD_RESPONSE' &&
+          /below the configured minimum/i.test(String(lastError.message || ''));
+      });
+      eligible.forEach(function(event) {
+        SheetRepository.updateEvent(event.eventId, {
+          nextAttemptAt: nowIso,
+          updatedAt: nowIso
+        });
+      });
+      return {
+        assessed: events.length,
+        expedited: eligible.length
+      };
+    });
+  }
+
   function requeueDeadAsNewEvent(eventId, manualRequestId, now) {
     return LockManager.withScriptLock('queue-requeue-dead', function() {
       var event = SheetRepository.getEventById(eventId);
@@ -572,6 +596,7 @@ var QueueService = (function() {
     markRetry: markRetry,
     markDead: markDead,
     recoverStale: recoverStale,
+    expediteDiaryNarrativeLengthRetries: expediteDiaryNarrativeLengthRetries,
     requeueDeadAsNewEvent: requeueDeadAsNewEvent,
     requeueDeadDiaryAsNewEvent: requeueDeadDiaryAsNewEvent,
     assessDeadEventRecovery: assessDeadEventRecovery,

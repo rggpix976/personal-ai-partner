@@ -282,6 +282,17 @@ Expected:
 - returned values contain aggregate counts only and no IDs or content;
 - running the backlog function again does not reopen `DONE` or `NONE` dates.
 
+If an existing repair retry records only a below-minimum narrative error after
+the target-length behavior is deployed, run:
+
+```text
+resumeDiaryNarrativeLengthRetries()
+processQueueJob()
+```
+
+Expected: only the eligible diary repair retry becomes immediately claimable,
+its attempt count is unchanged, and the valid non-empty narrative is persisted.
+
 ## Phase 14: Proactive Email
 
 Prepare state so silence threshold is reached outside quiet hours and below daily max.

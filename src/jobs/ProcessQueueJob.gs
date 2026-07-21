@@ -61,6 +61,10 @@ function repairDiaryGenerationBacklog() {
   return DiaryService.repairGenerationBacklog();
 }
 
+function resumeDiaryNarrativeLengthRetries() {
+  return QueueService.expediteDiaryNarrativeLengthRetries(new Date());
+}
+
 function processSingleQueueEvent_(event, correlationId) {
   try {
     var result = dispatchQueueEvent_(event);

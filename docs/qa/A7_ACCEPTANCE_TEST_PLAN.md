@@ -56,6 +56,7 @@ Not covered:
 | AT-019C | Diary Recovery | Repeat AT-019B with the same UUID v4. | No additional event or document anchor is created. | Live/stub |
 | AT-019D | Diary Recovery | Present `DONE` without an anchor or duplicate anchors. | Assessment returns `MANUAL_REVIEW_REQUIRED`; no event or document mutation occurs. | Self-test |
 | AT-019E | Diary Recovery | Run backlog repair with a historical queue event that is `DONE` while its summary is still non-terminal. | The date is reconciled to `DONE` or `NONE`, results expose aggregate state only, and a second run is a no-op. | Live/stub |
+| AT-019F | Diary Recovery | Gemini returns a valid non-empty narrative below `DIARY_MIN_CHARS`. | The diary is accepted with a warning, while a narrative above `DIARY_MAX_CHARS` is still rejected. | Self-test/live |
 | AT-020 | Proactive | Silence threshold reached outside quiet hours. | `PROACTIVE_SEND` event is enqueued once. | Live/stub |
 | AT-021 | Proactive | Quiet hours active. | No proactive event is enqueued. | Self-test |
 | AT-022 | Proactive | Daily max reached. | No additional proactive event is enqueued. | Self-test |

@@ -70,6 +70,12 @@ it is safe: terminal dates, active dates, and failures already followed by a
 newer completed event are no-ops. The returned object contains aggregate counts
 only. Run `processQueueJob()` afterward until no repair event remains active.
 
+If a repair event is already in `RETRY_WAIT` solely because its non-empty
+narrative was below the old hard minimum, deploy the reviewed target-length
+behavior and run `resumeDiaryNarrativeLengthRetries()` once. It advances only
+dedicated diary repair events with that exact controlled error and does not
+change their attempt count. Then run `processQueueJob()` normally.
+
 ## 3. Immutable deployment
 
 1. Confirm the reviewed commit, clean worktree, and passing local checks.

@@ -364,6 +364,55 @@ function runA6QueueSchedulerTests() {
     });
   });
 
+  test('expediteDiaryNarrativeLengthRetries only advances eligible repair retries', function() {
+    var patches = [];
+    var eligibleId = '11111111-1111-4111-8111-111111111111';
+    withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      SheetRepository: {
+        listEventsByType: function() {
+          return [{
+            eventId: eligibleId,
+            eventType: 'DIARY_GENERATE',
+            dedupeKey: 'DIARY_GENERATE_REPAIR:2026-07-07:22222222-2222-4222-8222-222222222222',
+            status: 'RETRY_WAIT',
+            attemptCount: 4,
+            lastError: {
+              code: 'GEMINI_BAD_RESPONSE',
+              message: 'narrative length is below the configured minimum.'
+            }
+          }, {
+            eventId: '33333333-3333-4333-8333-333333333333',
+            eventType: 'DIARY_GENERATE',
+            dedupeKey: 'DIARY_GENERATE:2026-07-08',
+            status: 'RETRY_WAIT',
+            attemptCount: 1,
+            lastError: {
+              code: 'GEMINI_BAD_RESPONSE',
+              message: 'narrative length is below the configured minimum.'
+            }
+          }];
+        },
+        updateEvent: function(eventId, patch) {
+          patches.push({ eventId: eventId, patch: patch });
+        }
+      }
+    }, function() {
+      var result = QueueService.expediteDiaryNarrativeLengthRetries(
+        '2026-07-07T09:00:00+09:00'
+      );
+      assert(result.assessed === 2 && result.expedited === 1, 'Only the dedicated repair retry should be expedited.');
+      assert(patches.length === 1 && patches[0].eventId === eligibleId, 'The eligible repair event should be updated once.');
+      assert(patches[0].patch.nextAttemptAt === '2026-07-07T09:00:00+09:00', 'The retry should become immediately claimable.');
+      assert(!Object.prototype.hasOwnProperty.call(patches[0].patch, 'attemptCount'), 'Expediting must preserve the attempt count.');
+      assert(JSON.stringify(result).indexOf(eligibleId) === -1, 'Aggregate operator results must not expose event ids.');
+    });
+  });
+
   test('requeueDeadAsNewEvent inserts a new event and leaves original DEAD event unchanged', function() {
     var inserted = null;
     withOverrides({

@@ -226,6 +226,10 @@ Script Propertiesは検証時点を分離する。
 | BACKUP_RETENTION_COUNT | int | 4 |
 | FREE_ONLY_MODE | bool | true |
 
+`DIARY_MIN_CHARS` is a generation target, not a persistence gate. A non-empty
+structured narrative below that target is accepted with a controlled warning;
+`DIARY_MAX_CHARS` remains a hard validation limit.
+
 ## 6. `setup()` の責務
 
 `setup()` は冪等でなければならない。
