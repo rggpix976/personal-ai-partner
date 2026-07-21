@@ -8,7 +8,9 @@ var QueueService = (function() {
   function enqueue(event) {
     return LockManager.withScriptLock('queue-enqueue', function() {
       var normalized = normalizeEventForInsert_(event);
-      var existing = SheetRepository.getActiveEventByDedupeKey(normalized.dedupeKey);
+      var existing = normalized.eventType === 'DIARY_GENERATE'
+        ? findActiveDiaryEventByDateWithoutLock_(normalized.payload.diaryDate)
+        : SheetRepository.getActiveEventByDedupeKey(normalized.dedupeKey);
       if (existing) {
         return existing;
       }
@@ -141,6 +143,48 @@ var QueueService = (function() {
     });
   }
 
+  function requeueDeadDiaryAsNewEvent(eventId, manualRequestId, now) {
+    return LockManager.withScriptLock('queue-requeue-dead-diary', function() {
+      var event = SheetRepository.getEventById(eventId);
+      ensure(event, 'CONFIG_MISSING', 'Event was not found.');
+      ensure(event.status === 'DEAD', 'VALIDATION_REQUEST_INVALID', 'Only DEAD events can be repaired.');
+      ensure(event.eventType === 'DIARY_GENERATE', 'VALIDATION_REQUEST_INVALID', 'Diary repair requires a DIARY_GENERATE event.');
+      Validators.assertUuidV4(manualRequestId, 'manualRequestId');
+      var diaryDate = event.payload && event.payload.diaryDate;
+      Validators.assertDateString(diaryDate, 'event.payload.diaryDate');
+
+      var manualDedupeKey = 'DIARY_GENERATE_REPAIR:' + diaryDate + ':' + manualRequestId;
+      var existingManualRepair = SheetRepository.getEventByDedupeKey(manualDedupeKey);
+      if (existingManualRepair) {
+        return existingManualRepair;
+      }
+
+      var activeDiaryEvent = findActiveDiaryEventByDateWithoutLock_(diaryDate);
+      if (activeDiaryEvent) {
+        return activeDiaryEvent;
+      }
+
+      var nowIso = normalizeNow_(now);
+      var nextEvent = normalizeEventForInsert_({
+        eventType: 'DIARY_GENERATE',
+        dedupeKey: manualDedupeKey,
+        payload: {
+          diaryDate: diaryDate,
+          requestedAt: nowIso,
+          manualRequestId: manualRequestId,
+          originalEventId: event.eventId
+        },
+        status: 'PENDING',
+        attemptCount: 0,
+        nextAttemptAt: nowIso,
+        createdAt: nowIso,
+        updatedAt: nowIso
+      });
+      SheetRepository.insertEvent(nextEvent);
+      return nextEvent;
+    });
+  }
+
   function assessDeadEventRecovery(eventId) {
     var event = SheetRepository.getEventById(eventId);
     ensure(event, 'CONFIG_MISSING', 'Event was not found.');
@@ -248,10 +292,27 @@ var QueueService = (function() {
       };
     }
     if (eventType === 'DIARY_GENERATE') {
-      return {
+      ensure(
+        Validators.isDateString(payload.diaryDate),
+        'VALIDATION_REQUEST_INVALID',
+        'DIARY_GENERATE payload.diaryDate must be a yyyy-MM-dd string.'
+      );
+      ensure(
+        Validators.isIsoDateTimeString(payload.requestedAt),
+        'VALIDATION_REQUEST_INVALID',
+        'DIARY_GENERATE payload.requestedAt must be an ISO 8601 string.'
+      );
+      var diaryPayload = {
         diaryDate: payload.diaryDate,
         requestedAt: payload.requestedAt
       };
+      if (payload.manualRequestId != null || payload.originalEventId != null) {
+        Validators.assertUuidV4(payload.manualRequestId, 'DIARY_GENERATE payload.manualRequestId');
+        Validators.assertUuidV4(payload.originalEventId, 'DIARY_GENERATE payload.originalEventId');
+        diaryPayload.manualRequestId = payload.manualRequestId;
+        diaryPayload.originalEventId = payload.originalEventId;
+      }
+      return diaryPayload;
     }
     if (eventType === 'PROACTIVE_SEND') {
       var hasOwn = Object.prototype.hasOwnProperty;
@@ -407,6 +468,34 @@ var QueueService = (function() {
     return event;
   }
 
+  function findActiveDiaryEventByDateWithoutLock_(diaryDate) {
+    Validators.assertDateString(diaryDate, 'diaryDate');
+    if (typeof SheetRepository.listEventsByType !== 'function') {
+      return SheetRepository.getActiveEventByDedupeKey('DIARY_GENERATE:' + diaryDate);
+    }
+    var activeStatuses = {
+      PENDING: true,
+      PROCESSING: true,
+      RETRY_WAIT: true
+    };
+    var events = SheetRepository.listEventsByType('DIARY_GENERATE')
+      .filter(function(event) {
+        return activeStatuses[event.status] &&
+          event.payload &&
+          event.payload.diaryDate === diaryDate;
+      })
+      .sort(function(left, right) {
+        return safeEventTime_(right.updatedAt || right.createdAt) -
+          safeEventTime_(left.updatedAt || left.createdAt);
+      });
+    return events.length > 0 ? events[0] : null;
+  }
+
+  function safeEventTime_(value) {
+    var time = value instanceof Date ? value.getTime() : new Date(value).getTime();
+    return isFinite(time) ? time : 0;
+  }
+
   function markDeadWithoutLock_(eventId, error, attemptCount) {
     var nowIso = toIsoStringInTokyo(new Date());
     SheetRepository.updateEvent(eventId, {
@@ -484,10 +573,12 @@ var QueueService = (function() {
     markDead: markDead,
     recoverStale: recoverStale,
     requeueDeadAsNewEvent: requeueDeadAsNewEvent,
+    requeueDeadDiaryAsNewEvent: requeueDeadDiaryAsNewEvent,
     assessDeadEventRecovery: assessDeadEventRecovery,
     __test: {
       buildDedupeKey: buildDedupeKey_,
-      normalizePayload: normalizePayload_
+      normalizePayload: normalizePayload_,
+      findActiveDiaryEventByDate: findActiveDiaryEventByDateWithoutLock_
     }
   };
 })();

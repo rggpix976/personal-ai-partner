@@ -90,10 +90,19 @@ function enqueueDiaryIfDue_(now) {
     };
   }
   var yesterday = getTokyoRelativeDate_(now, -1);
-  if (DiaryService.isGenerated(yesterday)) {
+  var lifecycle = DiaryService.getLifecycleState(yesterday);
+  var noEnqueueReasons = {
+    DONE: 'ALREADY_GENERATED',
+    NONE: 'DIARY_NOT_REQUIRED',
+    PENDING: 'DIARY_ALREADY_PENDING',
+    FAILED: 'DIARY_MANUAL_REPAIR_REQUIRED',
+    INCONSISTENT: 'DIARY_MANUAL_REVIEW_REQUIRED'
+  };
+  if (Object.prototype.hasOwnProperty.call(noEnqueueReasons, lifecycle.status)) {
     return {
       enqueued: false,
-      reason: 'ALREADY_GENERATED',
+      reason: noEnqueueReasons[lifecycle.status],
+      diaryStatus: lifecycle.status,
       diaryDate: yesterday
     };
   }

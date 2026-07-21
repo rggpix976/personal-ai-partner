@@ -74,6 +74,7 @@ CHAT_REPLY:{requestId}
 CHAT_REPLY_MANUAL:{requestId}:{manualRequestId}
 MEMORY_EXTRACT:{firstMessageId}:{lastMessageId}
 DIARY_GENERATE:{yyyy-MM-dd}
+DIARY_GENERATE_REPAIR:{yyyy-MM-dd}:{manualRequestId}
 PROACTIVE_SEND:{yyyy-MM-dd}:{sequence}:{decisionSlot}
 WEEKLY_BACKUP:{yyyy-MM-dd}
 ```
@@ -95,7 +96,12 @@ Web clients fetch newly appended conversation messages with
 pause polling while the page is hidden, and resume immediately when it
 becomes visible.
 
-`DEAD` の手動再試行は `CHAT_REPLY_MANUAL` を使い、既存 `dedupe_key` を再利用しない。同じ `manualRequestId` は同じ手動再試行イベントを返し、新しい行を追加しない。
+`DEAD` の手動再試行は既存行を変更せず、新しいイベントとして作成する。
+`CHAT_REPLY` は `CHAT_REPLY_MANUAL`、`DIARY_GENERATE` は
+`DIARY_GENERATE_REPAIR` を使い、既存 `dedupe_key` を再利用しない。同じ
+`manualRequestId` は同じ手動再試行イベントを返し、新しい行を追加しない。
+日記修復では `originalEventId` と `manualRequestId` をpayloadへ保存し、同じ
+`diaryDate` のactiveイベントをdedupe keyの違いにかかわらず1件に制限する。
 
 ## 4.6 イベント状態遷移
 
@@ -117,7 +123,26 @@ PROCESSING(stale) -> RETRY_WAIT
 - 汎用復旧操作は `DEAD` を自動再起票しない。`PROACTIVE_SEND` は再送せず、新しい適格性評価を待つ。
 - stale回収は `attemptCount` を成功扱いにせず、ロック情報をクリアして `RETRY_WAIT` にする。
 
-## 4.7 再試行
+## 4.7 日記ライフサイクル
+
+`daily_summaries.diary_status` は次の意味で使用する。
+
+| Status | Meaning | Automatic scheduler action |
+|---|---|---|
+| `NONE` | 対象日に会話がなく、Partner Worldも選択されず、日記作成が不要と確定した | 再起票しない |
+| `PENDING` | activeイベントまたはretryが存在する | 重複起票しない |
+| `DONE` | 対象日のGoogle Docsアンカーが正確に1件存在する | 再起票しない |
+| `FAILED` | キューが終端失敗した | 自動再起票せず、日記専用修復のみ許可する |
+
+`DONE`なのにアンカーが0件、またはアンカーが複数件ある状態は不整合として
+自動修復を停止する。日記専用修復は`assessDeadDiaryGeneration(eventId)`で
+評価してから`repairDeadDiaryGeneration(eventId, manualRequestId)`で新規イベントを
+作成する。元の`DEAD`行は監査履歴として不変のまま残す。
+旧実装でイベントだけが`DONE`になり、日記状態が終端化しなかった場合は、
+`repairDiaryGenerationBacklog()`が対象日を`DONE`または`NONE`へ整合してから
+未解決`DEAD`を再起票する。戻り値は集計値だけとし、IDや本文を含めない。
+
+## 4.8 再試行
 
 共通一時障害:
 
@@ -131,7 +156,7 @@ PROCESSING(stale) -> RETRY_WAIT
 
 `MAIL_QUOTA_EXHAUSTED` はこの共通短時間リトライを使用しない。専用規則は [`05_ERROR_CONTRACT.md`](05_ERROR_CONTRACT.md) を参照する。
 
-## 4.8 `conversation_logs` の一意性
+## 4.9 `conversation_logs` の一意性
 
 `request_id` 単独を一意キーにしてはならない。
 
@@ -145,7 +170,7 @@ UNIQUE(request_id, role)
 
 Apps Script/SheetsにはDB制約がないため、Repositoryが書込み前に検査し、重複時は既存行を返す。
 
-## 4.9 スキーマ変更
+## 4.10 スキーマ変更
 
 - 列削除、列順変更は禁止。
 - 追加列は末尾へ追加する。

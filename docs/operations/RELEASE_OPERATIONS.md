@@ -10,7 +10,7 @@ Run `runOperationalHealthCheck()` and retain only its aggregate result. The
 report has three states:
 
 - `OK`: required triggers are singular and no recent queue anomaly is present.
-- `DEGRADED`: a recent `DEAD` event or an overdue claimable event exists.
+- `DEGRADED`: an unresolved recent `DEAD` event or an overdue claimable event exists.
 - `CRITICAL`: a required trigger is missing or duplicated, or a `PROCESSING`
   event has exceeded `QUEUE_STALE_MINUTES`.
 
@@ -40,13 +40,35 @@ First run `assessDeadQueueEvent(eventId)` from a trusted operator context.
 |---|---|
 | `CHAT_REPLY` | Create a new event with `requeueDeadChatReply(eventId, manualRequestId)`. Use a new UUID v4 for a new operator request. Reusing the same UUID returns the existing retry. |
 | `MEMORY_EXTRACT` | Review the source range and current memory cursor before any new event. |
-| `DIARY_GENERATE` | Use the diary repair workflow; do not treat generic replay as a repair. |
+| `DIARY_GENERATE` | Run `assessDeadDiaryGeneration(eventId)`. If it returns `REQUEUE_AS_NEW_EVENT`, call `repairDeadDiaryGeneration(eventId, manualRequestId)` with one UUID v4. Reusing the same UUID is idempotent. Never use generic replay. |
 | `PROACTIVE_SEND` | Do not replay. Wait for a fresh eligibility decision. |
 | `WEEKLY_BACKUP` | Verify whether copies already exist before considering a new backup event. |
 
 An overlapping `processQueueJob` that cannot acquire the script lock exits as
 a successful safe skip with reason `QUEUE_LOCK_BUSY`. The active worker keeps
 ownership, and the next scheduled run resumes normal processing.
+
+Diary repair preserves the original `DEAD` row. A newer successful
+`DIARY_GENERATE` for the same date marks that old failure as resolved for health
+reporting while retaining it in raw status counts. The diary summary lifecycle
+is:
+
+- `PENDING`: active or retrying; the scheduler does not enqueue a duplicate;
+- `DONE`: exactly one matching Google Docs anchor exists;
+- `NONE`: no supported conversation and no Partner World selection; terminal;
+- `FAILED`: automatic retry ended; only the diary repair workflow may proceed.
+
+Stop before mutation when assessment reports `MANUAL_REVIEW_REQUIRED`. In
+particular, do not regenerate when a `DONE` summary has no document anchor and
+do not delete or rewrite duplicate anchors automatically.
+
+For an approved diary-backlog recovery, run the parameterless trusted-operator
+function `repairDiaryGenerationBacklog()`. It first reconciles the newest
+completed event for each date whose summary never reached `DONE` or `NONE`, then
+creates at most one active repair event per unresolved `DEAD` date. Re-running
+it is safe: terminal dates, active dates, and failures already followed by a
+newer completed event are no-ops. The returned object contains aggregate counts
+only. Run `processQueueJob()` afterward until no repair event remains active.
 
 ## 3. Immutable deployment
 

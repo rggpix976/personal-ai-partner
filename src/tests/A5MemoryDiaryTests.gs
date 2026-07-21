@@ -76,18 +76,20 @@ function runA5MemoryDiaryTests() {
     var inserted = [];
     var summaryRow = null;
     withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
       SheetRepository: {
         insertEvent: function(event) {
-          if (inserted.length > 0) {
-            throw createAppError('DUPLICATE_REQUEST', 'duplicate');
-          }
           inserted.push(event);
         },
-        getActiveEventByDedupeKey: function(dedupeKey) {
-          return {
-            eventId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-            dedupeKey: dedupeKey
-          };
+        getActiveEventByDedupeKey: function() {
+          return inserted.length > 0 ? inserted[0] : null;
+        },
+        listEventsByType: function() {
+          return inserted;
         },
         getDailySummary: function() {
           return summaryRow;
@@ -98,6 +100,9 @@ function runA5MemoryDiaryTests() {
         }
       },
       DocumentRepository: {
+        countDiaryEntryAnchors: function() {
+          return 0;
+        },
         findDiaryEntryAnchor: function() {
           return null;
         }
@@ -644,12 +649,18 @@ function runA5MemoryDiaryTests() {
         }
       },
       DocumentRepository: {
+        countDiaryEntryAnchors: function(date) {
+          return date === '2026-07-08' ? 1 : 0;
+        },
         findDiaryEntryAnchor: function(date) {
           return date === '2026-07-08' ? 'AI Diary - 2026-07-08' : null;
         }
       }
     }, function() {
-      assert(DiaryService.isGenerated('2026-07-07') === true, 'DONE summaries should count as generated.');
+      assert(DiaryService.isGenerated('2026-07-07') === false, 'DONE summaries without a document anchor must require manual review.');
+      var lifecycle = DiaryService.getLifecycleState('2026-07-07');
+      assert(lifecycle.status === 'INCONSISTENT', 'DONE without an anchor should be classified as inconsistent.');
+      assert(!Object.prototype.hasOwnProperty.call(lifecycle, 'summary'), 'Public lifecycle state must not expose summary content.');
       assert(DiaryService.isGenerated('2026-07-08') === true, 'Document markers should count as generated.');
       assert(DiaryService.isGenerated('2026-07-09') === false, 'Missing summary and marker should be false.');
     });
@@ -1018,6 +1029,533 @@ function runA5MemoryDiaryTests() {
         thrown = error;
       }
       assert(thrown && thrown.code === 'GEMINI_TEMPORARY_FAILURE', 'Retryable Gemini failures should be surfaced.');
+    });
+  });
+
+  test('DiaryService finalizes an intentional no-content skip as NONE', function() {
+    var summaryRow = {
+      summary_date: '2026-07-10',
+      conversation_count: 0,
+      summary_text: null,
+      key_topics_json: null,
+      memory_candidate_count: 0,
+      diary_status: 'PENDING',
+      diary_doc_anchor: null,
+      created_at: '2026-07-10T23:30:00+09:00',
+      updated_at: '2026-07-10T23:30:00+09:00'
+    };
+    withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      ConfigRepository: {
+        getByKey: function(key) {
+          var values = {
+            PARTNER_WORLD_ENABLED: { value: false },
+            PARTNER_WORLD_DIARY_FREQUENCY: { value: 0 }
+          };
+          return values[key] || null;
+        }
+      },
+      SheetRepository: {
+        getDailySummary: function() {
+          return summaryRow;
+        },
+        listMessagesByDate: function() {
+          return [];
+        },
+        upsertDailySummary: function(summary) {
+          summaryRow = {
+            summary_date: summary.summaryDate,
+            conversation_count: summary.conversationCount,
+            summary_text: summary.summaryText,
+            key_topics_json: summary.keyTopics,
+            memory_candidate_count: summary.memoryCandidateCount,
+            diary_status: summary.diaryStatus,
+            diary_doc_anchor: summary.diaryDocAnchor,
+            created_at: summary.createdAt,
+            updated_at: summary.updatedAt
+          };
+          return summaryRow;
+        }
+      },
+      DocumentRepository: {
+        countDiaryEntryAnchors: function() {
+          return 0;
+        },
+        findDiaryEntryAnchor: function() {
+          return null;
+        }
+      },
+      GeminiClient: {
+        generateStructured: function() {
+          throw new Error('Gemini must not run for an intentional no-content skip.');
+        }
+      }
+    }, function() {
+      var result = DiaryService.generate({
+        diaryDate: '2026-07-10',
+        requestedAt: '2026-07-10T23:30:00+09:00'
+      });
+      assert(result.skipped === true, 'The diary should be skipped without supported content.');
+      assert(summaryRow.diary_status === 'NONE', 'An intentional skip must be terminal NONE.');
+      assert(DiaryService.getLifecycleState('2026-07-10').status === 'NONE', 'NONE must remain a finalized lifecycle state.');
+    });
+  });
+
+  test('DiaryService reconciles a completed no-content event to NONE without exposing ids', function() {
+    var sourceEvent = {
+      eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      eventType: 'DIARY_GENERATE',
+      status: 'DONE',
+      payload: {
+        diaryDate: '2026-07-10',
+        requestedAt: '2026-07-10T23:30:00+09:00'
+      },
+      completedAt: '2026-07-10T23:31:00+09:00'
+    };
+    var summaryRow = {
+      summary_date: '2026-07-10',
+      conversation_count: 0,
+      diary_status: 'PENDING',
+      diary_doc_anchor: null,
+      created_at: '2026-07-10T23:30:00+09:00'
+    };
+    withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      ConfigRepository: {
+        getByKey: function(key) {
+          return key === 'PARTNER_WORLD_ENABLED' || key === 'PARTNER_WORLD_DIARY_FREQUENCY'
+            ? { value: 0 }
+            : null;
+        }
+      },
+      SheetRepository: {
+        getEventById: function() {
+          return sourceEvent;
+        },
+        listEventsByType: function() {
+          return [sourceEvent];
+        },
+        getDailySummary: function() {
+          return summaryRow;
+        },
+        listMessagesByDate: function() {
+          return [];
+        },
+        upsertDailySummary: function(summary) {
+          summaryRow.diary_status = summary.diaryStatus;
+          return summaryRow;
+        }
+      },
+      DocumentRepository: {
+        countDiaryEntryAnchors: function() {
+          return 0;
+        },
+        findDiaryEntryAnchor: function() {
+          return null;
+        }
+      },
+      GeminiClient: {
+        generateStructured: function() {
+          throw new Error('Gemini must not run for a completed no-content reconciliation.');
+        }
+      }
+    }, function() {
+      var result = DiaryService.reconcileCompletedGeneration(sourceEvent.eventId);
+      var serialized = JSON.stringify(result);
+      assert(result.reconciled === true && result.diaryStatus === 'NONE', 'Completed no-content reconciliation should finalize NONE.');
+      assert(summaryRow.diary_status === 'NONE', 'The stale PENDING summary should become NONE.');
+      assert(serialized.indexOf(sourceEvent.eventId) === -1, 'Completed reconciliation must not expose the source event id.');
+    });
+  });
+
+  test('DiaryService does not automatically enqueue FAILED diary dates', function() {
+    withOverrides({
+      SheetRepository: {
+        getDailySummary: function() {
+          return {
+            diary_status: 'FAILED'
+          };
+        }
+      },
+      DocumentRepository: {
+        countDiaryEntryAnchors: function() {
+          return 0;
+        },
+        findDiaryEntryAnchor: function() {
+          return null;
+        }
+      },
+      QueueService: {
+        enqueue: function() {
+          throw new Error('FAILED diary dates must use the dedicated repair workflow.');
+        }
+      }
+    }, function() {
+      var result = DiaryService.enqueue('2026-07-10');
+      assert(result.enqueued === false, 'FAILED must not be enqueued automatically.');
+      assert(result.reason === 'DIARY_MANUAL_REPAIR_REQUIRED', 'FAILED should name the manual repair requirement.');
+    });
+  });
+
+  test('DiaryService marks terminal queue failure as FAILED without an anchor', function() {
+    var summaryRow = {
+      summary_date: '2026-07-10',
+      conversation_count: 2,
+      summary_text: null,
+      key_topics_json: null,
+      memory_candidate_count: 0,
+      diary_status: 'PENDING',
+      diary_doc_anchor: null,
+      created_at: '2026-07-10T23:30:00+09:00'
+    };
+    withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      SheetRepository: {
+        getDailySummary: function() {
+          return summaryRow;
+        },
+        upsertDailySummary: function(summary) {
+          summaryRow.diary_status = summary.diaryStatus;
+          summaryRow.diary_doc_anchor = summary.diaryDocAnchor;
+          return summaryRow;
+        }
+      },
+      DocumentRepository: {
+        countDiaryEntryAnchors: function() {
+          return 0;
+        }
+      }
+    }, function() {
+      var result = DiaryService.markFailed({
+        diaryDate: '2026-07-10',
+        requestedAt: '2026-07-10T23:30:00+09:00'
+      });
+      assert(result.marked === true, 'Terminal failure should be recorded.');
+      assert(summaryRow.diary_status === 'FAILED', 'Terminal failure must replace stale PENDING with FAILED.');
+    });
+  });
+
+  test('DiaryService diary repair assessment is sanitized and blocks ambiguous anchors', function() {
+    withOverrides({
+      SheetRepository: {
+        getEventById: function() {
+          return {
+            eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            eventType: 'DIARY_GENERATE',
+            status: 'DEAD',
+            payload: {
+              diaryDate: '2026-07-10',
+              privateText: 'must-not-appear'
+            }
+          };
+        },
+        getDailySummary: function() {
+          return {
+            diary_status: 'PENDING'
+          };
+        },
+        listEventsByType: function() {
+          return [];
+        }
+      },
+      DocumentRepository: {
+        countDiaryEntryAnchors: function() {
+          return 2;
+        },
+        findDiaryEntryAnchor: function() {
+          return 'AI Diary - 2026-07-10';
+        }
+      }
+    }, function() {
+      var result = DiaryService.assessDeadGeneration('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+      var serialized = JSON.stringify(result);
+      assert(result.action === 'MANUAL_REVIEW_REQUIRED', 'Duplicate anchors must stop automatic repair.');
+      assert(result.reason === 'DUPLICATE_DIARY_ANCHOR', 'Duplicate anchors need a controlled reason.');
+      assert(serialized.indexOf('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa') === -1, 'Assessment must not expose event ids.');
+      assert(serialized.indexOf('must-not-appear') === -1, 'Assessment must not expose payload content.');
+    });
+  });
+
+  test('DiaryService treats a newer completed diary event as resolving an older DEAD event', function() {
+    var sourceEvent = {
+      eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      eventType: 'DIARY_GENERATE',
+      status: 'DEAD',
+      payload: { diaryDate: '2026-07-10' },
+      completedAt: '2026-07-10T23:30:00+09:00'
+    };
+    var completedEvent = {
+      eventId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      eventType: 'DIARY_GENERATE',
+      status: 'DONE',
+      payload: { diaryDate: '2026-07-10' },
+      completedAt: '2026-07-11T09:00:00+09:00'
+    };
+    withOverrides({
+      SheetRepository: {
+        getEventById: function() {
+          return sourceEvent;
+        },
+        getDailySummary: function() {
+          return { diary_status: 'DONE' };
+        },
+        listEventsByType: function() {
+          return [completedEvent, sourceEvent];
+        }
+      },
+      DocumentRepository: {
+        countDiaryEntryAnchors: function() {
+          return 1;
+        },
+        findDiaryEntryAnchor: function() {
+          return '[DIARY:2026-07-10]';
+        }
+      }
+    }, function() {
+      var result = DiaryService.assessDeadGeneration(sourceEvent.eventId);
+      assert(result.action === 'NO_ACTION', 'A newer completed diary event should resolve the old failure.');
+      assert(result.reason === 'DIARY_FAILURE_ALREADY_RESOLVED', 'Resolved failures should return the dedicated reason.');
+    });
+  });
+
+  test('DiaryService does not repair an intentionally skipped NONE diary', function() {
+    var sourceEvent = {
+      eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      eventType: 'DIARY_GENERATE',
+      status: 'DEAD',
+      payload: { diaryDate: '2026-07-10' }
+    };
+    withOverrides({
+      SheetRepository: {
+        getEventById: function() {
+          return sourceEvent;
+        },
+        getDailySummary: function() {
+          return { diary_status: 'NONE' };
+        },
+        listEventsByType: function() {
+          return [sourceEvent];
+        }
+      },
+      DocumentRepository: {
+        countDiaryEntryAnchors: function() {
+          return 0;
+        },
+        findDiaryEntryAnchor: function() {
+          return null;
+        }
+      },
+      QueueService: {
+        requeueDeadDiaryAsNewEvent: function() {
+          throw new Error('NONE diary dates must not be repaired.');
+        }
+      }
+    }, function() {
+      var assessment = DiaryService.assessDeadGeneration(sourceEvent.eventId);
+      var result = DiaryService.repairDeadGeneration(
+        sourceEvent.eventId,
+        '22222222-2222-4222-8222-222222222222'
+      );
+      assert(assessment.action === 'NO_ACTION', 'NONE should not be offered for repair.');
+      assert(assessment.reason === 'DIARY_NOT_REQUIRED', 'NONE should retain its intentional skip reason.');
+      assert(result.enqueued === false && result.reason === 'DIARY_NOT_REQUIRED', 'Repair should remain a no-op for NONE.');
+    });
+  });
+
+  test('DiaryService repair is idempotent for one manual request and returns sanitized results', function() {
+    var summaryRow = {
+      summary_date: '2026-07-10',
+      diary_status: 'FAILED',
+      diary_doc_anchor: null
+    };
+    var existingRepair = null;
+    var sourceEvent = {
+      eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      eventType: 'DIARY_GENERATE',
+      status: 'DEAD',
+      payload: {
+        diaryDate: '2026-07-10'
+      }
+    };
+    withOverrides({
+      SheetRepository: {
+        getEventById: function() {
+          return sourceEvent;
+        },
+        getEventByDedupeKey: function() {
+          return existingRepair;
+        },
+        getDailySummary: function() {
+          return summaryRow;
+        },
+        listEventsByType: function() {
+          return existingRepair ? [sourceEvent, existingRepair] : [sourceEvent];
+        },
+        upsertDailySummary: function(summary) {
+          summaryRow.diary_status = summary.diaryStatus;
+          return summaryRow;
+        }
+      },
+      DocumentRepository: {
+        countDiaryEntryAnchors: function() {
+          return 0;
+        },
+        findDiaryEntryAnchor: function() {
+          return null;
+        }
+      },
+      QueueService: {
+        requeueDeadDiaryAsNewEvent: function(_, manualRequestId) {
+          if (!existingRepair) {
+            existingRepair = {
+              eventId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+              eventType: 'DIARY_GENERATE',
+              dedupeKey: 'DIARY_GENERATE_REPAIR:2026-07-10:' + manualRequestId,
+              payload: { diaryDate: '2026-07-10' },
+              status: 'PENDING',
+              createdAt: '2026-07-11T09:00:00+09:00'
+            };
+          }
+          return existingRepair;
+        }
+      }
+    }, function() {
+      var manualRequestId = '22222222-2222-4222-8222-222222222222';
+      var first = DiaryService.repairDeadGeneration(sourceEvent.eventId, manualRequestId);
+      assert(summaryRow.diary_status === 'PENDING', 'A new repair should move FAILED to PENDING.');
+      existingRepair.status = 'DONE';
+      summaryRow.diary_status = 'FAILED';
+      var second = DiaryService.repairDeadGeneration(sourceEvent.eventId, manualRequestId);
+      var serialized = JSON.stringify(second);
+      assert(first.enqueued === true && first.duplicate === false, 'The first repair request should enqueue once.');
+      assert(second.enqueued === false && second.duplicate === true, 'The same repair request must be idempotent after completion.');
+      assert(summaryRow.diary_status === 'FAILED', 'An idempotent repair call must not rewrite the current diary state.');
+      assert(second.reason === 'REPAIR_REQUEST_ALREADY_RECORDED', 'The duplicate repair response should explain that the request was already recorded.');
+      assert(serialized.indexOf(sourceEvent.eventId) === -1, 'Repair result must not expose the source event id.');
+      assert(serialized.indexOf(manualRequestId) === -1, 'Repair result must not expose the manual request id.');
+    });
+  });
+
+  test('DiaryService backlog repair reconciles completed skips and enqueues unresolved DEAD once', function() {
+    var completedEvent = {
+      eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      eventType: 'DIARY_GENERATE',
+      status: 'DONE',
+      payload: {
+        diaryDate: '2026-07-09',
+        requestedAt: '2026-07-09T23:30:00+09:00'
+      },
+      completedAt: '2026-07-09T23:31:00+09:00'
+    };
+    var deadEvent = {
+      eventId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      eventType: 'DIARY_GENERATE',
+      status: 'DEAD',
+      payload: {
+        diaryDate: '2026-07-10',
+        requestedAt: '2026-07-10T23:30:00+09:00'
+      },
+      completedAt: '2026-07-10T23:31:00+09:00'
+    };
+    var events = [deadEvent, completedEvent];
+    var summaries = {
+      '2026-07-09': { summary_date: '2026-07-09', diary_status: 'PENDING' },
+      '2026-07-10': { summary_date: '2026-07-10', diary_status: 'FAILED' }
+    };
+    withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      ConfigRepository: {
+        getByKey: function(key) {
+          return key === 'PARTNER_WORLD_ENABLED' || key === 'PARTNER_WORLD_DIARY_FREQUENCY'
+            ? { value: 0 }
+            : null;
+        }
+      },
+      SheetRepository: {
+        getEventById: function(eventId) {
+          return events.filter(function(event) {
+            return event.eventId === eventId;
+          })[0] || null;
+        },
+        getEventByDedupeKey: function(dedupeKey) {
+          return events.filter(function(event) {
+            return event.dedupeKey === dedupeKey;
+          })[0] || null;
+        },
+        listEventsByType: function() {
+          return events;
+        },
+        getDailySummary: function(diaryDate) {
+          return summaries[diaryDate] || null;
+        },
+        listMessagesByDate: function() {
+          return [];
+        },
+        upsertDailySummary: function(summary) {
+          summaries[summary.summaryDate] = {
+            summary_date: summary.summaryDate,
+            diary_status: summary.diaryStatus,
+            diary_doc_anchor: summary.diaryDocAnchor || null
+          };
+          return summaries[summary.summaryDate];
+        }
+      },
+      DocumentRepository: {
+        countDiaryEntryAnchors: function() {
+          return 0;
+        },
+        findDiaryEntryAnchor: function() {
+          return null;
+        }
+      },
+      QueueService: {
+        requeueDeadDiaryAsNewEvent: function(sourceEventId, manualRequestId) {
+          var repair = {
+            eventId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+            eventType: 'DIARY_GENERATE',
+            dedupeKey: 'DIARY_GENERATE_REPAIR:2026-07-10:' + manualRequestId,
+            payload: { diaryDate: '2026-07-10' },
+            status: 'PENDING',
+            createdAt: '2026-07-11T09:00:00+09:00'
+          };
+          events.unshift(repair);
+          return repair;
+        }
+      },
+      GeminiClient: {
+        generateStructured: function() {
+          throw new Error('Gemini must not run for a no-content backlog item.');
+        }
+      },
+      AppLogger: {
+        writeDebugLog: function() {}
+      }
+    }, function() {
+      var first = DiaryService.repairGenerationBacklog();
+      var second = DiaryService.repairGenerationBacklog();
+      assert(first.completedEventsReconciled === 1, 'The stale completed event should be reconciled once.');
+      assert(first.deadRepairEventsEnqueued === 1, 'The unresolved DEAD date should enqueue one repair.');
+      assert(summaries['2026-07-09'].diary_status === 'NONE', 'The completed no-content date should finish as NONE.');
+      assert(summaries['2026-07-10'].diary_status === 'PENDING', 'The repaired DEAD date should move to PENDING.');
+      assert(second.completedEventsReconciled === 0, 'A second backlog pass must not reopen the completed date.');
+      assert(second.deadRepairEventsEnqueued === 0, 'A second backlog pass must not enqueue another active repair.');
+      assert(JSON.stringify(first).indexOf(completedEvent.eventId) === -1, 'Backlog results must not expose event ids.');
     });
   });
 

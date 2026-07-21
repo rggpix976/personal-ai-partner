@@ -5,10 +5,21 @@ var DiaryService = (function() {
 
   function enqueue(diaryDate) {
     var normalizedDate = normalizeDiaryDate_(diaryDate);
+    var lifecycle = getLifecycleState_(normalizedDate);
+    if (lifecycle.status !== 'MISSING') {
+      return {
+        enqueued: false,
+        duplicate: lifecycle.status === 'PENDING',
+        reason: getLifecycleNoEnqueueReason_(lifecycle.status),
+        diaryDate: normalizedDate,
+        diaryStatus: lifecycle.status
+      };
+    }
     var requestedAt = toIsoStringInTokyo(new Date());
     var dedupeKey = buildDedupeKey_(normalizedDate);
-    var event = {
-      eventId: generateUuidV4(),
+    var candidateEventId = generateUuidV4();
+    var event = QueueService.enqueue({
+      eventId: candidateEventId,
       eventType: 'DIARY_GENERATE',
       dedupeKey: dedupeKey,
       payload: {
@@ -24,42 +35,23 @@ var DiaryService = (function() {
       updatedAt: requestedAt,
       completedAt: null,
       lastError: null
-    };
-
-    try {
-      SheetRepository.insertEvent(event);
-    } catch (error) {
-      var normalized = normalizeError(error);
-      if (normalized.code !== 'DUPLICATE_REQUEST') {
-        throw normalized;
-      }
-      var existing = SheetRepository.getActiveEventByDedupeKey(dedupeKey);
-      return {
-        enqueued: false,
-        duplicate: true,
-        eventId: existing ? existing.eventId : null,
-        dedupeKey: dedupeKey,
-        diaryDate: normalizedDate
-      };
-    }
+    });
 
     markDailySummaryPending_(normalizedDate, requestedAt);
+    var wasInserted = event.eventId === candidateEventId;
     return {
-      enqueued: true,
-      duplicate: false,
+      enqueued: wasInserted,
+      duplicate: !wasInserted,
       eventId: event.eventId,
       dedupeKey: dedupeKey,
-      diaryDate: normalizedDate
+      diaryDate: normalizedDate,
+      diaryStatus: 'PENDING'
     };
   }
 
   function isGenerated(diaryDate) {
     var normalizedDate = normalizeDiaryDate_(diaryDate);
-    var summary = SheetRepository.getDailySummary(normalizedDate);
-    if (summary && summary.diary_status === 'DONE') {
-      return true;
-    }
-    return Boolean(DocumentRepository.findDiaryEntryAnchor(normalizedDate));
+    return getLifecycleState_(normalizedDate).status === 'DONE';
   }
 
   function generate(eventPayload) {
@@ -68,6 +60,7 @@ var DiaryService = (function() {
     var warnings = [];
     var existingState = getDiaryState_(diaryDate);
 
+    ensureConsistentDiaryState_(existingState);
     if (existingState.generated) {
       return repairGeneratedDiaryState_(diaryDate, null, null, warnings);
     }
@@ -78,7 +71,15 @@ var DiaryService = (function() {
 
     if (messages.length === 0 && !includePartnerWorld) {
       warnings.push('No conversation messages were found and Partner World was not selected for the diary date.');
-      return buildSkippedResult_(diaryDate, warnings);
+      return LockManager.withScriptLock('diary-skip-' + diaryDate, function() {
+        var skippedState = getDiaryState_(diaryDate);
+        ensureConsistentDiaryState_(skippedState);
+        if (skippedState.generated) {
+          return repairGeneratedDiaryStateWithoutLock_(diaryDate, messages, null, warnings);
+        }
+        persistDiarySkipped_(diaryDate, messages);
+        return buildSkippedResult_(diaryDate, warnings);
+      });
     }
 
     var relevantMemories = [];
@@ -118,6 +119,7 @@ var DiaryService = (function() {
     );
     return LockManager.withScriptLock('diary-generate-' + diaryDate, function() {
       var currentState = getDiaryState_(diaryDate);
+      ensureConsistentDiaryState_(currentState);
       if (currentState.generated) {
         return repairGeneratedDiaryStateWithoutLock_(diaryDate, messages, null, warnings);
       }
@@ -144,18 +146,36 @@ var DiaryService = (function() {
     });
   }
 
-  function markDailySummaryPending_(diaryDate, now) {
-    var existing = SheetRepository.getDailySummary(diaryDate);
-    SheetRepository.upsertDailySummary({
-      summaryDate: diaryDate,
-      conversationCount: existing ? existing.conversation_count : 0,
-      summaryText: existing ? existing.summary_text : null,
-      keyTopics: existing ? existing.key_topics_json : null,
-      memoryCandidateCount: existing ? existing.memory_candidate_count : 0,
-      diaryStatus: isGenerated(diaryDate) ? 'DONE' : 'PENDING',
-      diaryDocAnchor: existing ? existing.diary_doc_anchor : null,
-      createdAt: existing ? existing.created_at : now,
-      updatedAt: now
+  function markDailySummaryPending_(diaryDate, now, allowRepairTransition) {
+    return LockManager.withScriptLock('diary-pending-' + diaryDate, function() {
+      var existing = SheetRepository.getDailySummary(diaryDate);
+      var currentStatus = existing && existing.diary_status
+        ? String(existing.diary_status)
+        : null;
+      var canMarkPending = currentStatus === null ||
+        currentStatus === 'PENDING' ||
+        (allowRepairTransition === true && currentStatus === 'FAILED');
+      if (!canMarkPending) {
+        return {
+          diaryDate: diaryDate,
+          status: currentStatus || 'INCONSISTENT'
+        };
+      }
+      SheetRepository.upsertDailySummary({
+        summaryDate: diaryDate,
+        conversationCount: existing ? existing.conversation_count : 0,
+        summaryText: existing ? existing.summary_text : null,
+        keyTopics: existing ? existing.key_topics_json : null,
+        memoryCandidateCount: existing ? existing.memory_candidate_count : 0,
+        diaryStatus: 'PENDING',
+        diaryDocAnchor: null,
+        createdAt: existing ? existing.created_at : now,
+        updatedAt: now
+      });
+      return {
+        diaryDate: diaryDate,
+        status: 'PENDING'
+      };
     });
   }
 
@@ -170,15 +190,70 @@ var DiaryService = (function() {
   }
 
   function getDiaryState_(diaryDate) {
-    var summary = SheetRepository.getDailySummary(diaryDate);
-    var anchor = summary && summary.diary_doc_anchor
-      ? String(summary.diary_doc_anchor)
-      : DocumentRepository.findDiaryEntryAnchor(diaryDate);
+    var lifecycle = getLifecycleState_(diaryDate);
     return {
-      generated: Boolean((summary && summary.diary_status === 'DONE') || anchor),
-      summary: summary,
-      anchor: anchor || null
+      generated: lifecycle.status === 'DONE',
+      inconsistent: lifecycle.status === 'INCONSISTENT',
+      summary: lifecycle.summary,
+      summaryStatus: lifecycle.summaryStatus,
+      anchor: lifecycle.anchor,
+      anchorCount: lifecycle.anchorCount
     };
+  }
+
+  function getLifecycleState_(diaryDate) {
+    var normalizedDate = normalizeDiaryDate_(diaryDate);
+    var summary = SheetRepository.getDailySummary(normalizedDate);
+    var summaryStatus = summary && summary.diary_status
+      ? String(summary.diary_status)
+      : null;
+    var anchorCount = getDiaryAnchorCount_(normalizedDate);
+    var anchor = anchorCount === 1
+      ? DocumentRepository.findDiaryEntryAnchor(normalizedDate)
+      : null;
+    var status = 'MISSING';
+
+    if (anchorCount > 1 || (summaryStatus === 'DONE' && anchorCount === 0)) {
+      status = 'INCONSISTENT';
+    } else if (anchorCount === 1) {
+      status = 'DONE';
+    } else if (summaryStatus === 'PENDING' || summaryStatus === 'FAILED' || summaryStatus === 'NONE') {
+      status = summaryStatus;
+    } else if (summaryStatus) {
+      status = 'INCONSISTENT';
+    }
+
+    return {
+      diaryDate: normalizedDate,
+      status: status,
+      summaryStatus: summaryStatus,
+      summary: summary,
+      anchor: anchor || null,
+      anchorCount: anchorCount
+    };
+  }
+
+  function getSanitizedLifecycleState_(diaryDate) {
+    var lifecycle = getLifecycleState_(diaryDate);
+    return {
+      status: lifecycle.status,
+      anchorCount: lifecycle.anchorCount
+    };
+  }
+
+  function getDiaryAnchorCount_(diaryDate) {
+    if (DocumentRepository && typeof DocumentRepository.countDiaryEntryAnchors === 'function') {
+      return Number(DocumentRepository.countDiaryEntryAnchors(diaryDate) || 0);
+    }
+    return DocumentRepository.findDiaryEntryAnchor(diaryDate) ? 1 : 0;
+  }
+
+  function ensureConsistentDiaryState_(state) {
+    ensure(
+      state && state.inconsistent !== true && state.status !== 'INCONSISTENT',
+      'STORAGE_DATA_CORRUPTED',
+      'Diary summary and document anchor state are inconsistent.'
+    );
   }
 
   function repairGeneratedDiaryState_(diaryDate, messages, anchorOverride, warnings, documentId) {
@@ -233,6 +308,357 @@ var DiaryService = (function() {
     SheetRepository.updateUserState({
       last_diary_date: diaryDate
     });
+  }
+
+  function persistDiarySkipped_(diaryDate, messages) {
+    var now = toIsoStringInTokyo(new Date());
+    var existingSummary = SheetRepository.getDailySummary(diaryDate);
+    SheetRepository.upsertDailySummary({
+      summaryDate: diaryDate,
+      conversationCount: messages ? messages.length : Number(existingSummary && existingSummary.conversation_count || 0),
+      summaryText: existingSummary ? existingSummary.summary_text : null,
+      keyTopics: existingSummary ? existingSummary.key_topics_json : null,
+      memoryCandidateCount: existingSummary ? Number(existingSummary.memory_candidate_count || 0) : 0,
+      diaryStatus: 'NONE',
+      diaryDocAnchor: null,
+      createdAt: existingSummary ? existingSummary.created_at : now,
+      updatedAt: now
+    });
+  }
+
+  function markFailed(eventPayload) {
+    var payload = validateGeneratePayload_(eventPayload);
+    var diaryDate = payload.diaryDate;
+    return LockManager.withScriptLock('diary-failed-' + diaryDate, function() {
+      var anchorCount = getDiaryAnchorCount_(diaryDate);
+      if (anchorCount > 1) {
+        return {
+          marked: false,
+          diaryStatus: 'INCONSISTENT',
+          reason: 'DUPLICATE_DIARY_ANCHOR'
+        };
+      }
+      var existingSummary = SheetRepository.getDailySummary(diaryDate);
+      if (anchorCount === 1) {
+        var anchor = DocumentRepository.findDiaryEntryAnchor(diaryDate);
+        persistDiaryDoneFromExisting_(diaryDate, null, existingSummary, anchor);
+        return {
+          marked: false,
+          diaryStatus: 'DONE',
+          reason: 'DIARY_ALREADY_EXISTS'
+        };
+      }
+      if (existingSummary && existingSummary.diary_status === 'DONE') {
+        return {
+          marked: false,
+          diaryStatus: 'INCONSISTENT',
+          reason: 'DONE_WITHOUT_DIARY_ANCHOR'
+        };
+      }
+      var now = toIsoStringInTokyo(new Date());
+      SheetRepository.upsertDailySummary({
+        summaryDate: diaryDate,
+        conversationCount: existingSummary ? Number(existingSummary.conversation_count || 0) : 0,
+        summaryText: existingSummary ? existingSummary.summary_text : null,
+        keyTopics: existingSummary ? existingSummary.key_topics_json : null,
+        memoryCandidateCount: existingSummary ? Number(existingSummary.memory_candidate_count || 0) : 0,
+        diaryStatus: 'FAILED',
+        diaryDocAnchor: null,
+        createdAt: existingSummary ? existingSummary.created_at : now,
+        updatedAt: now
+      });
+      return {
+        marked: true,
+        diaryStatus: 'FAILED',
+        reason: 'TERMINAL_QUEUE_FAILURE'
+      };
+    });
+  }
+
+  function assessDeadGeneration(eventId) {
+    var event = SheetRepository.getEventById(eventId);
+    ensure(event, 'CONFIG_MISSING', 'Event was not found.');
+    ensure(event.eventType === 'DIARY_GENERATE', 'VALIDATION_REQUEST_INVALID', 'Diary assessment requires a DIARY_GENERATE event.');
+    ensure(event.status === 'DEAD', 'VALIDATION_REQUEST_INVALID', 'Diary assessment requires a DEAD event.');
+    var diaryDate = event.payload && event.payload.diaryDate;
+    Validators.assertDateString(diaryDate, 'event.payload.diaryDate');
+    var lifecycle = getLifecycleState_(diaryDate);
+    var activeEvent = findActiveDiaryEvent_(diaryDate);
+    var result = {
+      eventType: 'DIARY_GENERATE',
+      status: 'DEAD',
+      diaryStatus: lifecycle.status,
+      anchorCount: lifecycle.anchorCount,
+      action: 'REQUEUE_AS_NEW_EVENT',
+      reason: lifecycle.status === 'DONE'
+        ? 'RECONCILE_EXISTING_DIARY'
+        : 'REGENERATE_MISSING_DIARY'
+    };
+
+    if (lifecycle.anchorCount > 1) {
+      result.action = 'MANUAL_REVIEW_REQUIRED';
+      result.reason = 'DUPLICATE_DIARY_ANCHOR';
+    } else if (lifecycle.summaryStatus === 'DONE' && lifecycle.anchorCount === 0) {
+      result.action = 'MANUAL_REVIEW_REQUIRED';
+      result.reason = 'DONE_WITHOUT_DIARY_ANCHOR';
+    } else if (lifecycle.status === 'NONE') {
+      result.action = 'NO_ACTION';
+      result.reason = 'DIARY_NOT_REQUIRED';
+    } else if (activeEvent) {
+      result.action = 'NO_ACTION';
+      result.reason = 'ACTIVE_DIARY_EVENT_EXISTS';
+    } else if (lifecycle.status === 'DONE' && hasNewerCompletedDiaryEvent_(event)) {
+      result.action = 'NO_ACTION';
+      result.reason = 'DIARY_FAILURE_ALREADY_RESOLVED';
+    }
+    return result;
+  }
+
+  function repairDeadGeneration(eventId, manualRequestId) {
+    Validators.assertUuidV4(manualRequestId, 'manualRequestId');
+    var assessment = assessDeadGeneration(eventId);
+    ensure(
+      assessment.action !== 'MANUAL_REVIEW_REQUIRED',
+      'STORAGE_DATA_CORRUPTED',
+      'Diary repair requires manual review before any new event is created.'
+    );
+    if (assessment.action === 'NO_ACTION') {
+      return {
+        enqueued: false,
+        duplicate: true,
+        eventType: 'DIARY_GENERATE',
+        diaryStatus: assessment.diaryStatus,
+        action: assessment.action,
+        reason: assessment.reason
+      };
+    }
+
+    var originalEvent = SheetRepository.getEventById(eventId);
+    var diaryDate = originalEvent.payload.diaryDate;
+    var expectedDedupeKey = 'DIARY_GENERATE_REPAIR:' + diaryDate + ':' + manualRequestId;
+    var existingRepair = SheetRepository.getEventByDedupeKey(expectedDedupeKey);
+    if (existingRepair) {
+      return {
+        enqueued: false,
+        duplicate: true,
+        eventType: 'DIARY_GENERATE',
+        diaryStatus: assessment.diaryStatus,
+        action: 'NO_ACTION',
+        reason: 'REPAIR_REQUEST_ALREADY_RECORDED'
+      };
+    }
+    var repairEvent = QueueService.requeueDeadDiaryAsNewEvent(
+      eventId,
+      manualRequestId,
+      new Date()
+    );
+    if (assessment.diaryStatus !== 'DONE') {
+      markDailySummaryPending_(
+        diaryDate,
+        repairEvent.createdAt || toIsoStringInTokyo(new Date()),
+        true
+      );
+    }
+    return {
+      enqueued: repairEvent.dedupeKey === expectedDedupeKey && repairEvent.status === 'PENDING',
+      duplicate: repairEvent.dedupeKey !== expectedDedupeKey || repairEvent.status !== 'PENDING',
+      eventType: 'DIARY_GENERATE',
+      diaryStatus: assessment.diaryStatus === 'DONE' ? 'DONE' : 'PENDING',
+      action: 'REQUEUE_AS_NEW_EVENT',
+      reason: assessment.reason
+    };
+  }
+
+  function assessCompletedGeneration(eventId) {
+    var event = SheetRepository.getEventById(eventId);
+    ensure(event, 'CONFIG_MISSING', 'Event was not found.');
+    ensure(event.eventType === 'DIARY_GENERATE', 'VALIDATION_REQUEST_INVALID', 'Diary reconciliation requires a DIARY_GENERATE event.');
+    ensure(event.status === 'DONE', 'VALIDATION_REQUEST_INVALID', 'Diary reconciliation requires a DONE event.');
+    var diaryDate = event.payload && event.payload.diaryDate;
+    Validators.assertDateString(diaryDate, 'event.payload.diaryDate');
+    var lifecycle = getLifecycleState_(diaryDate);
+    var activeEvent = findActiveDiaryEvent_(diaryDate);
+    var result = {
+      eventType: 'DIARY_GENERATE',
+      status: 'DONE',
+      diaryStatus: lifecycle.status,
+      anchorCount: lifecycle.anchorCount,
+      action: 'RECONCILE_COMPLETED_EVENT',
+      reason: 'COMPLETED_EVENT_WITHOUT_TERMINAL_DIARY_STATE'
+    };
+
+    if (lifecycle.status === 'INCONSISTENT') {
+      result.action = 'MANUAL_REVIEW_REQUIRED';
+      result.reason = lifecycle.anchorCount > 1
+        ? 'DUPLICATE_DIARY_ANCHOR'
+        : 'DONE_WITHOUT_DIARY_ANCHOR';
+    } else if (lifecycle.status === 'DONE' || lifecycle.status === 'NONE') {
+      result.action = 'NO_ACTION';
+      result.reason = 'DIARY_ALREADY_TERMINAL';
+    } else if (activeEvent) {
+      result.action = 'NO_ACTION';
+      result.reason = 'ACTIVE_DIARY_EVENT_EXISTS';
+    }
+    return result;
+  }
+
+  function reconcileCompletedGeneration(eventId) {
+    var assessment = assessCompletedGeneration(eventId);
+    ensure(
+      assessment.action !== 'MANUAL_REVIEW_REQUIRED',
+      'STORAGE_DATA_CORRUPTED',
+      'Completed diary reconciliation requires manual review.'
+    );
+    if (assessment.action === 'NO_ACTION') {
+      return {
+        reconciled: false,
+        eventType: 'DIARY_GENERATE',
+        diaryStatus: assessment.diaryStatus,
+        action: assessment.action,
+        reason: assessment.reason
+      };
+    }
+
+    var event = SheetRepository.getEventById(eventId);
+    generate(event.payload);
+    var lifecycle = getLifecycleState_(event.payload.diaryDate);
+    ensure(
+      lifecycle.status === 'DONE' || lifecycle.status === 'NONE',
+      'STORAGE_DATA_CORRUPTED',
+      'Completed diary reconciliation did not reach a terminal state.'
+    );
+    return {
+      reconciled: true,
+      eventType: 'DIARY_GENERATE',
+      diaryStatus: lifecycle.status,
+      action: 'RECONCILED',
+      reason: lifecycle.status === 'DONE'
+        ? 'DIARY_GENERATED'
+        : 'DIARY_NOT_REQUIRED'
+    };
+  }
+
+  function repairGenerationBacklog() {
+    var events = SheetRepository.listEventsByType('DIARY_GENERATE');
+    var result = {
+      completedEventsAssessed: 0,
+      completedEventsReconciled: 0,
+      deadEventsAssessed: 0,
+      deadRepairEventsEnqueued: 0,
+      noAction: 0,
+      manualReviewRequired: 0,
+      failed: 0
+    };
+    var completedDates = {};
+
+    events.filter(function(event) {
+      return event.status === 'DONE';
+    }).forEach(function(event) {
+      var diaryDate = event.payload && event.payload.diaryDate;
+      if (!Validators.isDateString(diaryDate) || completedDates[diaryDate]) {
+        return;
+      }
+      completedDates[diaryDate] = true;
+      result.completedEventsAssessed += 1;
+      try {
+        var completedAssessment = assessCompletedGeneration(event.eventId);
+        if (completedAssessment.action === 'RECONCILE_COMPLETED_EVENT') {
+          var reconciliation = reconcileCompletedGeneration(event.eventId);
+          result.completedEventsReconciled += reconciliation.reconciled ? 1 : 0;
+        } else if (completedAssessment.action === 'MANUAL_REVIEW_REQUIRED') {
+          result.manualReviewRequired += 1;
+        } else {
+          result.noAction += 1;
+        }
+      } catch (error) {
+        recordBacklogRepairFailure_(error, 'COMPLETED_RECONCILIATION');
+        result.failed += 1;
+      }
+    });
+
+    events.filter(function(event) {
+      return event.status === 'DEAD';
+    }).forEach(function(event) {
+      result.deadEventsAssessed += 1;
+      try {
+        var deadAssessment = assessDeadGeneration(event.eventId);
+        if (deadAssessment.action === 'REQUEUE_AS_NEW_EVENT') {
+          var repair = repairDeadGeneration(event.eventId, generateUuidV4());
+          result.deadRepairEventsEnqueued += repair.enqueued ? 1 : 0;
+          result.noAction += repair.enqueued ? 0 : 1;
+        } else if (deadAssessment.action === 'MANUAL_REVIEW_REQUIRED') {
+          result.manualReviewRequired += 1;
+        } else {
+          result.noAction += 1;
+        }
+      } catch (error) {
+        recordBacklogRepairFailure_(error, 'DEAD_REPAIR');
+        result.failed += 1;
+      }
+    });
+    return result;
+  }
+
+  function hasNewerCompletedDiaryEvent_(sourceEvent) {
+    var diaryDate = sourceEvent && sourceEvent.payload && sourceEvent.payload.diaryDate;
+    if (!Validators.isDateString(diaryDate)) {
+      return false;
+    }
+    var sourceTime = getDiaryEventTime_(sourceEvent);
+    return SheetRepository.listEventsByType('DIARY_GENERATE').some(function(candidate) {
+      return candidate.eventId !== sourceEvent.eventId &&
+        candidate.status === 'DONE' &&
+        candidate.payload &&
+        candidate.payload.diaryDate === diaryDate &&
+        getDiaryEventTime_(candidate) >= sourceTime;
+    });
+  }
+
+  function getDiaryEventTime_(event) {
+    var value = event && (event.completedAt || event.updatedAt || event.createdAt);
+    var time = value instanceof Date ? value.getTime() : new Date(value).getTime();
+    return isFinite(time) ? time : 0;
+  }
+
+  function recordBacklogRepairFailure_(error, phase) {
+    var normalized = normalizeError(error);
+    AppLogger.writeDebugLog(
+      'WARN',
+      'repairDiaryGenerationBacklog',
+      'A diary backlog item could not be repaired.',
+      {
+        phase: phase,
+        errorCode: normalized.code
+      }
+    );
+  }
+
+  function findActiveDiaryEvent_(diaryDate) {
+    if (!SheetRepository || typeof SheetRepository.listEventsByType !== 'function') {
+      return SheetRepository.getActiveEventByDedupeKey(buildDedupeKey_(diaryDate));
+    }
+    var activeStatuses = {
+      PENDING: true,
+      PROCESSING: true,
+      RETRY_WAIT: true
+    };
+    var events = SheetRepository.listEventsByType('DIARY_GENERATE').filter(function(event) {
+      return activeStatuses[event.status] &&
+        event.payload &&
+        event.payload.diaryDate === diaryDate;
+    });
+    return events.length > 0 ? events[0] : null;
+  }
+
+  function getLifecycleNoEnqueueReason_(status) {
+    var reasons = {
+      DONE: 'ALREADY_GENERATED',
+      NONE: 'DIARY_NOT_REQUIRED',
+      PENDING: 'DIARY_ALREADY_PENDING',
+      FAILED: 'DIARY_MANUAL_REPAIR_REQUIRED',
+      INCONSISTENT: 'DIARY_MANUAL_REVIEW_REQUIRED'
+    };
+    return reasons[status] || 'DIARY_NOT_ENQUEUED';
   }
 
   function buildDiaryRequest_(diaryDate, messages, memories, recentDiarySummaries, configOverride) {
@@ -561,6 +987,13 @@ var DiaryService = (function() {
     enqueue: enqueue,
     generate: generate,
     isGenerated: isGenerated,
+    getLifecycleState: getSanitizedLifecycleState_,
+    markFailed: markFailed,
+    assessDeadGeneration: assessDeadGeneration,
+    repairDeadGeneration: repairDeadGeneration,
+    assessCompletedGeneration: assessCompletedGeneration,
+    reconcileCompletedGeneration: reconcileCompletedGeneration,
+    repairGenerationBacklog: repairGenerationBacklog,
     __test: {
       buildDedupeKey: buildDedupeKey_,
       buildDiaryRequest: buildDiaryRequest_,
@@ -568,7 +1001,8 @@ var DiaryService = (function() {
       shouldIncludePartnerWorld: shouldIncludePartnerWorld_,
       normalizeDiaryEntry: normalizeDiaryEntry_,
       renderDiaryBody: renderDiaryBody_,
-      getDiaryState: getDiaryState_
+      getDiaryState: getDiaryState_,
+      getLifecycleState: getLifecycleState_
     }
   };
 })();

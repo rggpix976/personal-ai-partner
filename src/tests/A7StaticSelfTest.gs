@@ -45,6 +45,11 @@ function runA7StaticSelfTest() {
     assert(typeof runOperationalHealthCheck === 'function', 'runOperationalHealthCheck is missing.');
     assert(typeof assessDeadQueueEvent === 'function', 'assessDeadQueueEvent is missing.');
     assert(typeof requeueDeadChatReply === 'function', 'requeueDeadChatReply is missing.');
+    assert(typeof assessDeadDiaryGeneration === 'function', 'assessDeadDiaryGeneration is missing.');
+    assert(typeof repairDeadDiaryGeneration === 'function', 'repairDeadDiaryGeneration is missing.');
+    assert(typeof assessCompletedDiaryGeneration === 'function', 'assessCompletedDiaryGeneration is missing.');
+    assert(typeof reconcileCompletedDiaryGeneration === 'function', 'reconcileCompletedDiaryGeneration is missing.');
+    assert(typeof repairDiaryGenerationBacklog === 'function', 'repairDiaryGenerationBacklog is missing.');
   });
 
   test('setup validation globals are present', function() {
@@ -73,12 +78,20 @@ function runA7StaticSelfTest() {
     assert(hasFunction('QueueService', 'markDead'), 'QueueService.markDead is missing.');
     assert(hasFunction('QueueService', 'recoverStale'), 'QueueService.recoverStale is missing.');
     assert(hasFunction('QueueService', 'requeueDeadAsNewEvent'), 'QueueService.requeueDeadAsNewEvent is missing.');
+    assert(hasFunction('QueueService', 'requeueDeadDiaryAsNewEvent'), 'QueueService.requeueDeadDiaryAsNewEvent is missing.');
     assert(hasFunction('QueueService', 'assessDeadEventRecovery'), 'QueueService.assessDeadEventRecovery is missing.');
     assert(hasFunction('OperationalHealthService', 'inspect'), 'OperationalHealthService.inspect is missing.');
     assert(hasFunction('OperationalHealthService', 'run'), 'OperationalHealthService.run is missing.');
     assert(hasFunction('MemoryService', 'extract'), 'MemoryService.extract is missing.');
     assert(hasFunction('MemoryService', 'findRelevant'), 'MemoryService.findRelevant is missing.');
     assert(hasFunction('DiaryService', 'generate'), 'DiaryService.generate is missing.');
+    assert(hasFunction('DiaryService', 'getLifecycleState'), 'DiaryService.getLifecycleState is missing.');
+    assert(hasFunction('DiaryService', 'markFailed'), 'DiaryService.markFailed is missing.');
+    assert(hasFunction('DiaryService', 'assessDeadGeneration'), 'DiaryService.assessDeadGeneration is missing.');
+    assert(hasFunction('DiaryService', 'repairDeadGeneration'), 'DiaryService.repairDeadGeneration is missing.');
+    assert(hasFunction('DiaryService', 'assessCompletedGeneration'), 'DiaryService.assessCompletedGeneration is missing.');
+    assert(hasFunction('DiaryService', 'reconcileCompletedGeneration'), 'DiaryService.reconcileCompletedGeneration is missing.');
+    assert(hasFunction('DiaryService', 'repairGenerationBacklog'), 'DiaryService.repairGenerationBacklog is missing.');
     assert(hasFunction('ProactiveMessageService', 'evaluateLocalConditions'), 'ProactiveMessageService.evaluateLocalConditions is missing.');
     assert(hasFunction('ProactiveMessageService', 'send'), 'ProactiveMessageService.send is missing.');
   });
@@ -92,6 +105,7 @@ function runA7StaticSelfTest() {
     assert(hasFunction('SheetRepository', 'insertEvent'), 'SheetRepository.insertEvent is missing.');
     assert(hasFunction('DriveTempRepository', 'cleanupExpiredTempImages'), 'DriveTempRepository.cleanupExpiredTempImages is missing.');
     assert(hasFunction('DocumentRepository', 'appendDiaryEntry'), 'DocumentRepository.appendDiaryEntry is missing.');
+    assert(hasFunction('DocumentRepository', 'countDiaryEntryAnchors'), 'DocumentRepository.countDiaryEntryAnchors is missing.');
   });
 
   return results;

@@ -38,6 +38,13 @@ var DocumentRepository = (function() {
     return findDiaryAnchorInBody_(document.getBody(), anchor);
   }
 
+  function countDiaryEntryAnchors(diaryDate) {
+    Validators.assertDateString(diaryDate, 'diaryDate');
+    var anchor = getDiaryAnchor_(diaryDate);
+    var document = createOrOpenDiaryDocument();
+    return countDiaryAnchorsInBody_(document.getBody(), anchor);
+  }
+
   function appendDiaryEntry(entry) {
     Validators.assertDateString(entry.diaryDate, 'entry.diaryDate');
     var document = createOrOpenDiaryDocument();
@@ -75,19 +82,25 @@ var DocumentRepository = (function() {
   }
 
   function findDiaryAnchorInBody_(body, anchor) {
+    return countDiaryAnchorsInBody_(body, anchor) > 0 ? anchor : null;
+  }
+
+  function countDiaryAnchorsInBody_(body, anchor) {
     var paragraphs = body.getParagraphs();
+    var count = 0;
     for (var i = 0; i < paragraphs.length; i += 1) {
       if (String(paragraphs[i].getText()).trim() === anchor) {
-        return anchor;
+        count += 1;
       }
     }
-    return null;
+    return count;
   }
 
   return {
     createOrOpenDiaryDocument: createOrOpenDiaryDocument,
     validateDiaryDocument: validateDiaryDocument,
     findDiaryEntryAnchor: findDiaryEntryAnchor,
+    countDiaryEntryAnchors: countDiaryEntryAnchors,
     appendDiaryEntry: appendDiaryEntry
   };
 })();
