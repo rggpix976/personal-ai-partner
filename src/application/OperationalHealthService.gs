@@ -27,6 +27,7 @@ var OperationalHealthService = (function() {
     var recentDeadByEventType = initializeCountMap_(APP_CONSTANTS.EVENT_TYPES);
     var recentDeadByErrorCode = {};
     var recentDeadCount = 0;
+    var resolvedRecentDeadCount = 0;
     var staleProcessingCount = 0;
     var overduePendingCount = 0;
     var overdueRetryCount = 0;
@@ -57,6 +58,10 @@ var OperationalHealthService = (function() {
       }
 
       if (event.status === 'DEAD' && getEventTerminalTime_(event) >= deadAfter) {
+        if (isResolvedDiaryDead_(event, events)) {
+          resolvedRecentDeadCount += 1;
+          return;
+        }
         recentDeadCount += 1;
         if (Object.prototype.hasOwnProperty.call(recentDeadByEventType, event.eventType)) {
           recentDeadByEventType[event.eventType] += 1;
@@ -86,6 +91,7 @@ var OperationalHealthService = (function() {
         recentDead: {
           lookbackHours: deadLookbackHours,
           total: recentDeadCount,
+          resolvedTotal: resolvedRecentDeadCount,
           byEventType: recentDeadByEventType,
           byErrorCode: recentDeadByErrorCode
         },
@@ -243,6 +249,7 @@ var OperationalHealthService = (function() {
       queueByStatus: report.queue.byStatus,
       recentDeadByEventType: report.queue.recentDead.byEventType,
       recentDeadByErrorCode: report.queue.recentDead.byErrorCode,
+      resolvedRecentDeadCount: report.queue.recentDead.resolvedTotal,
       staleProcessingCount: report.queue.staleProcessing.total,
       overduePendingCount: report.queue.overdue.pending,
       overdueRetryWaitCount: report.queue.overdue.retryWait,
@@ -257,7 +264,8 @@ var OperationalHealthService = (function() {
       'Personal AI Partner operational health: ' + report.status,
       'Checked at: ' + report.checkedAt,
       '',
-      'Recent DEAD events: ' + report.queue.recentDead.total,
+      'Unresolved recent DEAD events: ' + report.queue.recentDead.total,
+      'Resolved recent DEAD events retained for audit: ' + report.queue.recentDead.resolvedTotal,
       'Stale PROCESSING events: ' + details.staleProcessingCount,
       'Overdue PENDING events: ' + details.overduePendingCount,
       'Overdue RETRY_WAIT events: ' + details.overdueRetryWaitCount,
@@ -318,6 +326,25 @@ var OperationalHealthService = (function() {
 
   function getEventTerminalTime_(event) {
     return safeTime_(event.completedAt || event.updatedAt || event.createdAt);
+  }
+
+  function isResolvedDiaryDead_(event, events) {
+    if (!event || event.eventType !== 'DIARY_GENERATE') {
+      return false;
+    }
+    var diaryDate = event.payload && event.payload.diaryDate;
+    if (!Validators.isDateString(diaryDate)) {
+      return false;
+    }
+    var deadTime = getEventTerminalTime_(event);
+    return (events || []).some(function(candidate) {
+      return candidate !== event &&
+        candidate.eventType === 'DIARY_GENERATE' &&
+        candidate.status === 'DONE' &&
+        candidate.payload &&
+        candidate.payload.diaryDate === diaryDate &&
+        getEventTerminalTime_(candidate) >= deadTime;
+    });
   }
 
   function safeTime_(value) {

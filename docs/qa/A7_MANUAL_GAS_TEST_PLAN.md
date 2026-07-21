@@ -243,6 +243,44 @@ Expected:
 - Diary entry is appended to the Google Doc.
 - `daily_summaries.diary_status` becomes `DONE`.
 - Re-running the same event does not append a duplicate entry.
+- When there is no conversation and Partner World is not selected,
+  `daily_summaries.diary_status` becomes terminal `NONE` and the scheduler does
+  not enqueue the date again.
+- A terminal queue failure becomes `FAILED`; the scheduler does not replay it.
+
+For a controlled `DEAD` diary event, run the dedicated recovery path from a
+trusted operator context:
+
+```text
+assessDeadDiaryGeneration(eventId)
+repairDeadDiaryGeneration(eventId, manualRequestId)
+```
+
+Expected:
+
+- assessment contains only controlled status, action, reason, and anchor count;
+- the original event remains `DEAD`;
+- one new repair event is created;
+- reusing the same UUID v4 does not create another event;
+- the repaired date becomes `DONE` with one anchor, or terminal `NONE` when no
+  supported diary content exists;
+- health no longer counts the old `DEAD` as unresolved after the repair event
+  reaches `DONE`.
+
+For the approved full backlog, run the parameterless operator function:
+
+```text
+repairDiaryGenerationBacklog()
+processQueueJob()
+```
+
+Expected:
+
+- completed queue events whose summary remained non-terminal are reconciled
+  first;
+- unresolved `DEAD` dates receive at most one active repair event each;
+- returned values contain aggregate counts only and no IDs or content;
+- running the backlog function again does not reopen `DONE` or `NONE` dates.
 
 ## Phase 14: Proactive Email
 

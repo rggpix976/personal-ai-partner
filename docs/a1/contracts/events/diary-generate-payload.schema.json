@@ -16,6 +16,22 @@
     "requestedAt": {
       "type": "string",
       "format": "date-time"
+    },
+    "manualRequestId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "originalEventId": {
+      "type": "string",
+      "format": "uuid"
     }
+  },
+  "dependentRequired": {
+    "manualRequestId": [
+      "originalEventId"
+    ],
+    "originalEventId": [
+      "manualRequestId"
+    ]
   }
 }

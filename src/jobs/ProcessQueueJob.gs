@@ -41,6 +41,26 @@ function requeueDeadChatReply(eventId, manualRequestId) {
   return QueueService.requeueDeadAsNewEvent(eventId, manualRequestId, new Date());
 }
 
+function assessDeadDiaryGeneration(eventId) {
+  return DiaryService.assessDeadGeneration(eventId);
+}
+
+function repairDeadDiaryGeneration(eventId, manualRequestId) {
+  return DiaryService.repairDeadGeneration(eventId, manualRequestId);
+}
+
+function assessCompletedDiaryGeneration(eventId) {
+  return DiaryService.assessCompletedGeneration(eventId);
+}
+
+function reconcileCompletedDiaryGeneration(eventId) {
+  return DiaryService.reconcileCompletedGeneration(eventId);
+}
+
+function repairDiaryGenerationBacklog() {
+  return DiaryService.repairGenerationBacklog();
+}
+
 function processSingleQueueEvent_(event, correlationId) {
   try {
     var result = dispatchQueueEvent_(event);
@@ -128,6 +148,7 @@ function handleQueueFailure_(event, error, correlationId) {
 
   if (!normalized.retryable) {
     QueueService.markDead(event.eventId, normalized);
+    recordDiaryTerminalFailure_(event, normalized, correlationId);
     return;
   }
 
@@ -148,9 +169,34 @@ function handleQueueFailure_(event, error, correlationId) {
   }
   if (decision.action === 'DEAD') {
     QueueService.markDead(event.eventId, normalized);
+    recordDiaryTerminalFailure_(event, normalized, correlationId);
     return;
   }
   QueueService.markRetry(event.eventId, normalized, decision.nextAttemptAt);
+}
+
+function recordDiaryTerminalFailure_(event, error, correlationId) {
+  if (!event || event.eventType !== 'DIARY_GENERATE') {
+    return null;
+  }
+  try {
+    return DiaryService.markFailed(event.payload);
+  } catch (failureError) {
+    var normalized = normalizeError(failureError);
+    AppLogger.writeDebugLog(
+      'WARN',
+      'processQueueJob',
+      'Diary terminal state could not be reconciled after a queue failure.',
+      {
+        eventType: 'DIARY_GENERATE',
+        queueErrorCode: error && error.code ? error.code : 'UNKNOWN',
+        reconciliationErrorCode: normalized.code
+      },
+      correlationId,
+      event.eventId
+    );
+    return null;
+  }
 }
 
 function getQueueBatchSize_() {

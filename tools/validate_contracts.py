@@ -334,6 +334,37 @@ def check_event_contract(results: Results) -> None:
     for event_type, payload in samples.items():
         assert_valid(results, validator, base_event(event_type, payload), f"Event {event_type} payload valid")
 
+    diary_repair_payload = {
+        "diaryDate": "2026-07-05",
+        "requestedAt": NOW,
+        "manualRequestId": UUID_2,
+        "originalEventId": UUID_1,
+    }
+    assert_valid(
+        results,
+        validator,
+        base_event("DIARY_GENERATE", diary_repair_payload),
+        "Event DIARY_GENERATE repair payload valid",
+    )
+
+    missing_original_event = dict(diary_repair_payload)
+    missing_original_event.pop("originalEventId")
+    assert_invalid(
+        results,
+        validator,
+        base_event("DIARY_GENERATE", missing_original_event),
+        "Event DIARY_GENERATE repair payload requires originalEventId",
+    )
+
+    missing_manual_request = dict(diary_repair_payload)
+    missing_manual_request.pop("manualRequestId")
+    assert_invalid(
+        results,
+        validator,
+        base_event("DIARY_GENERATE", missing_manual_request),
+        "Event DIARY_GENERATE repair payload requires manualRequestId",
+    )
+
     wrong = base_event("WEEKLY_BACKUP", samples["DIARY_GENERATE"])
     assert_invalid(results, validator, wrong, "Event payload cannot be used by another eventType")
 

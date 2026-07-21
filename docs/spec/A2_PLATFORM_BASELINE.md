@@ -129,7 +129,7 @@
 | summary_text | string | 任意 |  | 日別要約 |
 | key_topics_json | json | 任意 |  | 話題一覧 |
 | memory_candidate_count | int | 必須 |  | 候補数 |
-| diary_status | enum | 必須 |  | NONE/PENDING/DONE/FAILED |
+| diary_status | enum | 必須 |  | `NONE`: 生成不要と確定、`PENDING`: 処理中、`DONE`: 文書アンカー1件、`FAILED`: 手動修復待ち |
 | diary_doc_anchor | string | 任意 |  | 見出し識別子 |
 | created_at | datetime | 必須 |  | 作成日時 |
 | updated_at | datetime | 必須 |  | 更新日時 |

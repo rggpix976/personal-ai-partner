@@ -51,6 +51,11 @@ Not covered:
 | AT-017 | Memory | Re-run same memory extraction event. | Operation is idempotent and does not create duplicate active memories. | Live/stub |
 | AT-018 | Diary | Enqueue and process `DIARY_GENERATE`. | Diary entry is appended to configured Google Doc and `daily_summaries` is updated. | Live |
 | AT-019 | Diary | Re-run same diary generation. | No duplicate diary heading or body is appended. | Live/stub |
+| AT-019A | Diary | Process a date with no conversation and no Partner World selection. | Summary becomes terminal `NONE`; scheduler does not enqueue it again. | Self-test/live caution |
+| AT-019B | Diary Recovery | Assess and repair a `DEAD` diary event with one UUID v4. | Original stays `DEAD`; one repair event is created and completes as `DONE` or `NONE`. | Live |
+| AT-019C | Diary Recovery | Repeat AT-019B with the same UUID v4. | No additional event or document anchor is created. | Live/stub |
+| AT-019D | Diary Recovery | Present `DONE` without an anchor or duplicate anchors. | Assessment returns `MANUAL_REVIEW_REQUIRED`; no event or document mutation occurs. | Self-test |
+| AT-019E | Diary Recovery | Run backlog repair with a historical queue event that is `DONE` while its summary is still non-terminal. | The date is reconciled to `DONE` or `NONE`, results expose aggregate state only, and a second run is a no-op. | Live/stub |
 | AT-020 | Proactive | Silence threshold reached outside quiet hours. | `PROACTIVE_SEND` event is enqueued once. | Live/stub |
 | AT-021 | Proactive | Quiet hours active. | No proactive event is enqueued. | Self-test |
 | AT-022 | Proactive | Daily max reached. | No additional proactive event is enqueued. | Self-test |

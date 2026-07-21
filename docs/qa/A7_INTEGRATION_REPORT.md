@@ -104,7 +104,8 @@ A7 live checks:
 
 ```text
 schedulerJob()
-  -> DiaryService.enqueue(date)
+  -> DiaryService.getLifecycleState(date)
+  -> DiaryService.enqueue(date) when state is missing
   -> event_queue DIARY_GENERATE
   -> processQueueJob()
   -> DiaryService.generate(...)
@@ -113,13 +114,33 @@ schedulerJob()
   -> SheetRepository daily_summaries
 ```
 
-Status: statically wired.
+Recovery path:
+
+```text
+assessDeadDiaryGeneration(eventId)
+  -> sanitized lifecycle and anchor assessment
+repairDeadDiaryGeneration(eventId, manualRequestId)
+  -> immutable original DEAD event
+  -> idempotent DIARY_GENERATE_REPAIR event
+  -> normal processQueueJob dispatch
+repairDiaryGenerationBacklog()
+  -> reconcile completed but non-terminal dates
+  -> enqueue one repair per unresolved DEAD date
+  -> aggregate-only operator result
+```
+
+Status: statically wired with dedicated diary recovery.
 
 A7 live checks:
 
 - One diary entry per date.
 - Existing Doc anchor repairs `daily_summaries`.
-- No diary is generated for dates with no conversation.
+- Dates with no conversation and no Partner World selection become terminal
+  `NONE` without repeated scheduler enqueue.
+- Terminal generation failures become `FAILED` and require explicit repair.
+- A newer successful repair resolves the old immutable `DEAD` for health status.
+- Historical `DONE` queue events left with a non-terminal summary can be
+  reconciled without exposing dates, IDs, or content in operator results.
 
 ### Proactive Email
 

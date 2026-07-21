@@ -442,6 +442,92 @@ function runA6QueueSchedulerTests() {
     });
   });
 
+  test('requeueDeadDiaryAsNewEvent creates an idempotent repair event and preserves the DEAD event', function() {
+    var inserted = null;
+    var original = {
+      eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      eventType: 'DIARY_GENERATE',
+      status: 'DEAD',
+      payload: {
+        diaryDate: '2026-07-10',
+        requestedAt: '2026-07-10T23:30:00+09:00'
+      }
+    };
+    withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      SheetRepository: {
+        getEventById: function() {
+          return original;
+        },
+        getEventByDedupeKey: function() {
+          return null;
+        },
+        listEventsByType: function() {
+          return [original];
+        },
+        insertEvent: function(event) {
+          inserted = event;
+        }
+      }
+    }, function() {
+      var result = QueueService.requeueDeadDiaryAsNewEvent(
+        original.eventId,
+        '22222222-2222-4222-8222-222222222222',
+        '2026-07-11T09:00:00+09:00'
+      );
+      assert(original.status === 'DEAD', 'The original diary event must remain DEAD.');
+      assert(inserted != null && inserted.eventId !== original.eventId, 'Repair must create a new event.');
+      assert(result.dedupeKey === 'DIARY_GENERATE_REPAIR:2026-07-10:22222222-2222-4222-8222-222222222222', 'Repair must use its own idempotency key.');
+      assert(result.payload.originalEventId === original.eventId, 'Repair payload should retain the audit link.');
+      assert(result.payload.manualRequestId === '22222222-2222-4222-8222-222222222222', 'Repair payload should retain the manual request id.');
+    });
+  });
+
+  test('QueueService allows only one active diary event per date across dedupe formats', function() {
+    var activeRepair = {
+      eventId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      eventType: 'DIARY_GENERATE',
+      dedupeKey: 'DIARY_GENERATE_REPAIR:2026-07-10:22222222-2222-4222-8222-222222222222',
+      payload: {
+        diaryDate: '2026-07-10'
+      },
+      status: 'PENDING',
+      createdAt: '2026-07-11T09:00:00+09:00',
+      updatedAt: '2026-07-11T09:00:00+09:00'
+    };
+    withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      SheetRepository: {
+        listEventsByType: function() {
+          return [activeRepair];
+        },
+        insertEvent: function() {
+          throw new Error('A second active diary event must not be inserted.');
+        }
+      }
+    }, function() {
+      var result = QueueService.enqueue({
+        eventType: 'DIARY_GENERATE',
+        payload: {
+          diaryDate: '2026-07-10',
+          requestedAt: '2026-07-11T09:01:00+09:00'
+        },
+        status: 'PENDING',
+        createdAt: '2026-07-11T09:01:00+09:00',
+        updatedAt: '2026-07-11T09:01:00+09:00'
+      });
+      assert(result.eventId === activeRepair.eventId, 'The active repair event should win date-level deduplication.');
+    });
+  });
+
   test('assessDeadEventRecovery blocks replay of side-effecting events', function() {
     withOverrides({
       SheetRepository: {
@@ -795,8 +881,10 @@ function runA6QueueSchedulerTests() {
         }
       },
       DiaryService: {
-        isGenerated: function() {
-          return false;
+        getLifecycleState: function() {
+          return {
+            status: 'MISSING'
+          };
         },
         enqueue: function(date) {
           queued.push('DIARY_GENERATE:' + date);
@@ -907,6 +995,70 @@ function runA6QueueSchedulerTests() {
     });
   });
 
+  test('scheduler does not automatically replay terminal or in-progress diary states', function() {
+    var enqueueCalls = 0;
+    var currentDiaryStatus = 'PENDING';
+    withOverrides({
+      ConfigRepository: {
+        getByKey: function(key) {
+          return key === 'DIARY_DUE_TIME' ? { value: '00:00' } : null;
+        }
+      },
+      DiaryService: {
+        getLifecycleState: function() {
+          return {
+            status: currentDiaryStatus
+          };
+        },
+        enqueue: function() {
+          enqueueCalls += 1;
+          return { enqueued: true };
+        }
+      }
+    }, function() {
+      var statuses = ['PENDING', 'NONE', 'FAILED', 'INCONSISTENT', 'DONE'];
+      for (var i = 0; i < statuses.length; i += 1) {
+        currentDiaryStatus = statuses[i];
+        var result = enqueueDiaryIfDue_(new Date('2026-07-11T09:00:00+09:00'));
+        assert(result.enqueued === false, statuses[i] + ' must not be auto-enqueued.');
+      }
+      assert(enqueueCalls === 0, 'Terminal and in-progress states must not call DiaryService.enqueue.');
+    });
+  });
+
+  test('terminal DIARY_GENERATE failure records FAILED after preserving the DEAD transition', function() {
+    var deadCalls = 0;
+    var failedCalls = 0;
+    withOverrides({
+      QueueService: {
+        markDead: function() {
+          deadCalls += 1;
+        }
+      },
+      DiaryService: {
+        markFailed: function() {
+          failedCalls += 1;
+          return { marked: true };
+        }
+      },
+      AppLogger: {
+        writeDebugLog: function() {}
+      }
+    }, function() {
+      handleQueueFailure_({
+        eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        eventType: 'DIARY_GENERATE',
+        attemptCount: 0,
+        payload: {
+          diaryDate: '2026-07-10',
+          requestedAt: '2026-07-10T23:30:00+09:00'
+        }
+      }, createAppError('CONFIG_MISSING', 'missing'), 'correlation');
+      assert(deadCalls === 1, 'The queue event must become DEAD first.');
+      assert(failedCalls === 1, 'The diary summary must become FAILED after terminal queue failure.');
+    });
+  });
+
   test('OperationalHealthService reports only aggregate queue and trigger health', function() {
     withOverrides({
       ConfigRepository: {
@@ -966,6 +1118,53 @@ function runA6QueueSchedulerTests() {
       assert(serialized.indexOf('must-not-appear') === -1, 'Payload content must not appear in health output.');
       assert(serialized.indexOf('private failure detail') === -1, 'Error messages must not appear in health output.');
       assert(serialized.indexOf('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa') === -1, 'Event ids must not appear in health output.');
+    });
+  });
+
+  test('OperationalHealthService treats a newer DONE diary repair as resolving an immutable DEAD event', function() {
+    withOverrides({
+      ConfigRepository: {
+        getByKey: function(key) {
+          var values = {
+            OPS_QUEUE_DELAY_GRACE_MINUTES: { value: 20 },
+            QUEUE_STALE_MINUTES: { value: 15 },
+            OPS_DEAD_LOOKBACK_HOURS: { value: 168 }
+          };
+          return values[key] || null;
+        }
+      },
+      SheetRepository: {
+        listEvents: function() {
+          return [{
+            eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            eventType: 'DIARY_GENERATE',
+            status: 'DEAD',
+            payload: { diaryDate: '2026-07-10' },
+            completedAt: '2026-07-10T23:45:00+09:00',
+            lastError: { code: 'GEMINI_BAD_RESPONSE', message: 'private detail' }
+          }, {
+            eventId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            eventType: 'DIARY_GENERATE',
+            status: 'DONE',
+            payload: { diaryDate: '2026-07-10' },
+            completedAt: '2026-07-11T09:05:00+09:00'
+          }];
+        }
+      }
+    }, function() {
+      var report = OperationalHealthService.inspect(
+        new Date('2026-07-11T10:00:00+09:00'),
+        {
+          required: {
+            processQueueJob: { count: 1 },
+            schedulerJob: { count: 1 }
+          }
+        }
+      );
+      assert(report.status === 'OK', 'A successfully repaired diary should no longer degrade health.');
+      assert(report.queue.byStatus.DEAD === 1, 'The immutable DEAD event must remain in audit counts.');
+      assert(report.queue.recentDead.total === 0, 'Resolved DEAD should not count as unresolved.');
+      assert(report.queue.recentDead.resolvedTotal === 1, 'Resolved DEAD should be reported as retained audit history.');
     });
   });
 
