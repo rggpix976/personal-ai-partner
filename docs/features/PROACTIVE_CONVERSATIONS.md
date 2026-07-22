@@ -301,6 +301,13 @@ The Gemini prompt requires one message body only and prohibits:
 Names, persona, and style must come from configuration. They must not be
 hard-coded in implementation or documentation examples.
 
+These prohibitions are prompt-level guidance in the current implementation.
+The current runtime does not yet mechanically detect persona self-reference,
+internal/operational disclosure, or every unsupported user-state claim after
+generation. The target runtime-enforced policy is specified in
+[Character Persona and Immersion Specification](CHARACTER_IMMERSION.md) and is
+not yet implemented or deployed.
+
 ## 14. Output validation and fallback
 
 Generated text is trimmed. One matching pair of surrounding ASCII quotes,
@@ -311,6 +318,10 @@ The resulting body must satisfy:
 ```text
 PROACTIVE_MESSAGE_MIN_CHARS <= body.length <= PROACTIVE_MESSAGE_MAX_CHARS
 ```
+
+Apart from normalization and the length boundary above, the current runtime
+does not apply the common immersion guard proposed in
+[Character Persona and Immersion Specification](CHARACTER_IMMERSION.md).
 
 Too-short or too-long text becomes `GEMINI_BAD_RESPONSE`. The following
 generation failures fall back to `PROACTIVE_BODY_TEMPLATE`:
