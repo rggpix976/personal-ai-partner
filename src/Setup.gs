@@ -31,6 +31,8 @@ function migrateSchema() {
     Object.keys(APP_CONSTANTS.SHEET_SCHEMAS).forEach(function(sheetName) {
       changes = changes.concat(appendMissingColumns_(spreadsheet, sheetName));
     });
+    ConfigRepository.ensureDefaults();
+    ConfigRepository.validateDefaultsPresent();
     PropertiesService.getScriptProperties().setProperty(
       APP_CONSTANTS.PROPERTY_KEYS.SCHEMA_VERSION,
       APP_CONSTANTS.SCHEMA_VERSION

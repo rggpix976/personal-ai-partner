@@ -4,6 +4,8 @@ var APP_ERROR_DEFINITIONS = Object.freeze({
   VALIDATION_IMAGE_UNSUPPORTED: { userMessage: 'Unsupported image format.', retryable: false, retryStrategy: 'NONE', httpStatus: 400 },
   VALIDATION_IMAGE_TOO_LARGE: { userMessage: 'Image is too large.', retryable: false, retryStrategy: 'NONE', httpStatus: 400 },
   CONFIG_MISSING: { userMessage: 'Required configuration is missing.', retryable: false, retryStrategy: 'NONE', httpStatus: 500 },
+  CHARACTER_CONFIG_INVALID: { userMessage: 'Character settings need attention.', retryable: false, retryStrategy: 'NONE', httpStatus: 500 },
+  CHARACTER_CONFIG_CONFLICT: { userMessage: 'Character settings changed. Reload and try again.', retryable: false, retryStrategy: 'NONE', httpStatus: 409 },
   ACCESS_NOT_ALLOWED: { userMessage: 'Access is not allowed.', retryable: false, retryStrategy: 'NONE', httpStatus: 403 },
   DUPLICATE_REQUEST: { userMessage: 'The request has already been processed.', retryable: false, retryStrategy: 'NONE', httpStatus: 409 },
   GEMINI_RATE_LIMIT: { userMessage: 'The AI service is busy.\nPlease try again later.', retryable: true, retryStrategy: 'COMMON_BACKOFF', httpStatus: 429 },

@@ -30,6 +30,10 @@ var SheetRepository = (function() {
     });
   }
 
+  function flush() {
+    SpreadsheetApp.flush();
+  }
+
   function findRowIndexByColumnValue(sheetName, columnName, value) {
     var headers = getHeaders(sheetName);
     var index = headers.indexOf(columnName);
@@ -832,6 +836,7 @@ var SheetRepository = (function() {
     getSheet: getSheet,
     getHeaders: getHeaders,
     getRows: getRows,
+    flush: flush,
     appendConversation: appendConversation,
     updateConversationMessage: updateConversationMessage,
     listRecentMessages: listRecentMessages,

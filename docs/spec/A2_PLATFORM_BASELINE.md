@@ -203,6 +203,11 @@ Script Propertiesは検証時点を分離する。
 | PARTNER_NAME | string | 相棒 |
 | USER_NAME | string | あなた |
 | SYSTEM_PERSONA | string | 親しい雑談相手として自然に会話する |
+| CHARACTER_RUNTIME_MODE | string | legacy |
+| CHARACTER_PROFILE_MODE | string | legacy |
+| CHARACTER_PROFILE_V1 | json | neutralなvalid v1 profile（休眠） |
+| CHARACTER_PROFILE_REVISION | int | 0 |
+| PROACTIVE_FREQUENCY | string | normal |
 | GEMINI_MODEL | string | 実装時点の無料枠対応安定版 |
 | MAX_USER_TEXT_CHARS | int | 4000 |
 | RECENT_MESSAGE_LIMIT | int | 20 |

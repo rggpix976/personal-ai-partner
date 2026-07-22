@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acepilot.local/schemas/character-profile-v1.schema.json",
+  "title": "CharacterProfileV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "identity",
+    "style",
+    "flavor"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "character-profile.v1"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "partnerName",
+        "firstPerson",
+        "userAddress"
+      ],
+      "properties": {
+        "partnerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "firstPerson": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 12
+        },
+        "userAddress": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        }
+      }
+    },
+    "style": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "speechPreset",
+        "warmth",
+        "replyLength"
+      ],
+      "properties": {
+        "speechPreset": {
+          "enum": [
+            "natural",
+            "polite",
+            "calm",
+            "cheerful",
+            "playful"
+          ]
+        },
+        "warmth": {
+          "enum": [
+            "reserved",
+            "balanced",
+            "sweet"
+          ]
+        },
+        "replyLength": {
+          "enum": [
+            "short",
+            "balanced",
+            "long"
+          ]
+        }
+      }
+    },
+    "flavor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "note",
+        "exampleLines"
+      ],
+      "properties": {
+        "note": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "exampleLines": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          }
+        }
+      }
+    }
+  }
+}

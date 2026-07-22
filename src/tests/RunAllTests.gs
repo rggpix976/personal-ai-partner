@@ -7,7 +7,8 @@ function runAllSelfTests() {
     'runA6QueueSchedulerTests',
     'runA7StaticSelfTest',
     'runA7IntegrationSelfTest',
-    'runA8ProactiveConversationTests'
+    'runA8ProactiveConversationTests',
+    'runA9CharacterProfileTests'
   ];
   var summary = {
     ok: true,

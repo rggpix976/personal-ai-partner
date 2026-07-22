@@ -25,6 +25,8 @@
 | VALIDATION_IMAGE_UNSUPPORTED | false | NONE | 未対応画像 |
 | VALIDATION_IMAGE_TOO_LARGE | false | NONE | 画像サイズ超過 |
 | CONFIG_MISSING | false | NONE | 必須設定欠落 |
+| CHARACTER_CONFIG_INVALID | false | NONE | character mode/profile設定不正 |
+| CHARACTER_CONFIG_CONFLICT | false | NONE | profile revisionのCASまたは保存lock競合 |
 | ACCESS_NOT_ALLOWED | false | NONE | アクセス設定不正 |
 | DUPLICATE_REQUEST | false | NONE | 同一要求 |
 | GEMINI_RATE_LIMIT | true | COMMON_BACKOFF | 429・無料枠・速度制限 |
