@@ -18,6 +18,8 @@ and initiate proactive conversations.
 - Staged production validation completed on 2026-07-20
 - Time-driven jobs: exactly one `processQueueJob` trigger and one
   `schedulerJob` trigger
+- A proposed specification exists for partner persona and immersion
+  hardening; its runtime protections are not yet implemented or deployed
 
 The production behavior and rollout evidence for proactive conversations are
 documented in
@@ -97,6 +99,9 @@ Start with these documents:
   taxonomy and retry behavior
 - [`docs/features/PROACTIVE_CONVERSATIONS.md`](docs/features/PROACTIVE_CONVERSATIONS.md):
   probabilistic and AI-generated proactive conversation specification
+- [`docs/features/CHARACTER_IMMERSION.md`](docs/features/CHARACTER_IMMERSION.md):
+  proposed partner persona, immersion, fallback, UI, and acceptance
+  specification; not yet implemented
 - [`docs/qa/A7_MANUAL_GAS_TEST_PLAN.md`](docs/qa/A7_MANUAL_GAS_TEST_PLAN.md):
   manual Apps Script validation
 - [`docs/qa/A7_SECURITY_REVIEW.md`](docs/qa/A7_SECURITY_REVIEW.md):
