@@ -168,3 +168,60 @@ SheetRepository.upsertMemory(memory)
 ```
 
 `conversation_logs` の一意性は `request_id` 単独ではなく、`(request_id, role)` の複合一意である。同じ `request_id` に user行とassistant行を各1件まで保存できる。
+
+## 3.10 `CharacterProfileService`
+
+PR 2で追加した内部サービスであり、まだ既存の生成経路からは呼び出さない。
+
+```javascript
+CharacterProfileService.validateV1(candidate)
+CharacterProfileService.readV1()
+CharacterProfileService.inspectRuntime()
+CharacterProfileService.requireActive()
+CharacterProfileService.saveV1(candidate, expectedRevision)
+CharacterProfileService.getProactiveFrequency()
+```
+
+- `validateV1` は本文をエラーへ含めず、正規化済みprofileまたは管理された
+  `path` / `code` のみを返す。
+- `readV1` は初回保存前の正規なstaging状態としてrevision `0` を読める。
+- `inspectRuntime` はmodeの完全な状態表を決定論的に解決する。
+- `legacy` runtimeでは保存済みv1を読み込まず、完全に休眠させる。
+- `requireActive` は有効な `enforced + v1 + revision > 0` 以外をfail closedする。
+- `saveV1` はmodeを変更せず、検証済みprofileとrevisionだけをCAS保存する。
+- `SYSTEM_PERSONA` をv1へ移行、コピー、またはactive contextへ混入させない。
+
+## 3.11 `CharacterContextService`
+
+```javascript
+CharacterContextService.buildActive(input)
+CharacterContextService.withConversationMode(context, mode)
+```
+
+有効なv1 profileから、文字列promptではなく型付きcontextを構築する。
+profileは `persona.kind = "v1"` のtagged unionとして保持し、現在の要求、履歴、
+記憶、fact、観測、Partner Worldは `data.authority = "untrusted"` の配下へ分離する。
+`partnerWorld.mayCreate=true` はdiary scopeだけで許可し、memory contextでは
+`partnerWorld=null` とする。dataはJSON-safeな値だけを受理し、legacy persona
+authorityと危険なobject keyを再帰的に拒否する。`buildActive` は
+`UNCLASSIFIED` contextを返し、`withConversationMode` は完全なcontext shapeと
+現在activeなprofile/revisionを再検証して、PR 3で定義済みmodeをimmutableに
+結合する。staleまたは外部で組み立てたcontextは拒否する。PR 2では既存surfaceを
+このcontextへ接続しない。
+
+## 3.12 `CharacterConfigRepository`
+
+```javascript
+CharacterConfigRepository.readSnapshot()
+CharacterConfigRepository.saveProfileAtomically(
+  canonicalProfileJson,
+  expectedRevision,
+  updatedAt
+)
+```
+
+character設定を1回のsnapshotとして読み、profileとrevisionをScriptLock、CAS、
+単一範囲の `setValues()`、`SpreadsheetApp.flush()`、read-back検証で保存する。
+bounding range内の非対象数式と `=` で始まるliteral textを保持し、lock競合は
+本文を含まないcharacter config conflictへ写像する。modeやlegacy設定は同時に変更しない。
+Spreadsheetの手動編集は公式な同時writerとして扱わない。

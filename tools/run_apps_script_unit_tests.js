@@ -95,11 +95,14 @@ vm.createContext(context);
   'src/common/RetryPolicy.gs',
   'src/infrastructure/ConfigRepository.gs',
   'src/infrastructure/SheetRepository.gs',
+  'src/infrastructure/CharacterConfigRepository.gs',
   'src/infrastructure/DriveTempRepository.gs',
   'src/infrastructure/DocumentRepository.gs',
   'src/infrastructure/GeminiClient.gs',
   'src/infrastructure/GmailNotifier.gs',
   'src/application/QueueService.gs',
+  'src/application/CharacterProfileService.gs',
+  'src/application/CharacterContextService.gs',
   'src/application/OperationalHealthService.gs',
   'src/application/MaintenanceService.gs',
   'src/application/MemoryService.gs',
@@ -121,6 +124,7 @@ vm.createContext(context);
   'src/tests/A7StaticSelfTest.gs',
   'src/tests/A7IntegrationSelfTest.gs',
   'src/tests/A8ProactiveConversationTests.gs',
+  'src/tests/A9CharacterProfileTests.gs',
   'src/tests/RunAllTests.gs'
 ].forEach((file) => {
   vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });

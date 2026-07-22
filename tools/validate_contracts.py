@@ -40,6 +40,7 @@ REQUIRED_PATHS = [
     ROOT / "README.md",
     ROOT / "docs" / "handoffs" / "A1_HANDOFF.md",
     ROOT / "docs" / "a1" / "contracts" / "chat-result.schema.json",
+    ROOT / "docs" / "a1" / "contracts" / "character-profile-v1.schema.json",
     ROOT / "docs" / "a1" / "contracts" / "event.schema.json",
     ROOT / "docs" / "a1" / "contracts" / "memory-candidate.schema.json",
     ROOT / "docs" / "a1" / "contracts" / "memory-candidates.schema.json",
@@ -407,6 +408,40 @@ def check_memory_contract(results: Results) -> None:
     )
 
 
+def check_character_profile_contract(results: Results) -> None:
+    validator = schema_validator(CONTRACTS / "character-profile-v1.schema.json")
+    profile = {
+        "schemaVersion": "character-profile.v1",
+        "identity": {
+            "partnerName": "Partner",
+            "firstPerson": "私",
+            "userAddress": "あなた",
+        },
+        "style": {
+            "speechPreset": "natural",
+            "warmth": "balanced",
+            "replyLength": "balanced",
+        },
+        "flavor": {
+            "note": "",
+            "exampleLines": [],
+        },
+    }
+    assert_valid(results, validator, profile, "CharacterProfileV1 valid")
+
+    unknown = json.loads(json.dumps(profile, ensure_ascii=False))
+    unknown["unexpected"] = True
+    assert_invalid(results, validator, unknown, "CharacterProfileV1 rejects unknown root field")
+
+    bad_enum = json.loads(json.dumps(profile, ensure_ascii=False))
+    bad_enum["style"]["warmth"] = "extreme"
+    assert_invalid(results, validator, bad_enum, "CharacterProfileV1 rejects invalid enum")
+
+    missing = json.loads(json.dumps(profile, ensure_ascii=False))
+    del missing["identity"]["firstPerson"]
+    assert_invalid(results, validator, missing, "CharacterProfileV1 requires identity fields")
+
+
 def check_markdown_links(results: Results) -> None:
     broken: list[str] = []
     for path in sorted(ROOT.rglob("*.md")):
@@ -458,6 +493,7 @@ def main() -> int:
     check_chat_result_contract(results)
     check_event_contract(results)
     check_memory_contract(results)
+    check_character_profile_contract(results)
     check_markdown_links(results)
     check_secrets(results)
 

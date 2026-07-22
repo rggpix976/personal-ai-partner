@@ -187,5 +187,30 @@ function runA2PlatformTests() {
     });
   });
 
+  test('character foundation defaults are legacy and structurally valid', function() {
+    assert(APP_CONSTANTS.SCHEMA_VERSION === '2026.07.a2', 'Dormant config must not force a deployment version split.');
+    var entries = {};
+    APP_CONSTANTS.CONFIG_DEFAULTS.forEach(function(entry) {
+      entries[entry.key] = entry;
+    });
+    assert(entries.CHARACTER_RUNTIME_MODE.value === 'legacy', 'Runtime must default to legacy.');
+    assert(entries.CHARACTER_RUNTIME_MODE.type === 'string', 'Runtime mode type is invalid.');
+    assert(entries.CHARACTER_PROFILE_MODE.value === 'legacy', 'Profile must default to legacy.');
+    assert(entries.CHARACTER_PROFILE_V1.type === 'json', 'Profile config type is invalid.');
+    assert(
+      entries.CHARACTER_PROFILE_V1.value === APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON,
+      'Profile default and canonical fixture must stay identical.'
+    );
+    assert(
+      CharacterProfileService.validateV1(entries.CHARACTER_PROFILE_V1.value).valid,
+      'Default v1 profile should validate.'
+    );
+    assert(entries.CHARACTER_PROFILE_REVISION.value === '0', 'Revision must start at zero.');
+    assert(entries.CHARACTER_PROFILE_REVISION.type === 'int', 'Revision type is invalid.');
+    assert(entries.PROACTIVE_FREQUENCY.value === 'normal', 'Frequency must default to normal.');
+    assert(APP_CONSTANTS.CHARACTER.POLICY_VERSION === 'character-policy.v1', 'Policy version is invalid.');
+    assert(APP_CONSTANTS.CHARACTER.CATALOG_VERSION === 'character-catalog.v1', 'Catalog version is invalid.');
+  });
+
   return results;
 }

@@ -2,7 +2,7 @@
 
 ## 1. Status and scope
 
-Status: **Proposed — documentation only; not implemented or deployed**.
+Status: **Partially implemented — profile foundation only; not deployed or activated**.
 
 This document is the target specification for preserving the configured
 partner's personality and the user's sense of immersion. It covers text chat,
@@ -13,16 +13,19 @@ The words MUST, MUST NOT, SHOULD, and MAY in this document describe the target
 runtime. They do not claim that the current production runtime already has
 these protections.
 
-PR 1 changes documentation only. It MUST NOT change Apps Script code, CONFIG,
-stored data, triggers, deployments, or production behavior. The feature is not
-complete until later PRs implement the runtime, tests, functional settings UI,
-staged rollout, and production evidence described here.
+PR 1 changed documentation only. PR 2 adds the dormant profile schema,
+validator, revision-safe persistence, deterministic mode resolver, and typed
+context without connecting any generation surface. Repository defaults remain
+`legacy`; CONFIG rows, stored data, triggers, deployments, and production
+behavior have not been changed. The feature is not complete until later PRs
+implement guards, surface integration, functional settings UI, staged rollout,
+and production evidence described here.
 
 ### 1.1 Current and target behavior
 
 | Area | Current verified behavior | Target behavior | Delivery |
 |---|---|---|---|
-| Persona source | Free-form `SYSTEM_PERSONA` is read independently by generation services | One validated structured profile and one non-overridable fixed policy | Core runtime PR |
+| Persona source | Generation services still read free-form `SYSTEM_PERSONA`; a validated v1 profile foundation exists but is dormant | One validated structured profile and one non-overridable fixed policy | Foundation in PR 2; enforcement in later PRs |
 | Text and image chat | Assistant text is trimmed and checked only for non-empty output | Common mode classification, guard, one rewrite, and reviewed fallback before persistence | Chat integration PR |
 | Queued chat | A retry generates and persists through the existing chat path | Every retry requires a newly approved output envelope | Chat integration PR |
 | Proactive messages | Prompt guidance plus length validation; saved retry text can be reused | AI output, configured templates, rendered fallback, and saved retry text are all revalidated | Surface integration PR |
@@ -273,6 +276,11 @@ Validation requirements:
 - profile content MUST NOT contain secrets, URLs, email addresses,
   operational configuration, or operational identifiers such as deployment,
   resource, request, event, or message IDs
+- URL/identifier detection MUST use a versioned deterministic deny/allow
+  corpus. Ambiguous dotted proper names are allowed only when their final label
+  is mixed case and is not in the reviewed URL-TLD catalog; known TLDs remain
+  case-insensitive. Labeled IDs, UUIDs, reviewed app-specific ID prefixes, and
+  opaque-token shapes are rejected while readable long names remain allowed.
 - profile changes MUST be validated atomically before replacing the active
   value
 
@@ -331,6 +339,11 @@ partnerWorld {
   scope                 // chat | proactive | diary
 }
 ```
+
+Memory uses the same top-level `CharacterContext` authority model but does not
+consume Partner World state in v1; its `data.partnerWorld` value is `null`.
+Supplying Partner World input to a memory context is invalid. This keeps the
+Partner World scope closed to the three explicitly specified surfaces.
 
 In v1, diary may create a new fictional event only when the existing Partner
 World feature and diary-frequency policy allow it, and only through structured
@@ -820,9 +833,11 @@ occurred and requires immediate investigation and rollback consideration.
 
 ## 17. Planned acceptance criteria
 
-These `PI-*` cases remain planned until their tests are implemented in later
-PRs. They are intentionally not added to the current production acceptance
-report by this documentation-only PR.
+These `PI-*` cases remain release criteria until the complete runtime is
+implemented. PR 2 adds deterministic unit and contract coverage for the
+profile schema, mode matrix, revision persistence, typed context, legacy
+isolation, and rollback foundation. Those local tests are not production
+acceptance evidence and do not mark the remaining guard or surface cases done.
 
 | ID | Area | Acceptance criterion |
 |---|---|---|
@@ -875,7 +890,7 @@ The soft-quality rubric checks:
 | PR | Scope | Exit condition |
 |---|---|---|
 | PR 1 | This target specification, documentation links, current/target distinction | Reviewed specification; no runtime change |
-| PR 2 | Profile schema/validator/resolver, revision management, typed context, mode flags | All profile/mode combinations are deterministic; no generation surface is switched |
+| PR 2 | Profile schema/validator/resolver, revision management, typed context, mode flags | Implemented as a dormant foundation; all profile/mode combinations are deterministic and no generation surface is switched |
 | PR 3 | Fixed policy, mode classifier, typed approval artifacts, hard/semantic guard contracts, reviewed catalog, sink adapters, aggregate metrics, deterministic corpus | Canonical/fallback text has human review; core guard and zero-sink tests pass |
 | PR 4 | Sync/queued/image chat integration, legacy-history handling, partner/status UI separation | Unsafe assistant/image-summary persistence and direct response are impossible |
 | PR 5 | Proactive AI, subject/body template, saved retry, marker, and delivery integration; update proactive specification | Every proactive path revalidates immediately before marker/send/save |

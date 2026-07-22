@@ -96,6 +96,12 @@ function runA7StaticSelfTest() {
     assert(hasFunction('DiaryService', 'repairGenerationBacklog'), 'DiaryService.repairGenerationBacklog is missing.');
     assert(hasFunction('ProactiveMessageService', 'evaluateLocalConditions'), 'ProactiveMessageService.evaluateLocalConditions is missing.');
     assert(hasFunction('ProactiveMessageService', 'send'), 'ProactiveMessageService.send is missing.');
+    assert(hasFunction('CharacterProfileService', 'validateV1'), 'CharacterProfileService.validateV1 is missing.');
+    assert(hasFunction('CharacterProfileService', 'inspectRuntime'), 'CharacterProfileService.inspectRuntime is missing.');
+    assert(hasFunction('CharacterProfileService', 'requireActive'), 'CharacterProfileService.requireActive is missing.');
+    assert(hasFunction('CharacterProfileService', 'saveV1'), 'CharacterProfileService.saveV1 is missing.');
+    assert(hasFunction('CharacterContextService', 'buildActive'), 'CharacterContextService.buildActive is missing.');
+    assert(hasFunction('CharacterContextService', 'withConversationMode'), 'CharacterContextService.withConversationMode is missing.');
   });
 
   test('infrastructure service boundaries are present', function() {
@@ -108,6 +114,8 @@ function runA7StaticSelfTest() {
     assert(hasFunction('DriveTempRepository', 'cleanupExpiredTempImages'), 'DriveTempRepository.cleanupExpiredTempImages is missing.');
     assert(hasFunction('DocumentRepository', 'appendDiaryEntry'), 'DocumentRepository.appendDiaryEntry is missing.');
     assert(hasFunction('DocumentRepository', 'countDiaryEntryAnchors'), 'DocumentRepository.countDiaryEntryAnchors is missing.');
+    assert(hasFunction('CharacterConfigRepository', 'readSnapshot'), 'CharacterConfigRepository.readSnapshot is missing.');
+    assert(hasFunction('CharacterConfigRepository', 'saveProfileAtomically'), 'CharacterConfigRepository.saveProfileAtomically is missing.');
   });
 
   return results;
