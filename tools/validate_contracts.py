@@ -40,8 +40,12 @@ REQUIRED_PATHS = [
     ROOT / "README.md",
     ROOT / "docs" / "handoffs" / "A1_HANDOFF.md",
     ROOT / "docs" / "a1" / "contracts" / "chat-result.schema.json",
+    ROOT / "docs" / "a1" / "contracts" / "approved-character-artifact.schema.json",
     ROOT / "docs" / "a1" / "contracts" / "character-profile-v1.schema.json",
+    ROOT / "docs" / "a1" / "contracts" / "character-profile-v2.schema.json",
     ROOT / "docs" / "a1" / "contracts" / "event.schema.json",
+    ROOT / "docs" / "a1" / "contracts" / "immersion-guard-decision.schema.json",
+    ROOT / "docs" / "a1" / "contracts" / "immersion-semantic-verdict.schema.json",
     ROOT / "docs" / "a1" / "contracts" / "memory-candidate.schema.json",
     ROOT / "docs" / "a1" / "contracts" / "memory-candidates.schema.json",
 ]
@@ -409,8 +413,8 @@ def check_memory_contract(results: Results) -> None:
 
 
 def check_character_profile_contract(results: Results) -> None:
-    validator = schema_validator(CONTRACTS / "character-profile-v1.schema.json")
-    profile = {
+    v1_validator = schema_validator(CONTRACTS / "character-profile-v1.schema.json")
+    v1_profile = {
         "schemaVersion": "character-profile.v1",
         "identity": {
             "partnerName": "Partner",
@@ -427,19 +431,474 @@ def check_character_profile_contract(results: Results) -> None:
             "exampleLines": [],
         },
     }
-    assert_valid(results, validator, profile, "CharacterProfileV1 valid")
+    assert_valid(results, v1_validator, v1_profile, "CharacterProfileV1 legacy contract valid")
 
-    unknown = json.loads(json.dumps(profile, ensure_ascii=False))
+    unknown = json.loads(json.dumps(v1_profile, ensure_ascii=False))
     unknown["unexpected"] = True
-    assert_invalid(results, validator, unknown, "CharacterProfileV1 rejects unknown root field")
+    assert_invalid(results, v1_validator, unknown, "CharacterProfileV1 rejects unknown root field")
 
-    bad_enum = json.loads(json.dumps(profile, ensure_ascii=False))
+    bad_enum = json.loads(json.dumps(v1_profile, ensure_ascii=False))
     bad_enum["style"]["warmth"] = "extreme"
-    assert_invalid(results, validator, bad_enum, "CharacterProfileV1 rejects invalid enum")
+    assert_invalid(results, v1_validator, bad_enum, "CharacterProfileV1 rejects invalid enum")
 
-    missing = json.loads(json.dumps(profile, ensure_ascii=False))
+    missing = json.loads(json.dumps(v1_profile, ensure_ascii=False))
     del missing["identity"]["firstPerson"]
-    assert_invalid(results, validator, missing, "CharacterProfileV1 requires identity fields")
+    assert_invalid(results, v1_validator, missing, "CharacterProfileV1 requires identity fields")
+
+    v2_validator = schema_validator(CONTRACTS / "character-profile-v2.schema.json")
+    v2_profile = {
+        "schemaVersion": "character-profile.v2",
+        "identity": {
+            "partnerName": "Partner",
+            "userAddress": "あなた",
+        },
+        "preferences": {
+            "replyLength": "balanced",
+        },
+    }
+    assert_valid(results, v2_validator, v2_profile, "CharacterProfileV2 active contract valid")
+
+    v2_persona_override = json.loads(json.dumps(v2_profile, ensure_ascii=False))
+    v2_persona_override["identity"]["firstPerson"] = "私"
+    assert_invalid(
+        results,
+        v2_validator,
+        v2_persona_override,
+        "CharacterProfileV2 rejects CharacterPack-owned identity fields",
+    )
+
+    v2_matrix_override = json.loads(json.dumps(v2_profile, ensure_ascii=False))
+    v2_matrix_override["preferences"]["warmth"] = "sweet"
+    assert_invalid(
+        results,
+        v2_validator,
+        v2_matrix_override,
+        "CharacterProfileV2 rejects runtime persona matrix fields",
+    )
+
+
+def check_immersion_contracts(results: Results) -> None:
+    semantic_validator = schema_validator(CONTRACTS / "immersion-semantic-verdict.schema.json")
+    guard_validator = schema_validator(CONTRACTS / "immersion-guard-decision.schema.json")
+    artifact_validator = schema_validator(CONTRACTS / "approved-character-artifact.schema.json")
+
+    semantic_allow = {
+        "verdict": "allow",
+        "category": None,
+        "evidenceKeys": ["userFacts:0"],
+    }
+    assert_valid(results, semantic_validator, semantic_allow, "Immersion semantic allow valid")
+
+    semantic_deny = {
+        "verdict": "deny",
+        "category": "GROUNDING_USER_STATE_UNSUPPORTED",
+        "evidenceKeys": [],
+    }
+    assert_valid(results, semantic_validator, semantic_deny, "Immersion semantic deny valid")
+
+    bad_semantic = dict(semantic_allow)
+    bad_semantic["category"] = "FORMAT_INVALID"
+    assert_invalid(
+        results,
+        semantic_validator,
+        bad_semantic,
+        "Immersion semantic allow requires null category",
+    )
+
+    guard_allow = {
+        "status": "ALLOW",
+        "category": None,
+        "action": "ALLOW",
+        "surface": "CHAT_TEXT_SYNC",
+        "source": "generated",
+        "policyVersion": "character-policy.v2",
+        "characterPackId": "warm-kansai-caretaker",
+        "characterPackVersion": "warm-kansai-caretaker.v1",
+        "profileSchemaVersion": "character-profile.v2",
+        "profileRevision": 1,
+        "catalogVersion": "character-catalog.v2",
+        "claimType": None,
+        "requiresEvidence": False,
+        "evidenceKeys": [],
+    }
+    assert_valid(results, guard_validator, guard_allow, "Immersion guard allow valid")
+
+    grounded_guard_allow = dict(guard_allow)
+    grounded_guard_allow.update({
+        "claimType": "USER_STATE",
+        "requiresEvidence": True,
+        "evidenceKeys": ["userFacts:0"],
+    })
+    assert_valid(
+        results,
+        guard_validator,
+        grounded_guard_allow,
+        "Immersion grounded guard allow valid",
+    )
+
+    missing_grounding = dict(grounded_guard_allow)
+    missing_grounding["evidenceKeys"] = []
+    assert_invalid(
+        results,
+        guard_validator,
+        missing_grounding,
+        "Immersion grounded guard allow requires evidence",
+    )
+
+    wrong_grounded_claim = dict(grounded_guard_allow)
+    wrong_grounded_claim["claimType"] = "GENERAL_IMMERSION"
+    assert_invalid(
+        results,
+        guard_validator,
+        wrong_grounded_claim,
+        "Immersion grounded guard allow restricts claim type",
+    )
+
+    retry_guard_allow = dict(guard_allow)
+    retry_guard_allow.update({
+        "surface": "PROACTIVE_RETRY",
+        "source": "legacy_revalidated",
+    })
+    assert_valid(
+        results,
+        guard_validator,
+        retry_guard_allow,
+        "Immersion retry guard requires legacy revalidation source",
+    )
+
+    wrong_retry_guard = dict(retry_guard_allow)
+    wrong_retry_guard["source"] = "generated"
+    assert_invalid(
+        results,
+        guard_validator,
+        wrong_retry_guard,
+        "Immersion retry guard rejects generated source",
+    )
+
+    legacy_chat_guard = dict(guard_allow)
+    legacy_chat_guard["source"] = "legacy_revalidated"
+    assert_invalid(
+        results,
+        guard_validator,
+        legacy_chat_guard,
+        "Immersion legacy guard source is retry-only",
+    )
+
+    artifact_sources = (
+        "generated",
+        "rewrite",
+        "canonical",
+        "fallback",
+        "legacy_revalidated",
+    )
+    allowed_sources_by_surface = {
+        "CHAT_TEXT_SYNC": {"generated", "rewrite", "canonical", "fallback"},
+        "CHAT_TEXT_QUEUED": {"generated", "rewrite", "canonical", "fallback"},
+        "CHAT_IMAGE": {"generated", "rewrite", "canonical", "fallback"},
+        "PROACTIVE_AI": {"generated", "rewrite"},
+        "PROACTIVE_RETRY": {"legacy_revalidated"},
+        "DIARY": {"generated", "rewrite"},
+        "MEMORY_EXTRACTION": {"generated", "rewrite"},
+    }
+    for surface, allowed_sources in allowed_sources_by_surface.items():
+        for source in artifact_sources:
+            matrix_guard = dict(guard_allow)
+            matrix_guard["surface"] = surface
+            matrix_guard["source"] = source
+            label = f"Immersion guard source matrix {surface} / {source}"
+            if source in allowed_sources:
+                assert_valid(results, guard_validator, matrix_guard, label)
+            else:
+                assert_invalid(results, guard_validator, matrix_guard, label)
+
+    guard_deny = dict(guard_allow)
+    guard_deny.update({
+        "status": "DENY",
+        "action": "DENY",
+        "category": "IMMERSION_SELF_IDENTIFICATION",
+    })
+    assert_valid(results, guard_validator, guard_deny, "Immersion guard deny valid")
+
+    guard_unavailable = dict(guard_allow)
+    guard_unavailable.update({
+        "status": "GUARD_UNAVAILABLE",
+        "action": "GUARD_UNAVAILABLE",
+    })
+    assert_valid(
+        results,
+        guard_validator,
+        guard_unavailable,
+        "Immersion guard unavailable valid",
+    )
+
+    leaked_guard = dict(guard_deny)
+    leaked_guard["candidate"] = "forbidden"
+    assert_invalid(
+        results,
+        guard_validator,
+        leaked_guard,
+        "Immersion guard decision forbids candidate text",
+    )
+
+    artifact = {
+        "payload": {"text": "承認済み応答"},
+        "surface": "CHAT_TEXT_SYNC",
+        "source": "generated",
+        "policyVersion": "character-policy.v2",
+        "characterPackId": "warm-kansai-caretaker",
+        "characterPackVersion": "warm-kansai-caretaker.v1",
+        "profileSchemaVersion": "character-profile.v2",
+        "profileRevision": 1,
+        "catalogVersion": "character-catalog.v2",
+    }
+    assert_valid(results, artifact_validator, artifact, "Approved chat artifact valid")
+
+    proactive_artifact = json.loads(json.dumps(artifact, ensure_ascii=False))
+    proactive_artifact["surface"] = "PROACTIVE_AI"
+    proactive_artifact["payload"] = {
+        "subject": "ひとこと",
+        "body": "今日はどうしとる？",
+    }
+    assert_valid(
+        results,
+        artifact_validator,
+        proactive_artifact,
+        "Approved generated proactive artifact valid",
+    )
+
+    proactive_retry_artifact = json.loads(json.dumps(proactive_artifact, ensure_ascii=False))
+    proactive_retry_artifact["surface"] = "PROACTIVE_RETRY"
+    proactive_retry_artifact["source"] = "legacy_revalidated"
+    assert_valid(
+        results,
+        artifact_validator,
+        proactive_retry_artifact,
+        "Approved proactive retry artifact valid",
+    )
+
+    wrong_retry_artifact = json.loads(
+        json.dumps(proactive_retry_artifact, ensure_ascii=False)
+    )
+    wrong_retry_artifact["source"] = "generated"
+    assert_invalid(
+        results,
+        artifact_validator,
+        wrong_retry_artifact,
+        "Approved proactive retry rejects generated source",
+    )
+
+    legacy_chat_artifact = json.loads(json.dumps(artifact, ensure_ascii=False))
+    legacy_chat_artifact["source"] = "legacy_revalidated"
+    assert_invalid(
+        results,
+        artifact_validator,
+        legacy_chat_artifact,
+        "Approved legacy artifact source is retry-only",
+    )
+
+    proactive_template = json.loads(json.dumps(proactive_artifact, ensure_ascii=False))
+    proactive_template["surface"] = "PROACTIVE_TEMPLATE"
+    assert_invalid(
+        results,
+        artifact_validator,
+        proactive_template,
+        "Approved artifact rejects retired proactive template surface",
+    )
+
+    wrong_payload = json.loads(json.dumps(artifact, ensure_ascii=False))
+    wrong_payload["payload"] = {"subject": "wrong", "body": "surface"}
+    assert_invalid(
+        results,
+        artifact_validator,
+        wrong_payload,
+        "Approved artifact rejects wrong-surface payload",
+    )
+
+    leaked_artifact = json.loads(json.dumps(artifact, ensure_ascii=False))
+    leaked_artifact["rawCandidate"] = "forbidden"
+    assert_invalid(
+        results,
+        artifact_validator,
+        leaked_artifact,
+        "Approved artifact rejects raw candidate field",
+    )
+
+    diary_artifact = json.loads(json.dumps(artifact, ensure_ascii=False))
+    diary_artifact["surface"] = "DIARY"
+    diary_artifact["payload"] = {
+        "title": "今日",
+        "narrative": "一日の記録",
+        "groundedSummary": "",
+        "partnerWorldEvents": [{
+            "content": "出来事",
+        }],
+        "thingsToRemember": [],
+        "unresolvedFollowUps": [],
+    }
+    assert_valid(
+        results,
+        artifact_validator,
+        diary_artifact,
+        "Approved diary artifact bounded nested JSON valid",
+    )
+
+    oversized_nested = json.loads(json.dumps(diary_artifact, ensure_ascii=False))
+    oversized_nested["payload"]["partnerWorldEvents"][0]["content"] = "x" * 4001
+    assert_invalid(
+        results,
+        artifact_validator,
+        oversized_nested,
+        "Approved artifact rejects oversized nested text",
+    )
+
+    dangerous_nested = json.loads(json.dumps(diary_artifact, ensure_ascii=False))
+    dangerous_nested["payload"]["partnerWorldEvents"] = [{"__proto__": "x"}]
+    assert_invalid(
+        results,
+        artifact_validator,
+        dangerous_nested,
+        "Approved artifact rejects dangerous nested keys",
+    )
+
+    non_identifier_key = json.loads(json.dumps(diary_artifact, ensure_ascii=False))
+    non_identifier_key["payload"]["partnerWorldEvents"] = [{"俺はAIやから": True}]
+    assert_invalid(
+        results,
+        artifact_validator,
+        non_identifier_key,
+        "Approved artifact rejects non-identifier nested keys",
+    )
+
+    oversized_key = json.loads(json.dumps(diary_artifact, ensure_ascii=False))
+    oversized_key["payload"]["partnerWorldEvents"] = [{"a" * 65: True}]
+    assert_invalid(
+        results,
+        artifact_validator,
+        oversized_key,
+        "Approved artifact rejects oversized nested keys",
+    )
+
+    compressed_acronym_key = json.loads(json.dumps(diary_artifact, ensure_ascii=False))
+    compressed_acronym_key["payload"]["partnerWorldEvents"] = [{"iAmAIClaim": True}]
+    assert_invalid(
+        results,
+        artifact_validator,
+        compressed_acronym_key,
+        "Approved artifact rejects compressed-acronym nested keys",
+    )
+
+    compressed_sentence_key = json.loads(json.dumps(diary_artifact, ensure_ascii=False))
+    compressed_sentence_key["payload"]["partnerWorldEvents"] = [{
+        "thisreplyisgenerated": True,
+    }]
+    assert_invalid(
+        results,
+        artifact_validator,
+        compressed_sentence_key,
+        "Approved artifact rejects compressed-sentence nested keys",
+    )
+
+    unneeded_sensitive_key = json.loads(json.dumps(diary_artifact, ensure_ascii=False))
+    unneeded_sensitive_key["payload"]["partnerWorldEvents"] = [{
+        "clientSecret": "synthetic-value",
+    }]
+    assert_invalid(
+        results,
+        artifact_validator,
+        unneeded_sensitive_key,
+        "Approved artifact rejects unneeded sensitive nested keys",
+    )
+
+    valid_provenance = json.loads(json.dumps(artifact, ensure_ascii=False))
+    valid_provenance["surface"] = "MEMORY_EXTRACTION"
+    valid_provenance["payload"] = {
+        "candidates": [{
+            "content": "validated memory",
+            "existingMemoryId": UUID_1,
+            "sourceMessageIds": [UUID_1, UUID_2],
+            "source_message_ids": [UUID_2],
+        }],
+    }
+    assert_valid(
+        results,
+        artifact_validator,
+        valid_provenance,
+        "Approved artifact accepts validated UUID v4 provenance",
+    )
+
+    queued_artifact = json.loads(json.dumps(artifact, ensure_ascii=False))
+    queued_artifact["surface"] = "CHAT_TEXT_QUEUED"
+    image_artifact = json.loads(json.dumps(artifact, ensure_ascii=False))
+    image_artifact["surface"] = "CHAT_IMAGE"
+    image_artifact["payload"] = {
+        "replyText": "見えている範囲で確認するで。",
+        "imageSummary": "確認可能な情報だけを要約した。",
+    }
+    artifact_by_surface = {
+        "CHAT_TEXT_SYNC": artifact,
+        "CHAT_TEXT_QUEUED": queued_artifact,
+        "CHAT_IMAGE": image_artifact,
+        "PROACTIVE_AI": proactive_artifact,
+        "PROACTIVE_RETRY": proactive_retry_artifact,
+        "DIARY": diary_artifact,
+        "MEMORY_EXTRACTION": valid_provenance,
+    }
+    for surface, base_artifact in artifact_by_surface.items():
+        for source in artifact_sources:
+            matrix_artifact = json.loads(json.dumps(base_artifact, ensure_ascii=False))
+            matrix_artifact["source"] = source
+            label = f"Approved artifact source matrix {surface} / {source}"
+            if source in allowed_sources_by_surface[surface]:
+                assert_valid(results, artifact_validator, matrix_artifact, label)
+            else:
+                assert_invalid(results, artifact_validator, matrix_artifact, label)
+
+    invalid_provenance = json.loads(json.dumps(valid_provenance, ensure_ascii=False))
+    invalid_provenance["payload"]["candidates"][0]["existingMemoryId"] = "not-a-uuid"
+    assert_invalid(
+        results,
+        artifact_validator,
+        invalid_provenance,
+        "Approved artifact rejects invalid provenance identifiers",
+    )
+
+    duplicate_provenance = json.loads(json.dumps(valid_provenance, ensure_ascii=False))
+    duplicate_provenance["payload"]["candidates"][0]["sourceMessageIds"] = [UUID_1, UUID_1]
+    assert_invalid(
+        results,
+        artifact_validator,
+        duplicate_provenance,
+        "Approved artifact rejects duplicate provenance identifiers",
+    )
+
+    uppercase_provenance = json.loads(json.dumps(valid_provenance, ensure_ascii=False))
+    uppercase_provenance["payload"]["candidates"][0]["existingMemoryId"] = (
+        "A1111111-B111-4111-8111-111111111111"
+    )
+    assert_invalid(
+        results,
+        artifact_validator,
+        uppercase_provenance,
+        "Approved artifact requires canonical lowercase UUID v4 provenance",
+    )
+
+    diary_provenance = json.loads(json.dumps(diary_artifact, ensure_ascii=False))
+    diary_provenance["payload"]["partnerWorldEvents"][0]["sourceMessageIds"] = [UUID_1]
+    assert_invalid(
+        results,
+        artifact_validator,
+        diary_provenance,
+        "Approved diary artifact rejects memory-only provenance keys",
+    )
+
+    misplaced_provenance = json.loads(json.dumps(valid_provenance, ensure_ascii=False))
+    misplaced_provenance["payload"]["candidates"][0]["content"] = UUID_1
+    assert_invalid(
+        results,
+        artifact_validator,
+        misplaced_provenance,
+        "Approved memory artifact rejects identifiers outside provenance fields",
+    )
 
 
 def check_markdown_links(results: Results) -> None:
@@ -494,6 +953,7 @@ def main() -> int:
     check_event_contract(results)
     check_memory_contract(results)
     check_character_profile_contract(results)
+    check_immersion_contracts(results)
     check_markdown_links(results)
     check_secrets(results)
 

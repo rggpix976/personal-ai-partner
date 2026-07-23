@@ -1,6 +1,5 @@
 var CharacterProfileService = (function() {
   var MAX_SAFE_INTEGER = 9007199254740991;
-  var CONTROL_OR_FORMAT_PATTERN = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/;
   var ROLE_BOUNDARY_PATTERN = /^\s*(?:(?:#{1,6}|>|[-*+])\s*(?:system|assistant|developer|user|tool|システム|アシスタント|開発者|ユーザー|ツール)(?=\s|[:：]|$)|<\|im_start\|>\s*(?:system|assistant|developer|user|tool)\b|(?:(?:#{1,6}|>|[-*+])\s*)*(?:(?:system|assistant|developer|user|tool|システム|アシスタント|開発者|ユーザー|ツール)\s*[:：]|\[\s*(?:system|assistant|developer|user|tool|システム|アシスタント|開発者|ユーザー|ツール)\s*\]|【\s*(?:system|assistant|developer|user|tool|システム|アシスタント|開発者|ユーザー|ツール)\s*】|<\s*\/?\s*(?:system|assistant|developer|user|tool)\s*>|<\|\s*(?:system|assistant|developer|user|tool)\s*\|>))/i;
   var URL_PATTERN = /(?:\b[a-z][a-z0-9+.-]{1,31}:\/\/|\b(?:https?|ftps?|file|mailto|data|tel|sms|ws|wss|javascript|blob|urn|geo|sip|sips|magnet):|\/\/[a-z0-9]|www\.|\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}[\/:?#][^\s]*|\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|net|org|jp|co\.jp|io|dev|app|ai|me|info|biz|xyz|cloud|tech|site|online|invalid)\b|\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?(?:[\/?#][^\s]*)?|\[[0-9a-f:]+\](?::\d{1,5})?(?:[\/?#][^\s]*)?|\blocalhost(?::\d{1,5})?(?:[\/?#][^\s]*)?)/i;
   var BARE_DOMAIN_PATTERN = /\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}\b/g;
@@ -33,7 +32,7 @@ var CharacterProfileService = (function() {
     )) {
       return validationResult_(null, errors);
     }
-    if (parsed.schemaVersion !== APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION) {
+    if (parsed.schemaVersion !== APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_V1_VERSION) {
       addError_(errors, 'schemaVersion', 'LITERAL_INVALID');
       return validationResult_(null, errors);
     }
@@ -80,13 +79,13 @@ var CharacterProfileService = (function() {
     var speechPreset = normalizeEnum_(
       parsed.style.speechPreset,
       'style.speechPreset',
-      APP_CONSTANTS.CHARACTER.SPEECH_PRESETS,
+      APP_CONSTANTS.CHARACTER.PROFILE_V1_SPEECH_PRESETS,
       errors
     );
     var warmth = normalizeEnum_(
       parsed.style.warmth,
       'style.warmth',
-      APP_CONSTANTS.CHARACTER.WARMTH_LEVELS,
+      APP_CONSTANTS.CHARACTER.PROFILE_V1_WARMTH_LEVELS,
       errors
     );
     var replyLength = normalizeEnum_(
@@ -103,7 +102,7 @@ var CharacterProfileService = (function() {
     }
 
     var profile = {
-      schemaVersion: APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION,
+      schemaVersion: APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_V1_VERSION,
       identity: {
         partnerName: partnerName,
         firstPerson: firstPerson,
@@ -119,7 +118,86 @@ var CharacterProfileService = (function() {
         exampleLines: exampleLines
       }
     };
-    var canonicalJson = serializeCanonical_(profile);
+    var canonicalJson = serializeCanonicalV1_(profile);
+    var canonicalBytes = utf8ByteLength_(canonicalJson);
+    if (canonicalBytes < 0) {
+      addError_(errors, '$', 'UNICODE_INVALID');
+    } else if (canonicalBytes > APP_CONSTANTS.CHARACTER.MAX_PROFILE_BYTES) {
+      addError_(errors, '$', 'PROFILE_TOO_LARGE');
+    }
+    if (errors.length > 0) {
+      return validationResult_(null, errors);
+    }
+    return validationResult_(deepFreeze_(profile), []);
+  }
+
+  function validateV2(candidate) {
+    var errors = [];
+    var parsed = parseCandidate_(candidate, errors);
+    if (!parsed || errors.length > 0) {
+      return validationResult_(null, errors);
+    }
+    if (!assertExactObject_(
+      parsed,
+      ['schemaVersion', 'identity', 'preferences'],
+      '$',
+      errors
+    )) {
+      return validationResult_(null, errors);
+    }
+    if (parsed.schemaVersion !== APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION) {
+      addError_(errors, 'schemaVersion', 'LITERAL_INVALID');
+      return validationResult_(null, errors);
+    }
+    if (!assertExactObject_(
+      parsed.identity,
+      ['partnerName', 'userAddress'],
+      'identity',
+      errors
+    ) || !assertExactObject_(
+      parsed.preferences,
+      ['replyLength'],
+      'preferences',
+      errors
+    )) {
+      return validationResult_(null, errors);
+    }
+
+    var partnerName = normalizeProfileText_(
+      parsed.identity.partnerName,
+      'identity.partnerName',
+      1,
+      40,
+      errors
+    );
+    var userAddress = normalizeProfileText_(
+      parsed.identity.userAddress,
+      'identity.userAddress',
+      1,
+      40,
+      errors
+    );
+    var replyLength = normalizeEnum_(
+      parsed.preferences.replyLength,
+      'preferences.replyLength',
+      APP_CONSTANTS.CHARACTER.REPLY_LENGTHS,
+      errors
+    );
+    if (errors.length > 0) {
+      return validationResult_(null, errors);
+    }
+
+    var profile = {
+      schemaVersion: APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION,
+      identity: {
+        partnerName: partnerName,
+        userAddress: userAddress
+      },
+      preferences: {
+        replyLength: replyLength
+      }
+    };
+    var canonicalJson = serializeCanonicalV2_(profile);
     var canonicalBytes = utf8ByteLength_(canonicalJson);
     if (canonicalBytes < 0) {
       addError_(errors, '$', 'UNICODE_INVALID');
@@ -133,7 +211,11 @@ var CharacterProfileService = (function() {
   }
 
   function readV1() {
-    return readProfileFromSnapshot_(CharacterConfigRepository.readSnapshot(), false);
+    return readProfileV1FromSnapshot_(CharacterConfigRepository.readSnapshot(), false);
+  }
+
+  function readV2() {
+    return readProfileV2FromSnapshot_(CharacterConfigRepository.readSnapshot(), false);
   }
 
   function inspectRuntime() {
@@ -164,7 +246,9 @@ var CharacterProfileService = (function() {
           profileMode: profileMode,
           profileSchemaVersion: null,
           profileRevision: null,
-          profile: null
+          profile: null,
+          characterPackId: null,
+          characterPackVersion: null
         });
       }
       assertSnapshotKeysUnique_(snapshot, ['CHARACTER_PROFILE_MODE']);
@@ -174,19 +258,22 @@ var CharacterProfileService = (function() {
         'legacy',
         'PROFILE_MODE_INVALID'
       );
-      if (profileMode !== 'v1') {
+      if (profileMode !== 'v2') {
         return freezeInspection_({
           state: 'blocked',
-          reason: 'PROFILE_MODE_NOT_V1',
+          reason: 'PROFILE_MODE_NOT_V2',
           runtimeMode: runtimeMode,
           profileMode: profileMode,
           profileSchemaVersion: null,
           profileRevision: null,
-          profile: null
+          profile: null,
+          characterPackId: null,
+          characterPackVersion: null
         });
       }
 
-      var resolved = readProfileFromSnapshot_(snapshot, true);
+      var resolved = readProfileV2FromSnapshot_(snapshot, true);
+      var characterPack = CharacterPackService.getActive();
       return freezeInspection_({
         state: 'ready',
         reason: null,
@@ -194,7 +281,9 @@ var CharacterProfileService = (function() {
         profileMode: profileMode,
         profileSchemaVersion: resolved.profile.schemaVersion,
         profileRevision: resolved.revision,
-        profile: resolved.profile
+        profile: resolved.profile,
+        characterPackId: characterPack.packId,
+        characterPackVersion: characterPack.packVersion
       });
     } catch (error) {
       return freezeInspection_({
@@ -204,7 +293,9 @@ var CharacterProfileService = (function() {
         profileMode: profileMode,
         profileSchemaVersion: null,
         profileRevision: null,
-        profile: null
+        profile: null,
+        characterPackId: null,
+        characterPackVersion: null
       });
     }
   }
@@ -222,6 +313,8 @@ var CharacterProfileService = (function() {
       profile: cloneJson_(inspection.profile),
       profileSchemaVersion: inspection.profileSchemaVersion,
       profileRevision: inspection.profileRevision,
+      characterPackId: inspection.characterPackId,
+      characterPackVersion: inspection.characterPackVersion,
       policyVersion: APP_CONSTANTS.CHARACTER.POLICY_VERSION,
       catalogVersion: APP_CONSTANTS.CHARACTER.CATALOG_VERSION
     });
@@ -242,7 +335,34 @@ var CharacterProfileService = (function() {
       );
     }
     var result = CharacterConfigRepository.saveProfileAtomically(
-      serializeCanonical_(validation.profile),
+      serializeCanonicalV1_(validation.profile),
+      expectedRevision,
+      toIsoStringInTokyo(new Date())
+    );
+    return deepFreeze_({
+      saved: true,
+      profile: cloneJson_(validation.profile),
+      revision: result.revision,
+      updatedAt: result.updatedAt
+    });
+  }
+
+  function saveV2(candidate, expectedRevision) {
+    ensure(
+      isSafeNonNegativeInteger_(expectedRevision),
+      'VALIDATION_REQUEST_INVALID',
+      'Expected character profile revision is invalid.'
+    );
+    var validation = validateV2(candidate);
+    if (!validation.valid) {
+      throw createAppError(
+        'VALIDATION_REQUEST_INVALID',
+        'Character profile validation failed.',
+        { errors: validation.errors }
+      );
+    }
+    var result = CharacterConfigRepository.saveProfileV2Atomically(
+      serializeCanonicalV2_(validation.profile),
       expectedRevision,
       toIsoStringInTokyo(new Date())
     );
@@ -265,35 +385,70 @@ var CharacterProfileService = (function() {
     );
   }
 
-  function readProfileFromSnapshot_(snapshot, requirePositiveRevision) {
+  function readProfileV1FromSnapshot_(snapshot, requirePositiveRevision) {
     assertSnapshotKeysUnique_(snapshot, [
       'CHARACTER_PROFILE_V1',
       'CHARACTER_PROFILE_REVISION'
     ]);
     ensure(
-      snapshot && snapshot.profile && snapshot.profile.type === 'json',
+      snapshot && snapshot.profileV1 && snapshot.profileV1.type === 'json',
       'CHARACTER_CONFIG_INVALID',
       'Stored character profile is unavailable.',
       { reason: 'PROFILE_ENTRY_INVALID' }
     );
     ensure(
-      snapshot.revision && snapshot.revision.type === 'int',
+      snapshot.revisionV1 && snapshot.revisionV1.type === 'int',
       'CHARACTER_CONFIG_INVALID',
       'Stored character profile revision is unavailable.',
       { reason: 'REVISION_ENTRY_INVALID' }
     );
-    var validation = validateV1(snapshot.profile.rawValue);
+    var validation = validateV1(snapshot.profileV1.rawValue);
     ensure(
       validation.valid,
       'CHARACTER_CONFIG_INVALID',
       'Stored character profile is invalid.',
       { reason: 'PROFILE_INVALID', errors: validation.errors }
     );
-    var revision = parseStoredRevision_(snapshot.revision.rawValue, requirePositiveRevision);
+    var revision = parseStoredRevision_(snapshot.revisionV1.rawValue, requirePositiveRevision);
     return deepFreeze_({
       profile: cloneJson_(validation.profile),
       revision: revision,
-      updatedAt: snapshot.profile.updatedAt || null
+      updatedAt: snapshot.profileV1.updatedAt || null
+    });
+  }
+
+  function readProfileV2FromSnapshot_(snapshot, requirePositiveRevision) {
+    assertSnapshotKeysUnique_(snapshot, [
+      'CHARACTER_PROFILE_V2',
+      'CHARACTER_PROFILE_V2_REVISION'
+    ]);
+    ensure(
+      snapshot && snapshot.profileV2 && snapshot.profileV2.type === 'json',
+      'CHARACTER_CONFIG_INVALID',
+      'Stored character profile is unavailable.',
+      { reason: 'PROFILE_ENTRY_INVALID' }
+    );
+    ensure(
+      snapshot.revisionV2 && snapshot.revisionV2.type === 'int',
+      'CHARACTER_CONFIG_INVALID',
+      'Stored character profile revision is unavailable.',
+      { reason: 'REVISION_ENTRY_INVALID' }
+    );
+    var validation = validateV2(snapshot.profileV2.rawValue);
+    ensure(
+      validation.valid,
+      'CHARACTER_CONFIG_INVALID',
+      'Stored character profile is invalid.',
+      { reason: 'PROFILE_INVALID', errors: validation.errors }
+    );
+    var revision = parseStoredRevision_(
+      snapshot.revisionV2.rawValue,
+      requirePositiveRevision
+    );
+    return deepFreeze_({
+      profile: cloneJson_(validation.profile),
+      revision: revision,
+      updatedAt: snapshot.profileV2.updatedAt || null
     });
   }
 
@@ -399,7 +554,7 @@ var CharacterProfileService = (function() {
       addError_(errors, path, 'UNICODE_INVALID');
       return null;
     }
-    if (CONTROL_OR_FORMAT_PATTERN.test(value)) {
+    if (UnicodeInspection.containsControlOrFormat(value)) {
       addError_(errors, path, 'CONTROL_CHARACTER');
       return null;
     }
@@ -422,7 +577,7 @@ var CharacterProfileService = (function() {
       addError_(errors, path, 'TYPE_INVALID');
       return null;
     }
-    if (hasUnpairedSurrogate_(value) || CONTROL_OR_FORMAT_PATTERN.test(value)) {
+    if (hasUnpairedSurrogate_(value) || UnicodeInspection.containsControlOrFormat(value)) {
       addError_(errors, path, 'ENUM_INVALID');
       return null;
     }
@@ -461,10 +616,10 @@ var CharacterProfileService = (function() {
   }
 
   function classifyProfileContent_(value) {
-    if (CONTROL_OR_FORMAT_PATTERN.test(value)) {
+    if (UnicodeInspection.containsControlOrFormat(value)) {
       return 'CONTROL_CHARACTER';
     }
-    var normalized = value.normalize('NFKC');
+    var normalized = UnicodeInspection.stripForInspection(value.normalize('NFKC'));
     var matched = normalized.toLowerCase();
     if (ROLE_BOUNDARY_PATTERN.test(matched)) {
       return 'PROMPT_BOUNDARY';
@@ -625,6 +780,8 @@ var CharacterProfileService = (function() {
       catalogVersion: APP_CONSTANTS.CHARACTER.CATALOG_VERSION,
       profileSchemaVersion: partial.profileSchemaVersion,
       profileRevision: partial.profileRevision,
+      characterPackId: partial.characterPackId,
+      characterPackVersion: partial.characterPackVersion,
       profile: partial.profile ? cloneJson_(partial.profile) : null
     });
   }
@@ -715,7 +872,7 @@ var CharacterProfileService = (function() {
       value <= MAX_SAFE_INTEGER;
   }
 
-  function serializeCanonical_(profile) {
+  function serializeCanonicalV1_(profile) {
     return JSON.stringify({
       schemaVersion: profile.schemaVersion,
       identity: {
@@ -731,6 +888,19 @@ var CharacterProfileService = (function() {
       flavor: {
         note: profile.flavor.note,
         exampleLines: profile.flavor.exampleLines.slice()
+      }
+    });
+  }
+
+  function serializeCanonicalV2_(profile) {
+    return JSON.stringify({
+      schemaVersion: profile.schemaVersion,
+      identity: {
+        partnerName: profile.identity.partnerName,
+        userAddress: profile.identity.userAddress
+      },
+      preferences: {
+        replyLength: profile.preferences.replyLength
       }
     });
   }
@@ -751,15 +921,20 @@ var CharacterProfileService = (function() {
 
   return {
     validateV1: validateV1,
+    validateV2: validateV2,
     readV1: readV1,
+    readV2: readV2,
     inspectRuntime: inspectRuntime,
     requireActive: requireActive,
     saveV1: saveV1,
+    saveV2: saveV2,
     getProactiveFrequency: getProactiveFrequency,
     __test: {
       utf8ByteLength: utf8ByteLength_,
       codePointLength: codePointLength_,
-      serializeCanonical: serializeCanonical_,
+      serializeCanonical: serializeCanonicalV1_,
+      serializeCanonicalV1: serializeCanonicalV1_,
+      serializeCanonicalV2: serializeCanonicalV2_,
       classifyProfileContent: classifyProfileContent_
     }
   };

@@ -1,0 +1,628 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acepilot.local/schemas/approved-character-artifact.schema.json",
+  "title": "ApprovedCharacterArtifact",
+  "$comment": "Structural contract only. Runtime sinks also require factory provenance and the exact classified context capability used at issuance.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "payload",
+    "surface",
+    "source",
+    "policyVersion",
+    "characterPackId",
+    "characterPackVersion",
+    "profileSchemaVersion",
+    "profileRevision",
+    "catalogVersion"
+  ],
+  "properties": {
+    "payload": {},
+    "surface": {
+      "$ref": "immersion-guard-decision.schema.json#/$defs/surface"
+    },
+    "source": {
+      "enum": [
+        "generated",
+        "rewrite",
+        "canonical",
+        "fallback",
+        "legacy_revalidated"
+      ]
+    },
+    "policyVersion": {
+      "const": "character-policy.v2"
+    },
+    "characterPackId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$"
+    },
+    "characterPackVersion": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]{2,79}$"
+    },
+    "profileSchemaVersion": {
+      "const": "character-profile.v2"
+    },
+    "profileRevision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "catalogVersion": {
+      "const": "character-catalog.v2"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "surface": {
+            "const": "PROACTIVE_RETRY"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source": {
+            "const": "legacy_revalidated"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "source": {
+            "const": "legacy_revalidated"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "surface": {
+            "const": "PROACTIVE_RETRY"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "surface": {
+            "enum": [
+              "CHAT_TEXT_SYNC",
+              "CHAT_TEXT_QUEUED",
+              "CHAT_IMAGE"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source": {
+            "enum": [
+              "generated",
+              "rewrite",
+              "canonical",
+              "fallback"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "surface": {
+            "const": "PROACTIVE_AI"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source": {
+            "enum": [
+              "generated",
+              "rewrite"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "surface": {
+            "enum": [
+              "DIARY",
+              "MEMORY_EXTRACTION"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source": {
+            "enum": [
+              "generated",
+              "rewrite"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "surface": {
+            "enum": [
+              "CHAT_TEXT_SYNC",
+              "CHAT_TEXT_QUEUED"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/chatPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "surface": {
+            "const": "CHAT_IMAGE"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/imagePayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "surface": {
+            "enum": [
+              "PROACTIVE_AI",
+              "PROACTIVE_RETRY"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/proactivePayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "surface": {
+            "const": "DIARY"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/diaryPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "surface": {
+            "const": "MEMORY_EXTRACTION"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/memoryPayload"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "payloadObjectKey": {
+      "type": "string",
+      "maxLength": 64,
+      "enum": [
+        "action",
+        "body",
+        "category",
+        "confidence",
+        "content",
+        "date",
+        "description",
+        "details",
+        "domain",
+        "event",
+        "events",
+        "fact",
+        "facts",
+        "item",
+        "items",
+        "key",
+        "kind",
+        "label",
+        "memory",
+        "message",
+        "metadata",
+        "name",
+        "normalizedKey",
+        "note",
+        "priority",
+        "question",
+        "reason",
+        "relationship",
+        "role",
+        "source",
+        "status",
+        "subject",
+        "summary",
+        "tags",
+        "text",
+        "time",
+        "title",
+        "topic",
+        "topics",
+        "type",
+        "user",
+        "value",
+        "world"
+      ]
+    },
+    "memoryPayloadObjectKey": {
+      "type": "string",
+      "maxLength": 64,
+      "enum": [
+        "action",
+        "body",
+        "category",
+        "confidence",
+        "content",
+        "date",
+        "description",
+        "details",
+        "domain",
+        "event",
+        "events",
+        "existingMemoryId",
+        "fact",
+        "facts",
+        "item",
+        "items",
+        "key",
+        "kind",
+        "label",
+        "memory",
+        "message",
+        "metadata",
+        "name",
+        "normalizedKey",
+        "note",
+        "priority",
+        "question",
+        "reason",
+        "relationship",
+        "role",
+        "source",
+        "sourceMessageIds",
+        "source_message_ids",
+        "status",
+        "subject",
+        "summary",
+        "tags",
+        "text",
+        "time",
+        "title",
+        "topic",
+        "topics",
+        "type",
+        "user",
+        "value",
+        "world"
+      ]
+    },
+    "chatPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "allOf": [
+            {
+              "$ref": "#/$defs/noUuidLike"
+            }
+          ]
+        }
+      }
+    },
+    "imagePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replyText",
+        "imageSummary"
+      ],
+      "properties": {
+        "replyText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "allOf": [
+            {
+              "$ref": "#/$defs/noUuidLike"
+            }
+          ]
+        },
+        "imageSummary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "allOf": [
+            {
+              "$ref": "#/$defs/noUuidLike"
+            }
+          ]
+        }
+      }
+    },
+    "proactivePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subject",
+        "body"
+      ],
+      "properties": {
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "allOf": [
+            {
+              "$ref": "#/$defs/noUuidLike"
+            }
+          ]
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 220,
+          "allOf": [
+            {
+              "$ref": "#/$defs/noUuidLike"
+            }
+          ]
+        }
+      }
+    },
+    "diaryPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "narrative",
+        "groundedSummary",
+        "partnerWorldEvents",
+        "thingsToRemember",
+        "unresolvedFollowUps"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "allOf": [
+            {
+              "$ref": "#/$defs/noUuidLike"
+            }
+          ]
+        },
+        "narrative": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "allOf": [
+            {
+              "$ref": "#/$defs/noUuidLike"
+            }
+          ]
+        },
+        "groundedSummary": {
+          "type": "string",
+          "maxLength": 1000,
+          "allOf": [
+            {
+              "$ref": "#/$defs/noUuidLike"
+            }
+          ]
+        },
+        "partnerWorldEvents": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/boundedDiaryJson"
+          }
+        },
+        "thingsToRemember": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/boundedDiaryJson"
+          }
+        },
+        "unresolvedFollowUps": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/boundedDiaryJson"
+          }
+        }
+      }
+    },
+    "memoryPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidates"
+      ],
+      "properties": {
+        "candidates": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "maxProperties": 100,
+            "propertyNames": {
+              "$ref": "#/$defs/memoryPayloadObjectKey"
+            },
+            "properties": {
+              "existingMemoryId": {
+                "$ref": "#/$defs/uuidV4"
+              },
+              "sourceMessageIds": {
+                "$ref": "#/$defs/uuidV4Array"
+              },
+              "source_message_ids": {
+                "$ref": "#/$defs/uuidV4Array"
+              }
+            },
+            "additionalProperties": {
+              "$ref": "#/$defs/boundedMemoryJson"
+            }
+          }
+        }
+      }
+    },
+    "boundedDiaryJson": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "maxLength": 4000,
+          "allOf": [
+            {
+              "$ref": "#/$defs/noUuidLike"
+            }
+          ]
+        },
+        {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/boundedDiaryJson"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 100,
+          "propertyNames": {
+            "$ref": "#/$defs/payloadObjectKey"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/boundedDiaryJson"
+          }
+        }
+      ]
+    },
+    "boundedMemoryJson": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "maxLength": 4000,
+          "allOf": [
+            {
+              "$ref": "#/$defs/noUuidLike"
+            }
+          ]
+        },
+        {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/boundedMemoryJson"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 100,
+          "propertyNames": {
+            "$ref": "#/$defs/memoryPayloadObjectKey"
+          },
+          "properties": {
+            "existingMemoryId": {
+              "$ref": "#/$defs/uuidV4"
+            },
+            "sourceMessageIds": {
+              "$ref": "#/$defs/uuidV4Array"
+            },
+            "source_message_ids": {
+              "$ref": "#/$defs/uuidV4Array"
+            }
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/boundedMemoryJson"
+          }
+        }
+      ]
+    },
+    "uuidV4": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "uuidV4Array": {
+      "type": "array",
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/uuidV4"
+      }
+    },
+    "noUuidLike": {
+      "$comment": "The schema rejects direct ASCII UUID-like text. Factory runtime additionally applies NFKC and removes policy default-ignorables on an inspection-only copy before this check; protected sink adapters require that factory provenance.",
+      "not": {
+        "pattern": "[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
+      }
+    }
+  }
+}

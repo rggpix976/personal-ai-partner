@@ -97,9 +97,15 @@ function runA7StaticSelfTest() {
     assert(hasFunction('ProactiveMessageService', 'evaluateLocalConditions'), 'ProactiveMessageService.evaluateLocalConditions is missing.');
     assert(hasFunction('ProactiveMessageService', 'send'), 'ProactiveMessageService.send is missing.');
     assert(hasFunction('CharacterProfileService', 'validateV1'), 'CharacterProfileService.validateV1 is missing.');
+    assert(hasFunction('CharacterProfileService', 'validateV2'), 'CharacterProfileService.validateV2 is missing.');
+    assert(hasFunction('CharacterProfileService', 'readV2'), 'CharacterProfileService.readV2 is missing.');
     assert(hasFunction('CharacterProfileService', 'inspectRuntime'), 'CharacterProfileService.inspectRuntime is missing.');
     assert(hasFunction('CharacterProfileService', 'requireActive'), 'CharacterProfileService.requireActive is missing.');
     assert(hasFunction('CharacterProfileService', 'saveV1'), 'CharacterProfileService.saveV1 is missing.');
+    assert(hasFunction('CharacterProfileService', 'saveV2'), 'CharacterProfileService.saveV2 is missing.');
+    assert(hasFunction('CharacterPackService', 'getActive'), 'CharacterPackService.getActive is missing.');
+    assert(hasFunction('CharacterPackService', 'getPromptView'), 'CharacterPackService.getPromptView is missing.');
+    assert(hasFunction('CharacterPackService', 'assertActiveBinding'), 'CharacterPackService.assertActiveBinding is missing.');
     assert(hasFunction('CharacterContextService', 'buildActive'), 'CharacterContextService.buildActive is missing.');
     assert(hasFunction('CharacterContextService', 'withConversationMode'), 'CharacterContextService.withConversationMode is missing.');
   });

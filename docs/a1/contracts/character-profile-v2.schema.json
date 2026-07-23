@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acepilot.local/schemas/character-profile-v2.schema.json",
+  "title": "CharacterProfileV2",
+  "description": "User-controlled settings for one code-owned CharacterPack. Personality, first person, voice, canon, and fixed responses are intentionally absent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "identity",
+    "preferences"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "character-profile.v2"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "partnerName",
+        "userAddress"
+      ],
+      "properties": {
+        "partnerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "userAddress": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        }
+      }
+    },
+    "preferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replyLength"
+      ],
+      "properties": {
+        "replyLength": {
+          "enum": [
+            "short",
+            "balanced",
+            "long"
+          ]
+        }
+      }
+    }
+  }
+}

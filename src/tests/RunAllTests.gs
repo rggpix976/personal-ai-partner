@@ -8,7 +8,12 @@ function runAllSelfTests() {
     'runA7StaticSelfTest',
     'runA7IntegrationSelfTest',
     'runA8ProactiveConversationTests',
-    'runA9CharacterProfileTests'
+    'runA9CharacterProfileTests',
+    'runA10ImmersionClassifierCatalogTests',
+    'runA10ImmersionPolicyCorpusTests',
+    'runA10ImmersionGuardTests',
+    'runA10ImmersionArtifactTests',
+    'runA10ImmersionCoordinatorTests'
   ];
   var summary = {
     ok: true,

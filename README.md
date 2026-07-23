@@ -18,9 +18,12 @@ and initiate proactive conversations.
 - Staged production validation completed on 2026-07-20
 - Time-driven jobs: exactly one `processQueueJob` trigger and one
   `schedulerJob` trigger
-- The partner persona foundation now includes a dormant validated v1 profile,
-  revision management, mode resolution, and typed context; generation guards
-  and surface integration are not yet implemented or deployed
+- The repository includes a dormant V2 profile target, one code-owned
+  CharacterPack, typed context, classifier, reviewed exceptional catalog,
+  guard contracts, and authenticated approval artifacts; production surface
+  integration and deployment are not yet implemented
+- `character-profile.v1` remains dormant compatibility data and is not
+  automatically converted to V2
 
 The production behavior and rollout evidence for proactive conversations are
 documented in
@@ -38,7 +41,8 @@ documented in
 - Proactive email delivery with quota, cooldown, quiet-hour, and daily-cap
   gates
 - Deterministic probability-based proactive decisions
-- Config-driven AI proactive message generation with template fallback
+- Config-driven AI proactive message generation with template fallback in the
+  current production/legacy path
 - Live Web polling for newly persisted messages
 - Weekly backup and retention
 - Static validation, Apps Script self-tests, and staged production validation
@@ -101,8 +105,10 @@ Start with these documents:
 - [`docs/features/PROACTIVE_CONVERSATIONS.md`](docs/features/PROACTIVE_CONVERSATIONS.md):
   probabilistic and AI-generated proactive conversation specification
 - [`docs/features/CHARACTER_IMMERSION.md`](docs/features/CHARACTER_IMMERSION.md):
-  partner persona, immersion, fallback, UI, and acceptance specification;
-  profile foundation implemented, runtime enforcement still pending
+  single-CharacterPack deployment model, minimal V2 profile, immersion,
+  exceptional responses, product/UI separation, proactive target, and
+  acceptance specification; surface integration and runtime enforcement remain
+  pending
 - [`docs/qa/A7_MANUAL_GAS_TEST_PLAN.md`](docs/qa/A7_MANUAL_GAS_TEST_PLAN.md):
   manual Apps Script validation
 - [`docs/qa/A7_SECURITY_REVIEW.md`](docs/qa/A7_SECURITY_REVIEW.md):
@@ -174,6 +180,11 @@ runA7StaticSelfTest()
 runA7IntegrationSelfTest()
 runA8ProactiveConversationTests()
 runA9CharacterProfileTests()
+runA10ImmersionClassifierCatalogTests()
+runA10ImmersionPolicyCorpusTests()
+runA10ImmersionGuardTests()
+runA10ImmersionArtifactTests()
+runA10ImmersionCoordinatorTests()
 ```
 
 ## Setup and deployment outline
@@ -257,14 +268,22 @@ PROACTIVE_AI_GENERATION_ENABLED=false
 The first setting restores threshold-only enqueue decisions. The second
 disables Gemini proactive body generation and uses the configured template.
 
+That template behavior is the current production/legacy rollback contract.
+The target enforced CharacterPack path in PR 5 is different: each new
+proactive body is generated, guarded, and rewritten at most once. If no
+approved artifact is produced, nothing is sent or saved and the scheduler
+waits for a later eligibility evaluation; it does not send a fixed or
+configured-template replacement.
+
 ## Safety notes
 
 - Do not commit API keys, email addresses, OAuth tokens, cookies, deployment
   identifiers, Web App URLs, or project-specific IDs.
 - Do not log full Gemini prompts, raw image base64, secrets, or private message
   content.
-- Do not hard-code user or partner names, persona, message style, or templates;
-  keep them in the configuration sheet.
+- Do not hard-code user-selected partner names or user addresses. The fixed
+  first person, voice, temperament, canon, and exceptional responses belong in
+  the reviewed code-owned CharacterPack, not free-form CONFIG text.
 - Do not run destructive Drive, backup, migration, or cleanup operations
   against valuable data without checking the configured resource IDs.
 - Prefer idempotent queue and delivery behavior over duplicate external side

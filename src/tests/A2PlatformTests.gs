@@ -198,18 +198,41 @@ function runA2PlatformTests() {
     assert(entries.CHARACTER_PROFILE_MODE.value === 'legacy', 'Profile must default to legacy.');
     assert(entries.CHARACTER_PROFILE_V1.type === 'json', 'Profile config type is invalid.');
     assert(
-      entries.CHARACTER_PROFILE_V1.value === APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON,
-      'Profile default and canonical fixture must stay identical.'
+      entries.CHARACTER_PROFILE_V1.value === APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_V1_JSON,
+      'Dormant v1 profile default and canonical fixture must stay identical.'
     );
     assert(
       CharacterProfileService.validateV1(entries.CHARACTER_PROFILE_V1.value).valid,
-      'Default v1 profile should validate.'
+      'Dormant v1 profile should validate.'
     );
     assert(entries.CHARACTER_PROFILE_REVISION.value === '0', 'Revision must start at zero.');
     assert(entries.CHARACTER_PROFILE_REVISION.type === 'int', 'Revision type is invalid.');
+    assert(entries.CHARACTER_PROFILE_V2.type === 'json', 'V2 profile config type is invalid.');
+    assert(
+      entries.CHARACTER_PROFILE_V2.value === APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON,
+      'Active profile default and canonical fixture must stay identical.'
+    );
+    assert(
+      CharacterProfileService.validateV2(entries.CHARACTER_PROFILE_V2.value).valid,
+      'Default v2 profile should validate.'
+    );
+    assert(
+      entries.CHARACTER_PROFILE_V2_REVISION.value === '0',
+      'V2 revision must start at zero.'
+    );
+    assert(
+      entries.CHARACTER_PROFILE_V2_REVISION.type === 'int',
+      'V2 revision type is invalid.'
+    );
     assert(entries.PROACTIVE_FREQUENCY.value === 'normal', 'Frequency must default to normal.');
-    assert(APP_CONSTANTS.CHARACTER.POLICY_VERSION === 'character-policy.v1', 'Policy version is invalid.');
-    assert(APP_CONSTANTS.CHARACTER.CATALOG_VERSION === 'character-catalog.v1', 'Catalog version is invalid.');
+    assert(
+      /^character-policy\.v\d+$/.test(APP_CONSTANTS.CHARACTER.POLICY_VERSION),
+      'Policy version is invalid.'
+    );
+    assert(
+      /^character-catalog\.v\d+$/.test(APP_CONSTANTS.CHARACTER.CATALOG_VERSION),
+      'Catalog version is invalid.'
+    );
   });
 
   return results;

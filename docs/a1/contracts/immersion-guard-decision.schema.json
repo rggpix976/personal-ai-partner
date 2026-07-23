@@ -1,0 +1,301 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acepilot.local/schemas/immersion-guard-decision.schema.json",
+  "title": "ImmersionGuardDecision",
+  "$comment": "Structural contract only. Runtime ALLOW authentication also requires process-local provenance bound to the exact classified context.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "category",
+    "action",
+    "surface",
+    "source",
+    "policyVersion",
+    "characterPackId",
+    "characterPackVersion",
+    "profileSchemaVersion",
+    "profileRevision",
+    "catalogVersion",
+    "claimType",
+    "requiresEvidence",
+    "evidenceKeys"
+  ],
+  "properties": {
+    "status": {
+      "enum": [
+        "ALLOW",
+        "DENY",
+        "GUARD_UNAVAILABLE"
+      ]
+    },
+    "category": {
+      "oneOf": [
+        {
+          "$ref": "immersion-semantic-verdict.schema.json#/$defs/category"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "action": {
+      "enum": [
+        "ALLOW",
+        "DENY",
+        "GUARD_UNAVAILABLE"
+      ]
+    },
+    "surface": {
+      "$ref": "#/$defs/surface"
+    },
+    "source": {
+      "enum": [
+        "generated",
+        "rewrite",
+        "canonical",
+        "fallback",
+        "legacy_revalidated"
+      ]
+    },
+    "policyVersion": {
+      "const": "character-policy.v2"
+    },
+    "characterPackId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$"
+    },
+    "characterPackVersion": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]{2,79}$"
+    },
+    "profileSchemaVersion": {
+      "const": "character-profile.v2"
+    },
+    "profileRevision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "catalogVersion": {
+      "const": "character-catalog.v2"
+    },
+    "claimType": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 64,
+      "pattern": "^[A-Z0-9_]*$"
+    },
+    "requiresEvidence": {
+      "type": "boolean"
+    },
+    "evidenceKeys": {
+      "type": "array",
+      "maxItems": 50,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 80,
+        "pattern": "^[A-Za-z0-9._:-]+$"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "surface": {
+            "const": "PROACTIVE_RETRY"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source": {
+            "const": "legacy_revalidated"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "source": {
+            "const": "legacy_revalidated"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "surface": {
+            "const": "PROACTIVE_RETRY"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "surface": {
+            "enum": [
+              "CHAT_TEXT_SYNC",
+              "CHAT_TEXT_QUEUED",
+              "CHAT_IMAGE"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source": {
+            "enum": [
+              "generated",
+              "rewrite",
+              "canonical",
+              "fallback"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "surface": {
+            "const": "PROACTIVE_AI"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source": {
+            "enum": [
+              "generated",
+              "rewrite"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "surface": {
+            "enum": [
+              "DIARY",
+              "MEMORY_EXTRACTION"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source": {
+            "enum": [
+              "generated",
+              "rewrite"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "ALLOW"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "action": {
+            "const": "ALLOW"
+          },
+          "category": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "ALLOW"
+          },
+          "requiresEvidence": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "claimType": {
+            "enum": [
+              "USER_STATE",
+              "SENSOR_OBSERVATION",
+              "PARTNER_WORLD"
+            ]
+          },
+          "evidenceKeys": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "DENY"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "action": {
+            "const": "DENY"
+          },
+          "category": {
+            "$ref": "immersion-semantic-verdict.schema.json#/$defs/category"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "GUARD_UNAVAILABLE"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "action": {
+            "const": "GUARD_UNAVAILABLE"
+          },
+          "category": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "surface": {
+      "enum": [
+        "CHAT_TEXT_SYNC",
+        "CHAT_TEXT_QUEUED",
+        "CHAT_IMAGE",
+        "PROACTIVE_AI",
+        "PROACTIVE_RETRY",
+        "DIARY",
+        "MEMORY_EXTRACTION"
+      ]
+    }
+  }
+}
