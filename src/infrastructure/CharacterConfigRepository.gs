@@ -2,8 +2,10 @@ var CharacterConfigRepository = (function() {
   var KEYS = Object.freeze({
     RUNTIME_MODE: 'CHARACTER_RUNTIME_MODE',
     PROFILE_MODE: 'CHARACTER_PROFILE_MODE',
-    PROFILE: 'CHARACTER_PROFILE_V1',
-    REVISION: 'CHARACTER_PROFILE_REVISION',
+    PROFILE_V1: 'CHARACTER_PROFILE_V1',
+    REVISION_V1: 'CHARACTER_PROFILE_REVISION',
+    PROFILE_V2: 'CHARACTER_PROFILE_V2',
+    REVISION_V2: 'CHARACTER_PROFILE_V2_REVISION',
     PROACTIVE_FREQUENCY: 'PROACTIVE_FREQUENCY'
   });
   var MAX_SAFE_INTEGER = 9007199254740991;
@@ -37,17 +39,58 @@ var CharacterConfigRepository = (function() {
       };
     });
 
+    var profileV1 = entries[KEYS.PROFILE_V1] || null;
+    var revisionV1 = entries[KEYS.REVISION_V1] || null;
     return {
       runtimeMode: entries[KEYS.RUNTIME_MODE] || null,
       profileMode: entries[KEYS.PROFILE_MODE] || null,
-      profile: entries[KEYS.PROFILE] || null,
-      revision: entries[KEYS.REVISION] || null,
+      profile: profileV1,
+      revision: revisionV1,
+      profileV1: profileV1,
+      revisionV1: revisionV1,
+      profileV2: entries[KEYS.PROFILE_V2] || null,
+      revisionV2: entries[KEYS.REVISION_V2] || null,
       proactiveFrequency: entries[KEYS.PROACTIVE_FREQUENCY] || null,
       duplicateKeys: Object.keys(duplicateKeys).sort()
     };
   }
 
   function saveProfileAtomically(canonicalProfileJson, expectedRevision, updatedAt) {
+    return saveProfileVersionAtomically_(
+      canonicalProfileJson,
+      expectedRevision,
+      updatedAt,
+      {
+        profileKey: KEYS.PROFILE_V1,
+        revisionKey: KEYS.REVISION_V1,
+        profileField: 'profileV1',
+        revisionField: 'revisionV1',
+        lockName: 'character-profile-save'
+      }
+    );
+  }
+
+  function saveProfileV2Atomically(canonicalProfileJson, expectedRevision, updatedAt) {
+    return saveProfileVersionAtomically_(
+      canonicalProfileJson,
+      expectedRevision,
+      updatedAt,
+      {
+        profileKey: KEYS.PROFILE_V2,
+        revisionKey: KEYS.REVISION_V2,
+        profileField: 'profileV2',
+        revisionField: 'revisionV2',
+        lockName: 'character-profile-v2-save'
+      }
+    );
+  }
+
+  function saveProfileVersionAtomically_(
+    canonicalProfileJson,
+    expectedRevision,
+    updatedAt,
+    version
+  ) {
     ensure(
       typeof canonicalProfileJson === 'string' && canonicalProfileJson !== '',
       'VALIDATION_REQUEST_INVALID',
@@ -63,14 +106,14 @@ var CharacterConfigRepository = (function() {
     Validators.assertIsoDateTimeString(savedAt, 'updatedAt');
 
     try {
-      return LockManager.withScriptLock('character-profile-save', function() {
+      return LockManager.withScriptLock(version.lockName, function() {
         var rows = SheetRepository.getRows(APP_CONSTANTS.SHEETS.CONFIG);
         var snapshot = buildSnapshot_(rows);
-        assertNoDuplicateKeys_(snapshot, [KEYS.PROFILE, KEYS.REVISION]);
-        assertEntryType_(snapshot.profile, 'json', 'PROFILE_ENTRY_INVALID');
-        assertEntryType_(snapshot.revision, 'int', 'REVISION_ENTRY_INVALID');
+        assertNoDuplicateKeys_(snapshot, [version.profileKey, version.revisionKey]);
+        assertEntryType_(snapshot[version.profileField], 'json', 'PROFILE_ENTRY_INVALID');
+        assertEntryType_(snapshot[version.revisionField], 'int', 'REVISION_ENTRY_INVALID');
 
-        var currentRevision = parseRevision_(snapshot.revision.rawValue);
+        var currentRevision = parseRevision_(snapshot[version.revisionField].rawValue);
         if (currentRevision !== expectedRevision) {
           throw createAppError(
             'CHARACTER_CONFIG_CONFLICT',
@@ -87,8 +130,8 @@ var CharacterConfigRepository = (function() {
 
         var nextRevision = currentRevision + 1;
         writeProfileAndRevision_(
-          snapshot.profile,
-          snapshot.revision,
+          snapshot[version.profileField],
+          snapshot[version.revisionField],
           canonicalProfileJson,
           nextRevision,
           savedAt
@@ -96,14 +139,22 @@ var CharacterConfigRepository = (function() {
         SheetRepository.flush();
 
         var readBack = readSnapshot();
-        assertNoDuplicateKeys_(readBack, [KEYS.PROFILE, KEYS.REVISION]);
-        assertEntryType_(readBack.profile, 'json', 'PROFILE_READBACK_INVALID');
-        assertEntryType_(readBack.revision, 'int', 'REVISION_READBACK_INVALID');
+        assertNoDuplicateKeys_(readBack, [version.profileKey, version.revisionKey]);
+        assertEntryType_(
+          readBack[version.profileField],
+          'json',
+          'PROFILE_READBACK_INVALID'
+        );
+        assertEntryType_(
+          readBack[version.revisionField],
+          'int',
+          'REVISION_READBACK_INVALID'
+        );
         ensure(
-          readBack.profile.rawValue === canonicalProfileJson &&
-            parseRevision_(readBack.revision.rawValue) === nextRevision &&
-            readBack.profile.updatedAt === savedAt &&
-            readBack.revision.updatedAt === savedAt,
+          readBack[version.profileField].rawValue === canonicalProfileJson &&
+            parseRevision_(readBack[version.revisionField].rawValue) === nextRevision &&
+            readBack[version.profileField].updatedAt === savedAt &&
+            readBack[version.revisionField].updatedAt === savedAt,
           'STORAGE_WRITE_FAILED',
           'Character profile write verification failed.',
           { reason: 'PROFILE_READBACK_MISMATCH' }
@@ -236,6 +287,7 @@ var CharacterConfigRepository = (function() {
   return {
     readSnapshot: readSnapshot,
     saveProfileAtomically: saveProfileAtomically,
+    saveProfileV2Atomically: saveProfileV2Atomically,
     __test: {
       buildSnapshot: buildSnapshot_,
       parseRevision: parseRevision_

@@ -207,6 +207,8 @@ Script Propertiesは検証時点を分離する。
 | CHARACTER_PROFILE_MODE | string | legacy |
 | CHARACTER_PROFILE_V1 | json | neutralなvalid v1 profile（休眠） |
 | CHARACTER_PROFILE_REVISION | int | 0 |
+| CHARACTER_PROFILE_V2 | json | minimalなvalid v2 profile（休眠） |
+| CHARACTER_PROFILE_V2_REVISION | int | 0 |
 | PROACTIVE_FREQUENCY | string | normal |
 | GEMINI_MODEL | string | 実装時点の無料枠対応安定版 |
 | MAX_USER_TEXT_CHARS | int | 4000 |
@@ -234,6 +236,23 @@ Script Propertiesは検証時点を分離する。
 `DIARY_MIN_CHARS` is a generation target, not a persistence gate. A non-empty
 structured narrative below that target is accepted with a controlled warning;
 `DIARY_MAX_CHARS` remains a hard validation limit.
+
+Active character targetは `CHARACTER_PROFILE_MODE=v2`、
+`character-profile.v2`、code-owned
+`warm-kansai-caretaker / warm-kansai-caretaker.v1` CharacterPackの組合せ
+である。V2 profileの利用者可変fieldは `partnerName`、`userAddress`、
+`replyLength`だけとする。first person、方言、personality、canon、fixed responseは
+CONFIGではなくCharacterPackが所有する。`PROACTIVE_FREQUENCY` とquiet hoursは
+profile外の通知設定である。
+
+V1、`SYSTEM_PERSONA`、legacy style設定をV2へ自動変換またはmergeしない。
+`CHARACTER_RUNTIME_MODE=legacy` ではV1/V2ともactive authorityにならない。
+PR 3はdormant coreだけを追加するため、この文書にV2 default契約を記録しても
+productionで `setup()` / `migrateSchema()` を実行しない。
+
+現行productionのproactive template fallbackはlegacy動作として維持される。PR 5の
+enforced V2経路は、新しいproactive本文を毎回生成し、guardと最大1回rewrite後も
+承認できなければ送信・保存・marker・回数更新を行わず次回eligibilityを待つ。
 
 ## 6. `setup()` の責務
 

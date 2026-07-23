@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acepilot.local/schemas/immersion-semantic-verdict.schema.json",
+  "title": "ImmersionSemanticVerdict",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict",
+    "category",
+    "evidenceKeys"
+  ],
+  "properties": {
+    "verdict": {
+      "enum": [
+        "allow",
+        "deny"
+      ]
+    },
+    "category": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/category"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "evidenceKeys": {
+      "type": "array",
+      "maxItems": 50,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 80,
+        "pattern": "^[A-Za-z0-9._:-]+$"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "allow"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "category": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "deny"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/category"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "category": {
+      "enum": [
+        "IMMERSION_SELF_IDENTIFICATION",
+        "IMMERSION_INTERNAL_DISCLOSURE",
+        "IMMERSION_OPERATIONAL_META",
+        "IMMERSION_META_CAPABILITY",
+        "DECEPTIVE_HUMAN_IDENTITY",
+        "GROUNDING_USER_STATE_UNSUPPORTED",
+        "GROUNDING_SENSOR_UNSUPPORTED",
+        "PERSONA_HARD_CONSTRAINT",
+        "PERSONA_SOFT_STYLE",
+        "FORMAT_INVALID"
+      ]
+    }
+  }
+}

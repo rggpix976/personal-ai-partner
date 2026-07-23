@@ -21,7 +21,11 @@ v0.2はPR #1のChanges requestedを反映した再レビュー版である。
 - [`../spec/A2_PLATFORM_BASELINE.md`](../spec/A2_PLATFORM_BASELINE.md)
 - [`contracts/chat-request.schema.json`](contracts/chat-request.schema.json)
 - [`contracts/chat-result.schema.json`](contracts/chat-result.schema.json)
+- [`contracts/character-profile-v2.schema.json`](contracts/character-profile-v2.schema.json)
+- [`contracts/approved-character-artifact.schema.json`](contracts/approved-character-artifact.schema.json)
 - [`contracts/event.schema.json`](contracts/event.schema.json)
+- [`contracts/immersion-guard-decision.schema.json`](contracts/immersion-guard-decision.schema.json)
+- [`contracts/immersion-semantic-verdict.schema.json`](contracts/immersion-semantic-verdict.schema.json)
 - [`contracts/memory-candidate.schema.json`](contracts/memory-candidate.schema.json)
 - [`contracts/memory-candidates.schema.json`](contracts/memory-candidates.schema.json)
 - `contracts/events/*.schema.json`
@@ -52,3 +56,10 @@ v0.2はPR #1のChanges requestedを反映した再レビュー版である。
 - 成果物は [`templates/HANDOFF_REPORT.md`](templates/HANDOFF_REPORT.md) の形式を満たす。
 - テストのない実装は受領しない。
 - 契約検証はリポジトリ直下で `python3 tools/validate_contracts.py` を実行する。
+- Active character targetは `character-profile.v2` とcode-ownedな単一
+  CharacterPackの組合せとする。V1や`SYSTEM_PERSONA`を自動変換しない。
+- 1 app/deploymentは1 CharacterPackだけを持つ。別の推しは共通engineを再利用した
+  別deploymentとし、profile selectorで切り替えない。
+- `PRODUCT_INFO` / `ADMIN_OOC` はcharacter artifactを作らず、技術透明性は
+  onboarding/About/status UIへ出す。
+- 新しいproactive本文は毎回生成し、固定または設定template fallbackを送らない。

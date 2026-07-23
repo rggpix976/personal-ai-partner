@@ -21,12 +21,15 @@
 
 | code | retryable | retryStrategy | 意味 |
 |---|---:|---|---|
+| VALIDATION_REQUEST_INVALID | false | NONE | request/context/source/surface等の型付き境界不正 |
 | VALIDATION_TEXT_TOO_LONG | false | NONE | 文字数超過 |
 | VALIDATION_IMAGE_UNSUPPORTED | false | NONE | 未対応画像 |
 | VALIDATION_IMAGE_TOO_LARGE | false | NONE | 画像サイズ超過 |
 | CONFIG_MISSING | false | NONE | 必須設定欠落 |
-| CHARACTER_CONFIG_INVALID | false | NONE | character mode/profile設定不正 |
+| CHARACTER_CONFIG_INVALID | false | NONE | character mode/V2 profile/CharacterPack binding設定不正 |
 | CHARACTER_CONFIG_CONFLICT | false | NONE | profile revisionのCASまたは保存lock競合 |
+| CHARACTER_OUTPUT_BLOCKED | true | COMMON_BACKOFF | 承認済みcharacter出力を作れずfail closed |
+| CHARACTER_ARTIFACT_INVALID | false | NONE | raw・偽造・surface不一致・staleな承認artifact |
 | ACCESS_NOT_ALLOWED | false | NONE | アクセス設定不正 |
 | DUPLICATE_REQUEST | false | NONE | 同一要求 |
 | GEMINI_RATE_LIMIT | true | COMMON_BACKOFF | 429・無料枠・速度制限 |
@@ -41,6 +44,21 @@
 | QUEUE_DEAD | false | NONE | 最大再試行超過 |
 | UNKNOWN | false | NONE | 未分類 |
 
+`CHARACTER_OUTPUT_BLOCKED` と `CHARACTER_ARTIFACT_INVALID` のmessage、details、
+causeへ候補本文、context、prompt、semantic verifierの自由記述、各種IDを含めない。
+管理されたreason/categoryだけを内部制御に使用し、利用者向けには中立なstatus表示だけを返す。
+
+`CHARACTER_OUTPUT_BLOCKED` の共通定義はretryableであるが、PR 5の新規proactive
+生成で承認artifactを作れなかった場合は、同じeventを短時間backoffで繰り返して
+固定文を送らない。surface adapterが管理された `NO_APPROVED_PROACTIVE_OUTPUT`
+no-send結果へ変換し、本文、delivery marker、conversation row、送信回数、
+`last_proactive_at`を変更せずeventを安全に完了する。`next_proactive_check_at`を
+進め、schedulerの次回eligibility評価を待つ。このno-send結果はpartner bubbleへ
+表示しない。
+
+`PRODUCT_INFO` と `ADMIN_OOC` はerrorではない。character artifactを作らないtyped
+routeであり、reviewedなonboarding/About/status UIが中立なproduct voiceで表示する。
+
 ## 5.3 `MAIL_QUOTA_EXHAUSTED` 専用規則
 
 共通の1分、5分、30分、2時間リトライを適用しない。
@@ -48,6 +66,8 @@
 - `nextAttemptAt` は次の暦日の `08:05 Asia/Tokyo` 以降に設定する。
 - 対象が `PROACTIVE_SEND` の場合、保存済み文面をそのまま翌日送らない。
 - 再処理時に沈黙時間、通知禁止時間、日次上限、クールダウンを再評価する。
+- 保存済み生成文を配送再試行する場合もactive profile/policy/catalog/CharacterPackへ
+  bindし直してguardを通す。再承認できなければ隔離して送信しない。
 - 元の `targetDate` が過去日で条件不成立なら、通知を送らず `DONE` とし、結果を `skipped_quota_expired` と記録する。
 - 日次枠回復後も失敗した場合のみ、イベント固有の最大試行回数に従う。
 

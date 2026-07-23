@@ -2,9 +2,10 @@
 
 ## 1. Status
 
-This document defines the production behavior of probabilistic,
-AI-generated proactive conversations introduced by Issue #18 and released as
-Apps Script version 7.
+This document defines the **current production/legacy behavior** of
+probabilistic, AI-generated proactive conversations introduced by Issue #18
+and released as Apps Script version 7. The approved CharacterPack target is
+recorded separately in section 14.1 and is not yet deployed.
 
 Production configuration as of 2026-07-20:
 
@@ -18,10 +19,14 @@ The production rollout passed three stages: the new code with conservative
 defaults, probability-only activation, and probability plus Gemini generation.
 The only time-driven jobs are `processQueueJob` and `schedulerJob`.
 
+PR 3 does not modify or connect this production path. PR 5 will replace only
+the enforced V2 proactive content path after the dormant guard core is
+accepted. Historical behavior and rollout evidence below remain factual.
+
 ## 2. Goals
 
-The feature allows the configured partner to initiate a natural conversation
-while preserving the existing `PROACTIVE_SEND` event pipeline.
+The current feature allows the configured partner to initiate a natural
+conversation while preserving the existing `PROACTIVE_SEND` event pipeline.
 
 The implementation must:
 
@@ -261,7 +266,7 @@ misconfigured payload above 100 is therefore not contract-compliant even
 though the runtime guard is less restrictive. This documentation change does
 not alter either runtime code or the schema.
 
-## 12. AI prompt context
+## 12. Current production AI prompt context
 
 AI generation is controlled independently from eligibility:
 
@@ -285,7 +290,7 @@ The prompt uses:
 Recent system markers do not become memory-query text. Missing conversation or
 memory context degrades to an empty section rather than blocking delivery.
 
-## 13. Prohibited generation behavior
+## 13. Current production prohibited generation behavior
 
 The Gemini prompt requires one message body only and prohibits:
 
@@ -301,14 +306,14 @@ The Gemini prompt requires one message body only and prohibits:
 Names, persona, and style must come from configuration. They must not be
 hard-coded in implementation or documentation examples.
 
-These prohibitions are prompt-level guidance in the current implementation.
-The current runtime does not yet mechanically detect persona self-reference,
-internal/operational disclosure, or every unsupported user-state claim after
-generation. The target runtime-enforced policy is specified in
-[Character Persona and Immersion Specification](CHARACTER_IMMERSION.md) and is
-not yet implemented or deployed.
+These prohibitions remain prompt-level guidance on the current production
+proactive path. The dormant PR 3 immersion core mechanically classifies and
+guards these boundaries, as specified in
+[Character Persona and Immersion Specification](CHARACTER_IMMERSION.md).
+Integration and enforcement on the proactive production path belong to PR 5
+and are not yet implemented or deployed.
 
-## 14. Output validation and fallback
+## 14. Current production output validation and template fallback
 
 Generated text is trimmed. One matching pair of surrounding ASCII quotes,
 Japanese corner brackets, or Japanese double corner brackets is removed.
@@ -339,7 +344,56 @@ Template-only operation remains available with:
 PROACTIVE_AI_GENERATION_ENABLED=false
 ```
 
-## 15. Delivery idempotency
+This configured-template fallback is a verified current-production and legacy
+rollback behavior. It is not the target behavior of the enforced V2
+CharacterPack path.
+
+### 14.1 Enforced V2 CharacterPack target for PR 5
+
+Every **new proactive message body** in the enforced V2 path is generated at
+dispatch time from:
+
+- the active code-owned CharacterPack prompt view
+- the minimal active V2 profile
+- bounded recent user and approved partner conversation
+- accepted memory with validated provenance
+- approved Partner World facts, if available for the proactive scope
+
+Until accepted-memory provenance is integrated, the memory list is empty.
+Existing retrievable legacy memory is not treated as accepted automatically.
+System/error/delivery-marker rows do not enter recent-conversation prompt
+context.
+
+Eligibility metadata such as probability, sample, silence duration,
+`decisionSlot`, queue state, request/event/message IDs, and raw last-message
+timestamps is not prompt material. Eligibility remains local and
+deterministic.
+
+The enforced content flow is:
+
+```text
+new generated subject/body candidate
+  -> common hard and semantic guard
+  -> if repairable, at most one rewrite from original typed context
+  -> guard again
+  -> approved artifact, or no-send
+```
+
+`PROACTIVE_GENERIC` does not exist. `PROACTIVE_BODY_TEMPLATE` and another
+fixed/configured message body are never used as a replacement when generation,
+rewrite, or guard fails. If no approved artifact is produced:
+
+- no delivery marker is appended or updated with new content
+- no body or conversation row is stored
+- no mail is sent
+- proactive send count and `last_proactive_at` are unchanged
+- the event ends with a managed no-send result
+- `next_proactive_check_at` advances so a later scheduler run performs a fresh
+  eligibility decision
+
+The no-send result is not shown as a partner bubble.
+
+## 15. Current production delivery idempotency and target retry rule
 
 Before calling MailApp, the service claims a short-lived marker in
 `conversation_logs` using the delivered-message key.
@@ -359,6 +413,12 @@ MailApp call.
 If delivery fails, the marker becomes `failed` and preserves its text. The
 next queue retry reuses that saved body, preventing another Gemini call and
 wording changes.
+
+In the enforced V2 path, transport retry remains the same attempted utterance,
+not a new proactive message. The saved generated subject/body must be rebound
+to the current profile/policy/catalog/CharacterPack and revalidated immediately
+before reuse. If it is no longer approved, it is quarantined and not sent. It
+is not rewritten and is not replaced with fixed or template text.
 
 After successful delivery:
 
@@ -407,7 +467,7 @@ PROACTIVE_WEB_POLL_SECONDS
 | `PROACTIVE_AI_GENERATION_ENABLED` | `true` |
 | `SILENCE_MINUTES` | `240` |
 
-### 17.2 Repository defaults and supported controls
+### 17.2 Current repository defaults and legacy-supported controls
 
 | Key | Repository fallback | Type | Purpose |
 |---|---:|---|---|
@@ -434,6 +494,12 @@ Shared context configuration includes `PARTNER_NAME`, `USER_NAME`,
 `SYSTEM_PERSONA`, `RECENT_MESSAGE_LIMIT`, and `MEMORY_CONTEXT_LIMIT`.
 Template and style configuration includes `PROACTIVE_MESSAGE_STYLE`,
 `PROACTIVE_SUBJECT_TEMPLATE`, and `PROACTIVE_BODY_TEMPLATE`.
+
+Those persona/style/body-template keys describe the current production/legacy
+path. The enforced V2 path reads partner voice and proactive guidance from the
+code-owned CharacterPack. User settings provide the partner name, user address,
+reply length, proactive frequency, and quiet-hour controls; they do not expose
+a proactive prompt or body-template editor.
 
 ## 18. Production rollout evidence
 
@@ -497,7 +563,8 @@ Normal monitoring checks:
 - dispatch does not occur after newer user activity or during quiet hours
 - delivery frequency remains acceptable
 - generated text is natural, persona-consistent, non-pressuring, and factual
-- supported Gemini failures use template fallback
+- supported Gemini failures use template fallback in the current
+  production/legacy path
 
 One transient script-lock acquisition failure occurred in
 `QueueService.recoverStale()` during `processQueueJob` on
@@ -525,6 +592,10 @@ or trigger replacement. The two flags are independent: AI can be disabled
 while probability remains active, or the policy can return to threshold while
 the selected generation mode remains independently configurable.
 
+After V2 activation, these flags still provide complete rollback to the
+verified legacy path. They do not permit configured template text as fallback
+inside the enforced V2 path.
+
 For suspected queue loss, duplicate delivery, or data-integrity failure:
 
 1. Stop the two time-driven triggers.
@@ -533,6 +604,12 @@ For suspected queue loss, duplicate delivery, or data-integrity failure:
 3. Investigate before changing data or redeploying.
 
 ## 21. Source of truth
+
+The implementation and tests below are the source of truth for the current
+production/legacy path and its historical rollout evidence. The target
+single-CharacterPack content, guard, no-fixed-fallback, UI-transparency, and
+protected-sink rules are defined in
+[Character Persona and Immersion Specification](CHARACTER_IMMERSION.md).
 
 Implementation:
 

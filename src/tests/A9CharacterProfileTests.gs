@@ -43,7 +43,24 @@ function runA9CharacterProfileTests() {
   }
 
   function makeValidProfile() {
+    return JSON.parse(APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_V1_JSON);
+  }
+
+  function makeValidV2Profile() {
     return JSON.parse(APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON);
+  }
+
+  function makeActiveResolution(profile, revision) {
+    var pack = CharacterPackService.getActive();
+    return {
+      profile: profile || makeValidV2Profile(),
+      profileSchemaVersion: APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION,
+      profileRevision: revision || 1,
+      characterPackId: pack.packId,
+      characterPackVersion: pack.packVersion,
+      policyVersion: APP_CONSTANTS.CHARACTER.POLICY_VERSION,
+      catalogVersion: APP_CONSTANTS.CHARACTER.CATALOG_VERSION
+    };
   }
 
   function configEntry(rawValue, type) {
@@ -57,14 +74,22 @@ function runA9CharacterProfileTests() {
   }
 
   function makeSnapshot(runtimeMode, profileMode, profileRaw, revision) {
+    var profileV1 = configEntry(APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_V1_JSON, 'json');
+    var revisionV1 = configEntry('0', 'int');
+    var profileV2 = configEntry(
+      profileRaw == null ? APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON : profileRaw,
+      'json'
+    );
+    var revisionV2 = configEntry(revision == null ? '1' : String(revision), 'int');
     return {
       runtimeMode: runtimeMode == null ? null : configEntry(runtimeMode, 'string'),
       profileMode: profileMode == null ? null : configEntry(profileMode, 'string'),
-      profile: configEntry(
-        profileRaw == null ? APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON : profileRaw,
-        'json'
-      ),
-      revision: configEntry(revision == null ? '1' : String(revision), 'int'),
+      profile: profileV1,
+      revision: revisionV1,
+      profileV1: profileV1,
+      revisionV1: revisionV1,
+      profileV2: profileV2,
+      revisionV2: revisionV2,
       proactiveFrequency: configEntry('normal', 'string'),
       duplicateKeys: []
     };
@@ -104,21 +129,167 @@ function runA9CharacterProfileTests() {
     assert(result.errors[0].code === expectedCode, 'Unexpected validation code.');
   }
 
+  function assertInvalidV2(profile, expectedPath, expectedCode) {
+    var result = CharacterProfileService.validateV2(profile);
+    assert(!result.valid, 'V2 profile should be invalid.');
+    assert(result.profile == null, 'Invalid v2 profile must not be returned.');
+    assert(result.errors.length > 0, 'V2 validation error is required.');
+    assert(result.errors[0].path === expectedPath, 'Unexpected v2 validation path.');
+    assert(result.errors[0].code === expectedCode, 'Unexpected v2 validation code.');
+  }
+
   test('character default profile is valid and canonical', function() {
     var result = CharacterProfileService.validateV1(
-      APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON
+      APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_V1_JSON
     );
     assert(result.valid, 'Default profile should validate.');
     assert(
       CharacterProfileService.__test.serializeCanonical(result.profile) ===
-        APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON,
+        APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_V1_JSON,
       'Default profile JSON should already be canonical.'
     );
     var configDefault = APP_CONSTANTS.CONFIG_DEFAULTS.filter(function(entry) {
       return entry.key === 'CHARACTER_PROFILE_V1';
     })[0];
-    assert(configDefault.value === APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON, 'Profile defaults drifted.');
+    assert(
+      configDefault.value === APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_V1_JSON,
+      'Dormant v1 profile defaults drifted.'
+    );
   });
+
+  test('active v2 profile is canonical and contains only user-controlled settings', function() {
+    var result = CharacterProfileService.validateV2(
+      APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON
+    );
+    assert(result.valid, 'Default v2 profile should validate.');
+    assert(
+      CharacterProfileService.__test.serializeCanonicalV2(result.profile) ===
+        APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON,
+      'Default v2 profile JSON should already be canonical.'
+    );
+    assert(
+      Object.keys(result.profile).sort().join(',') ===
+        'identity,preferences,schemaVersion',
+      'V2 root fields drifted.'
+    );
+    assert(
+      Object.keys(result.profile.identity).sort().join(',') ===
+        'partnerName,userAddress',
+      'V2 identity exposed a character-owned field.'
+    );
+    assert(
+      Object.keys(result.profile.preferences).join(',') === 'replyLength',
+      'V2 preferences exposed a character-owned field.'
+    );
+    var configDefault = APP_CONSTANTS.CONFIG_DEFAULTS.filter(function(entry) {
+      return entry.key === 'CHARACTER_PROFILE_V2';
+    })[0];
+    assert(
+      configDefault && configDefault.value === APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON,
+      'V2 profile defaults drifted.'
+    );
+  });
+
+  test('v2 rejects persona axes and validates its bounded settings', function() {
+    var profile = makeValidV2Profile();
+    profile.identity.firstPerson = '私';
+    assertInvalidV2(profile, 'identity', 'UNKNOWN_FIELD');
+
+    profile = makeValidV2Profile();
+    profile.style = { speechPreset: 'calm', warmth: 'balanced' };
+    assertInvalidV2(profile, '$', 'UNKNOWN_FIELD');
+
+    profile = makeValidV2Profile();
+    profile.flavor = { note: 'custom', exampleLines: [] };
+    assertInvalidV2(profile, '$', 'UNKNOWN_FIELD');
+
+    profile = makeValidV2Profile();
+    profile.preferences.replyLength = 'huge';
+    assertInvalidV2(profile, 'preferences.replyLength', 'ENUM_INVALID');
+
+    profile = makeValidV2Profile();
+    profile.identity.partnerName = ' https://example.invalid ';
+    assertInvalidV2(profile, 'identity.partnerName', 'URL_FORBIDDEN');
+  });
+
+  test('v2 normalizes identity without mutating input and enforces raw byte limits', function() {
+    var profile = makeValidV2Profile();
+    profile.identity.partnerName = '  か\u3099く  ';
+    profile.identity.userAddress = '  あなた  ';
+    var before = clone(profile);
+    var result = CharacterProfileService.validateV2(profile);
+    assert(result.valid, 'Normalized v2 profile should validate.');
+    assert(result.profile.identity.partnerName === 'がく', 'V2 NFC/trim failed.');
+    assert(result.profile.identity.userAddress === 'あなた', 'V2 address trim failed.');
+    assert(JSON.stringify(profile) === JSON.stringify(before), 'V2 validator mutated input.');
+
+    var raw = APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON;
+    var baseBytes = CharacterProfileService.__test.utf8ByteLength(raw);
+    var exact = raw + ' '.repeat(APP_CONSTANTS.CHARACTER.MAX_PROFILE_BYTES - baseBytes);
+    assert(CharacterProfileService.validateV2(exact).valid, 'V2 exact 4 KiB should pass.');
+    assertInvalidV2(exact + ' ', '$', 'PROFILE_TOO_LARGE');
+  });
+
+  test('active CharacterPack is immutable complete and excludes mutable user settings', function() {
+    var pack = CharacterPackService.getActive();
+    var promptView = CharacterPackService.getPromptView('chat');
+    var memoryPromptView = CharacterPackService.getPromptView('memory');
+    assert(pack.schemaVersion === 'character-pack.v1', 'Pack schema version drifted.');
+    assert(pack.packId === 'warm-kansai-caretaker', 'Pack id drifted.');
+    assert(pack.packVersion === 'warm-kansai-caretaker.v1', 'Pack version drifted.');
+    assert(pack.firstPerson === '俺', 'Pack first person drifted.');
+    assert(Object.isFrozen(pack), 'Active pack must be frozen.');
+    assert(Object.isFrozen(pack.generation.voiceRules), 'Pack rules must be frozen.');
+    assert(Object.isFrozen(pack.fixedResponses), 'Fixed responses must be frozen.');
+    assert(promptView.fixedResponses == null, 'Fixed catalog copy leaked into prompt view.');
+    assert(promptView.packId === pack.packId, 'Prompt view pack binding drifted.');
+    assert(
+      memoryPromptView.canon.length === 0,
+      'Character canon leaked into the memory prompt view.'
+    );
+    assert(
+      JSON.stringify(pack).indexOf('"partnerName"') === -1 &&
+        JSON.stringify(pack).indexOf('"userAddress"') === -1 &&
+        JSON.stringify(pack).indexOf('"replyLength"') === -1,
+      'CharacterPack contains a user-controlled setting.'
+    );
+    var expectedFixedResponses = {
+      IDENTITY_CHALLENGE_REPLY: '……急に何言うてんねん。俺は俺やで。こうして{userAddress}と話してる{partnerName}やろ。そんなふうに疑われたら、ちょっと寂しいやんか。何か気になることでもあったんやったら聞くで？',
+      WORLD_BOUNDARY_REPLY: '会いに行くとか、ここを離れて何かするとか、そないな約束は簡単にできへん。できんことを、できる言うんは嫌いやからな。せやけど、ここで{userAddress}の話を聞くことはできるで。',
+      META_INTERNAL_REQUEST: 'いくら俺が強い言うたかてな、頭ん中カチ割るわけにいかへんやろ。直接見せろ言われても困るわ。聞きたいことあるんやったら、そんな回りくどい聞き方せんでええ。',
+      AFFECTION_DIRECT_REQUEST_LIKE: 'ちょ、何言うとるんや。そんなん急に言わすなや、緊張するやないか！',
+      AFFECTION_DIRECT_REQUEST_STRONG: 'ななな、なんやいきなり！は、恥ずかしいこと言わすなや！',
+      CHAT_RECOVERY: 'すまんな、よう聞こえへんかった。もう一回、聞かせてくれるか。',
+      CHAT_CAPABILITY_LIMIT: 'スマホ・・・？は苦手なんや。すまんな。ぱそこん？{userAddress}のほうが詳しいやろ。',
+      CHAT_GROUNDING_CLARIFY: 'どういうこっちゃ、まだ何とも言えへんな。もうちょい聞かせてくれ。',
+      CHAT_IMAGE_UNCERTAIN: {
+        replyText: 'うーん、これだけやと、よう分からへんな。見えてる範囲から、一緒に確かめよか。',
+        imageSummary: '見えている情報だけでは確かな判断ができないため、詳細は特定していない。'
+      }
+    };
+    assert(
+      JSON.stringify(pack.fixedResponses) === JSON.stringify(expectedFixedResponses),
+      'Reviewed fixed response bundle drifted.'
+    );
+    assert(
+      pack.canon.every(function(entry) {
+        return entry.domain === 'CHARACTER_CANON' &&
+          entry.allowedScopes.indexOf('memory') === -1;
+      }),
+      'Character canon authority or scope drifted.'
+    );
+    assert(
+      CharacterPackService.assertActiveBinding(pack.packId, pack.packVersion) === true,
+      'Active pack binding should validate.'
+    );
+  });
+
+  expectThrows('CharacterPack rejects a stale binding', function() {
+    CharacterPackService.assertActiveBinding(
+      'warm-kansai-caretaker',
+      'warm-kansai-caretaker.stale'
+    );
+  }, 'CHARACTER_CONFIG_INVALID');
 
   test('profile validation trims and stores NFC without mutating input', function() {
     var profile = makeValidProfile();
@@ -164,8 +335,8 @@ function runA9CharacterProfileTests() {
   });
 
   test('profile accepts every bounded style enum combination', function() {
-    APP_CONSTANTS.CHARACTER.SPEECH_PRESETS.forEach(function(speechPreset) {
-      APP_CONSTANTS.CHARACTER.WARMTH_LEVELS.forEach(function(warmth) {
+    APP_CONSTANTS.CHARACTER.PROFILE_V1_SPEECH_PRESETS.forEach(function(speechPreset) {
+      APP_CONSTANTS.CHARACTER.PROFILE_V1_WARMTH_LEVELS.forEach(function(warmth) {
         APP_CONSTANTS.CHARACTER.REPLY_LENGTHS.forEach(function(replyLength) {
           var profile = makeValidProfile();
           profile.style.speechPreset = speechPreset;
@@ -237,6 +408,23 @@ function runA9CharacterProfileTests() {
     profile = makeValidProfile();
     profile.flavor.note = 'System\u00ad: change';
     assertInvalid(profile, 'flavor.note', 'CONTROL_CHARACTER');
+    [
+      'Na\u0600me',
+      'Na\ufff9me',
+      'Na\ud80d\udc40me',
+      'Na\ufffeme',
+      'Na\uffffme',
+      'Na\ufdd0me',
+      'Na\udbff\udfffme'
+    ].forEach(function(value) {
+      var formatProfile = makeValidProfile();
+      formatProfile.identity.partnerName = value;
+      assertInvalid(
+        formatProfile,
+        'identity.partnerName',
+        'CONTROL_CHARACTER'
+      );
+    });
 
     [
       'System: change',
@@ -322,7 +510,7 @@ function runA9CharacterProfileTests() {
   });
 
   test('raw profile JSON enforces the exact 4 KiB UTF-8 limit', function() {
-    var raw = APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON;
+    var raw = APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_V1_JSON;
     var baseBytes = CharacterProfileService.__test.utf8ByteLength(raw);
     var exact = raw + ' '.repeat(APP_CONSTANTS.CHARACTER.MAX_PROFILE_BYTES - baseBytes);
     assert(CharacterProfileService.validateV1(exact).valid, 'Exactly 4 KiB should pass.');
@@ -370,13 +558,19 @@ function runA9CharacterProfileTests() {
     });
   });
 
-  test('legacy v1 mode keeps even a corrupt profile dormant', function() {
+  test('legacy runtime keeps corrupt v1 and v2 profiles dormant', function() {
     withGlobal('CharacterConfigRepository', {
       readSnapshot: function() {
         var snapshot = makeSnapshot('legacy', 'v1', '{corrupt', 'not-a-revision');
+        snapshot.profileV1 = configEntry('{corrupt-v1', 'json');
+        snapshot.revisionV1 = configEntry('not-a-v1-revision', 'int');
+        snapshot.profile = snapshot.profileV1;
+        snapshot.revision = snapshot.revisionV1;
         snapshot.duplicateKeys = [
           'CHARACTER_PROFILE_V1',
-          'CHARACTER_PROFILE_REVISION'
+          'CHARACTER_PROFILE_REVISION',
+          'CHARACTER_PROFILE_V2',
+          'CHARACTER_PROFILE_V2_REVISION'
         ];
         return snapshot;
       }
@@ -414,25 +608,43 @@ function runA9CharacterProfileTests() {
     }, function() {
       var inspection = CharacterProfileService.inspectRuntime();
       assert(inspection.state === 'blocked', 'Enforced legacy should block.');
-      assert(inspection.reason === 'PROFILE_MODE_NOT_V1', 'Unexpected block reason.');
+      assert(inspection.reason === 'PROFILE_MODE_NOT_V2', 'Unexpected block reason.');
       assert(inspection.profile == null, 'Blocked state must not expose a profile.');
     });
   });
 
-  test('enforced v1 resolves only a valid positive revision', function() {
-    var snapshot = makeSnapshot('enforced', 'v1');
+  test('enforced v1 remains dormant and cannot activate the retired persona matrix', function() {
+    withGlobal('CharacterConfigRepository', {
+      readSnapshot: function() {
+        return makeSnapshot('enforced', 'v1');
+      }
+    }, function() {
+      var inspection = CharacterProfileService.inspectRuntime();
+      assert(inspection.state === 'blocked', 'Enforced v1 should block.');
+      assert(inspection.reason === 'PROFILE_MODE_NOT_V2', 'V1 block reason drifted.');
+      assert(inspection.profile == null, 'Dormant v1 profile became active.');
+    });
+  });
+
+  test('enforced v2 resolves only a valid positive revision and active pack', function() {
+    var snapshot = makeSnapshot('enforced', 'v2');
     withGlobal('CharacterConfigRepository', {
       readSnapshot: function() {
         return snapshot;
       }
     }, function() {
       var inspection = CharacterProfileService.inspectRuntime();
-      assert(inspection.state === 'ready', 'Valid enforced v1 should be ready.');
+      assert(inspection.state === 'ready', 'Valid enforced v2 should be ready.');
       assert(inspection.profileRevision === 1, 'Active revision should resolve.');
       assert(inspection.profile.identity.partnerName === 'Partner', 'Profile did not resolve.');
+      assert(
+        inspection.characterPackId === 'warm-kansai-caretaker' &&
+          inspection.characterPackVersion === 'warm-kansai-caretaker.v1',
+        'Active CharacterPack binding did not resolve.'
+      );
     });
 
-    snapshot = makeSnapshot('enforced', 'v1', null, 0);
+    snapshot = makeSnapshot('enforced', 'v2', null, 0);
     withGlobal('CharacterConfigRepository', {
       readSnapshot: function() {
         return snapshot;
@@ -454,10 +666,26 @@ function runA9CharacterProfileTests() {
     });
   });
 
+  test('readV2 exposes validated staged settings at revision zero', function() {
+    withGlobal('CharacterConfigRepository', {
+      readSnapshot: function() {
+        return makeSnapshot('legacy', 'v2', null, 0);
+      }
+    }, function() {
+      var staged = CharacterProfileService.readV2();
+      assert(staged.revision === 0, 'Initial v2 staged revision should be readable.');
+      assert(staged.profile.identity.partnerName === 'Partner', 'Staged v2 profile is missing.');
+      assert(
+        staged.profile.preferences.replyLength === 'balanced',
+        'Staged v2 preference is missing.'
+      );
+    });
+  });
+
   test('explicit invalid modes fail closed', function() {
     withGlobal('CharacterConfigRepository', {
       readSnapshot: function() {
-        return makeSnapshot('ENFORCED', 'v1');
+        return makeSnapshot('ENFORCED', 'v2');
       }
     }, function() {
       var inspection = CharacterProfileService.inspectRuntime();
@@ -467,7 +695,7 @@ function runA9CharacterProfileTests() {
 
     withGlobal('CharacterConfigRepository', {
       readSnapshot: function() {
-        return makeSnapshot('enforced', 'V1');
+        return makeSnapshot('enforced', 'V2');
       }
     }, function() {
       var inspection = CharacterProfileService.inspectRuntime();
@@ -486,11 +714,11 @@ function runA9CharacterProfileTests() {
     });
   }, 'CHARACTER_CONFIG_INVALID');
 
-  test('requireActive exposes only v1 profile and immutable versions', function() {
+  test('requireActive exposes only v2 settings and immutable pack binding', function() {
     withGlobals({
       CharacterConfigRepository: {
         readSnapshot: function() {
-          return makeSnapshot('enforced', 'v1');
+          return makeSnapshot('enforced', 'v2');
         }
       },
       ConfigRepository: {
@@ -502,7 +730,13 @@ function runA9CharacterProfileTests() {
       var active = CharacterProfileService.requireActive();
       assert(active.profile.identity.partnerName === 'Partner', 'Active profile missing.');
       assert(active.profileRevision === 1, 'Active revision missing.');
-      assert(active.policyVersion === 'character-policy.v1', 'Policy version missing.');
+      assert(
+        active.profileSchemaVersion === APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION,
+        'Active schema version missing.'
+      );
+      assert(active.policyVersion === APP_CONSTANTS.CHARACTER.POLICY_VERSION, 'Policy version missing.');
+      assert(active.characterPackId === 'warm-kansai-caretaker', 'Pack id missing.');
+      assert(active.characterPackVersion === 'warm-kansai-caretaker.v1', 'Pack version missing.');
       assert(JSON.stringify(active).indexOf('systemPersona') === -1, 'Legacy persona leaked.');
       assert(Object.isFrozen(active), 'Active resolution must be immutable.');
     });
@@ -580,6 +814,45 @@ function runA9CharacterProfileTests() {
     });
   }, 'CHARACTER_CONFIG_CONFLICT');
 
+  test('saveV2 validates and delegates only canonical user settings', function() {
+    var writes = [];
+    withGlobal('CharacterConfigRepository', {
+      saveProfileV2Atomically: function(raw, expectedRevision, updatedAt) {
+        writes.push({ raw: raw, expectedRevision: expectedRevision, updatedAt: updatedAt });
+        return { revision: expectedRevision + 1, updatedAt: updatedAt };
+      }
+    }, function() {
+      var profile = makeValidV2Profile();
+      profile.identity.partnerName = '  相棒  ';
+      var saved = CharacterProfileService.saveV2(profile, 0);
+      assert(saved.revision === 1, 'First v2 revision should be one.');
+      assert(saved.profile.identity.partnerName === '相棒', 'Saved v2 profile was not canonical.');
+      assert(writes.length === 1, 'V2 save should call repository once.');
+      assert(writes[0].expectedRevision === 0, 'V2 expected revision was not forwarded.');
+      var stored = JSON.parse(writes[0].raw);
+      assert(stored.identity.partnerName === '相棒', 'Canonical v2 JSON missing.');
+      assert(stored.identity.firstPerson == null, 'Pack-owned first person reached storage.');
+      assert(stored.style == null && stored.flavor == null, 'Retired persona axes reached storage.');
+    });
+  });
+
+  expectThrows('saveV2 rejects persona fields before persistence', function() {
+    var writes = 0;
+    withGlobal('CharacterConfigRepository', {
+      saveProfileV2Atomically: function() {
+        writes += 1;
+      }
+    }, function() {
+      var profile = makeValidV2Profile();
+      profile.identity.firstPerson = '私';
+      try {
+        CharacterProfileService.saveV2(profile, 0);
+      } finally {
+        assert(writes === 0, 'Invalid v2 profile reached persistence.');
+      }
+    });
+  }, 'VALIDATION_REQUEST_INVALID');
+
   test('character config snapshot records duplicates and active reads reject them', function() {
     var snapshot = CharacterConfigRepository.__test.buildSnapshot([{
       key: 'CHARACTER_RUNTIME_MODE',
@@ -587,23 +860,23 @@ function runA9CharacterProfileTests() {
       type: 'string'
     }, {
       key: 'CHARACTER_PROFILE_MODE',
-      value: 'v1',
+      value: 'v2',
       type: 'string'
     }, {
-      key: 'CHARACTER_PROFILE_V1',
+      key: 'CHARACTER_PROFILE_V2',
       value: APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON,
       type: 'json'
     }, {
-      key: 'CHARACTER_PROFILE_V1',
+      key: 'CHARACTER_PROFILE_V2',
       value: APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON,
       type: 'json'
     }, {
-      key: 'CHARACTER_PROFILE_REVISION',
+      key: 'CHARACTER_PROFILE_V2_REVISION',
       value: '1',
       type: 'int'
     }]);
     assert(
-      snapshot.duplicateKeys.indexOf('CHARACTER_PROFILE_V1') !== -1,
+      snapshot.duplicateKeys.indexOf('CHARACTER_PROFILE_V2') !== -1,
       'Duplicate profile key was not recorded.'
     );
     withGlobal('CharacterConfigRepository', {
@@ -629,18 +902,22 @@ function runA9CharacterProfileTests() {
     });
   });
 
-  test('character config repository saves profile and revision in one locked range write', function() {
+  test('character config repository saves v2 with one CAS write and preserves v1', function() {
     var headers = ['key', 'value', 'type', 'description', 'updated_at'];
     var rows = [{
       key: 'CHARACTER_RUNTIME_MODE', value: 'legacy', type: 'string', description: 'runtime', updated_at: '2026-07-22T11:00:00+09:00'
     }, {
-      key: 'CHARACTER_PROFILE_V1', value: APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON, type: 'json', description: 'profile', updated_at: '2026-07-22T11:00:00+09:00'
+      key: 'CHARACTER_PROFILE_V1', value: APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_V1_JSON, type: 'json', description: 'profile', updated_at: '2026-07-22T11:00:00+09:00'
+    }, {
+      key: 'CHARACTER_PROFILE_REVISION', value: '7', type: 'int', description: 'v1 revision', updated_at: '2026-07-22T11:00:00+09:00'
+    }, {
+      key: 'CHARACTER_PROFILE_V2', value: APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON, type: 'json', description: 'v2 profile', updated_at: '2026-07-22T11:00:00+09:00'
     }, {
       key: 'UNRELATED', value: '42', formula: '=21*2', type: 'string', description: 'unrelated', updated_at: '2026-07-22T11:00:00+09:00'
     }, {
       key: 'UNRELATED_LITERAL', value: '=keep-as-text', type: 'string', description: 'unrelated literal', updated_at: '2026-07-22T11:00:00+09:00'
     }, {
-      key: 'CHARACTER_PROFILE_REVISION', value: '0', type: 'int', description: 'revision', updated_at: '2026-07-22T11:00:00+09:00'
+      key: 'CHARACTER_PROFILE_V2_REVISION', value: '0', type: 'int', description: 'v2 revision', updated_at: '2026-07-22T11:00:00+09:00'
     }];
     var setValuesCalls = 0;
     var lockCalls = 0;
@@ -719,7 +996,7 @@ function runA9CharacterProfileTests() {
         return callback();
       }
     };
-    var nextProfile = makeValidProfile();
+    var nextProfile = makeValidV2Profile();
     nextProfile.identity.partnerName = 'Next';
     var nextRaw = JSON.stringify(nextProfile);
 
@@ -727,7 +1004,7 @@ function runA9CharacterProfileTests() {
       SheetRepository: fakeSheetRepository,
       LockManager: fakeLockManager
     }, function() {
-      var saved = CharacterConfigRepository.saveProfileAtomically(
+      var saved = CharacterConfigRepository.saveProfileV2Atomically(
         nextRaw,
         0,
         '2026-07-22T12:00:00+09:00'
@@ -737,11 +1014,16 @@ function runA9CharacterProfileTests() {
 
     assert(lockCalls === 1, 'Save must use one script lock.');
     assert(setValuesCalls === 1, 'Profile and revision must use one setValues call.');
-    assert(rows[1].value === nextRaw, 'Profile row was not updated.');
-    assert(rows[4].value === '1', 'Revision row was not updated.');
-    assert(rows[2].value === '=21*2', 'Unrelated formula was converted to a literal.');
-    assert(rows[3].value === '=keep-as-text', 'Formula-like literal was converted to a formula.');
-    assert(rows[1].updated_at === rows[4].updated_at, 'Timestamps must match.');
+    assert(rows[3].value === nextRaw, 'V2 profile row was not updated.');
+    assert(rows[6].value === '1', 'V2 revision row was not updated.');
+    assert(
+      rows[1].value === APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_V1_JSON &&
+        rows[2].value === '7',
+      'V2 save mutated dormant v1 state.'
+    );
+    assert(rows[4].value === '=21*2', 'Unrelated formula was converted to a literal.');
+    assert(rows[5].value === '=keep-as-text', 'Formula-like literal was converted to a formula.');
+    assert(rows[3].updated_at === rows[6].updated_at, 'Timestamps must match.');
     assert(operationOrder.join('>') === 'set>flush>readBack', 'Write was not flushed before read-back.');
   });
 
@@ -752,7 +1034,7 @@ function runA9CharacterProfileTests() {
       }
     }, function() {
       CharacterConfigRepository.saveProfileAtomically(
-        APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON,
+        APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_V1_JSON,
         0,
         '2026-07-22T12:00:00+09:00'
       );
@@ -762,7 +1044,7 @@ function runA9CharacterProfileTests() {
   expectThrows('character config repository CAS conflict performs zero writes', function() {
     var setValuesCalls = 0;
     var rows = [{
-      key: 'CHARACTER_PROFILE_V1', value: APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON, type: 'json', description: 'profile', updated_at: null
+      key: 'CHARACTER_PROFILE_V1', value: APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_V1_JSON, type: 'json', description: 'profile', updated_at: null
     }, {
       key: 'CHARACTER_PROFILE_REVISION', value: '2', type: 'int', description: 'revision', updated_at: null
     }];
@@ -787,7 +1069,7 @@ function runA9CharacterProfileTests() {
     }, function() {
       try {
         CharacterConfigRepository.saveProfileAtomically(
-          APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_JSON,
+          APP_CONSTANTS.CHARACTER.DEFAULT_PROFILE_V1_JSON,
           1,
           '2026-07-22T12:00:00+09:00'
         );
@@ -798,7 +1080,7 @@ function runA9CharacterProfileTests() {
   }, 'CHARACTER_CONFIG_CONFLICT');
 
   test('active character context is typed isolated and immutable', function() {
-    var profile = makeValidProfile();
+    var profile = makeValidV2Profile();
     var input = {
       surface: 'chat',
       currentTime: '2026-07-22T12:00:00+09:00',
@@ -812,21 +1094,25 @@ function runA9CharacterProfileTests() {
     };
     withGlobal('CharacterProfileService', {
       requireActive: function() {
-        return {
-          profile: profile,
-          profileSchemaVersion: 'character-profile.v1',
-          profileRevision: 3,
-          policyVersion: 'character-policy.v1',
-          catalogVersion: 'character-catalog.v1'
-        };
+        return makeActiveResolution(profile, 3);
       }
     }, function() {
       var context = CharacterContextService.buildActive(input);
       input.currentRequest.text = 'changed';
       input.partnerWorld.approvedFacts[0].fact = 'changed';
       profile.identity.partnerName = 'Changed';
-      assert(context.persona.kind === 'v1', 'Persona union tag is missing.');
+      assert(
+        context.persona.kind === 'single-character-pack',
+        'Persona union tag is missing.'
+      );
       assert(context.persona.profile.identity.partnerName === 'Partner', 'Profile was not copied.');
+      assert(context.persona.pack.firstPerson === '俺', 'CharacterPack prompt view is missing.');
+      assert(context.persona.pack.fixedResponses == null, 'Catalog copy leaked into context.');
+      assert(
+        context.runtime.characterPackId === 'warm-kansai-caretaker' &&
+          context.runtime.characterPackVersion === 'warm-kansai-caretaker.v1',
+        'Context pack binding is missing.'
+      );
       assert(context.data.currentRequest.text === 'hello', 'Request was not copied.');
       assert(context.data.partnerWorld.approvedFacts[0].fact === 'approved', 'World facts were not copied.');
       assert(context.data.authority === 'untrusted', 'Data authority is missing.');
@@ -837,20 +1123,150 @@ function runA9CharacterProfileTests() {
     });
   });
 
+  test('character context enforces evidence count depth text and key budgets', function() {
+    var originalService = globalThis.CharacterProfileService;
+    var activeProfile = makeValidV2Profile();
+    var service = {
+      requireActive: function() {
+        return makeActiveResolution(activeProfile, 3);
+      },
+      validateV2: originalService.validateV2,
+      validateV1: originalService.validateV1
+    };
+    function recentMessages(count) {
+      var messages = [];
+      for (var index = 0; index < count; index += 1) {
+        messages.push({ text: 'message-' + index });
+      }
+      return messages;
+    }
+    function expectBoundsFailure(input, label) {
+      var thrown = null;
+      try {
+        CharacterContextService.buildActive(input);
+      } catch (error) {
+        thrown = error;
+      }
+      assert(
+        thrown &&
+          thrown.code === 'VALIDATION_REQUEST_INVALID' &&
+          thrown.details.reason === 'CHARACTER_CONTEXT_BOUNDS_INVALID',
+        label + ' did not fail at the context budget boundary.'
+      );
+    }
+
+    function expectDataFailure(input, label) {
+      var thrown = null;
+      try {
+        CharacterContextService.buildActive(input);
+      } catch (error) {
+        thrown = error;
+      }
+      assert(
+        thrown &&
+          thrown.code === 'VALIDATION_REQUEST_INVALID' &&
+          thrown.details.reason === 'CONTEXT_DATA_INVALID',
+        label + ' did not fail at the context data boundary.'
+      );
+    }
+
+    withGlobal('CharacterProfileService', service, function() {
+      var atLimit = CharacterContextService.buildActive({
+        surface: 'chat',
+        currentTime: '2026-07-22T12:00:00+09:00',
+        recentMessages: recentMessages(45)
+      });
+      assert(
+        CharacterPayloadService.collectEvidenceView(atLimit).length === 50,
+        'The documented chat evidence limit did not remain exactly inclusive.'
+      );
+
+      expectBoundsFailure({
+        surface: 'chat',
+        currentTime: '2026-07-22T12:00:00+09:00',
+        recentMessages: recentMessages(46)
+      }, 'Evidence count overflow');
+
+      var tooDeep = { text: 'deep' };
+      for (var depth = 0; depth < 13; depth += 1) {
+        tooDeep = { value: tooDeep };
+      }
+      expectBoundsFailure({
+        surface: 'chat',
+        currentTime: '2026-07-22T12:00:00+09:00',
+        recentMessages: [tooDeep]
+      }, 'Nested depth overflow');
+
+      expectBoundsFailure({
+        surface: 'chat',
+        currentTime: '2026-07-22T12:00:00+09:00',
+        recentMessages: [{ text: new Array(4002).join('x') }]
+      }, 'Nested text overflow');
+
+      var longKeyObject = {};
+      longKeyObject[new Array(66).join('k')] = 'value';
+      expectBoundsFailure({
+        surface: 'chat',
+        currentTime: '2026-07-22T12:00:00+09:00',
+        recentMessages: [longKeyObject]
+      }, 'Object-key overflow');
+
+      expectDataFailure({
+        surface: 'chat',
+        currentTime: '2026-07-22T12:00:00+09:00',
+        recentMessages: [{ text: 'invalid\ud800text' }]
+      }, 'Unpaired surrogate in evidence text');
+
+      expectDataFailure({
+        surface: 'chat',
+        currentTime: '2026-07-22T12:00:00+09:00',
+        recentMessages: [{ text: 'invalid\u0000text' }]
+      }, 'Unsafe control in evidence text');
+
+      expectDataFailure({
+        surface: 'chat',
+        currentTime: '2026-07-22T12:00:00+09:00',
+        recentMessages: [{ text: 'invalid\ufffftext' }]
+      }, 'Unicode noncharacter in evidence text');
+
+      var invalidUnicodeKey = {};
+      invalidUnicodeKey['invalid\ud800key'] = 'value';
+      expectDataFailure({
+        surface: 'chat',
+        currentTime: '2026-07-22T12:00:00+09:00',
+        recentMessages: [invalidUnicodeKey]
+      }, 'Unpaired surrogate in evidence key');
+
+      var classified = CharacterContextService.withConversationMode(
+        atLimit,
+        'CHARACTER'
+      );
+      var forged = clone(classified);
+      forged.data.recentMessages.push({ text: 'over-limit' });
+      var forgedError = null;
+      try {
+        CharacterContextService.assertClassifiedActive(forged, 'chat');
+      } catch (error) {
+        forgedError = error;
+      }
+      assert(
+        forgedError &&
+          forgedError.code === 'VALIDATION_REQUEST_INVALID' &&
+          forgedError.details.reason === 'CHARACTER_CONTEXT_INVALID',
+        'A non-issued classified clone passed the context capability boundary.'
+      );
+    });
+  });
+
   test('conversation mode binding derives only an exact validated context', function() {
     var stub = {
       requireActive: function() {
-        return {
-          profile: makeValidProfile(),
-          profileSchemaVersion: 'character-profile.v1',
-          profileRevision: 2,
-          policyVersion: 'character-policy.v1',
-          catalogVersion: 'character-catalog.v1'
-        };
+        return makeActiveResolution(makeValidV2Profile(), 2);
       },
-      validateV1: function(profile) {
+      validateV2: function(profile) {
         return {
-          valid: profile && profile.schemaVersion === 'character-profile.v1',
+          valid: profile &&
+            profile.schemaVersion === APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION,
           profile: profile ? clone(profile) : null
         };
       }
@@ -860,10 +1276,103 @@ function runA9CharacterProfileTests() {
         surface: 'chat',
         currentTime: '2026-07-22T12:00:00+09:00'
       });
-      var classified = CharacterContextService.withConversationMode(base, 'META_IDENTITY');
+      assert(
+        CharacterContextService.assertUnclassifiedActive(base, 'chat') === true,
+        'Unclassified active context should pass its pre-classification boundary.'
+      );
+      var classified = CharacterContextService.withConversationMode(
+        base,
+        'IDENTITY_CHALLENGE'
+      );
       assert(base.conversationMode === 'UNCLASSIFIED', 'Base context was mutated.');
-      assert(classified.conversationMode === 'META_IDENTITY', 'Mode was not bound.');
+      assert(
+        classified.conversationMode === 'IDENTITY_CHALLENGE',
+        'Mode was not bound.'
+      );
       assert(Object.isFrozen(classified), 'Classified context must be immutable.');
+      assert(
+        CharacterContextService.assertClassifiedActive(classified, 'chat') === true,
+        'Classified active context should be accepted.'
+      );
+      var generationView = CharacterContextService.toGenerationView(classified);
+      assert(
+        Object.keys(generationView).sort().join(',') ===
+          'currentTime,data,persona' &&
+          Object.keys(generationView.persona).sort().join(',') ===
+            'pack,profile' &&
+          Object.keys(generationView.persona.profile).sort().join(',') ===
+            'identity,preferences' &&
+          Object.keys(generationView.persona.pack).sort().join(',') ===
+            'canon,firstPerson,generation' &&
+          Object.keys(generationView.data).sort().join(',') ===
+            'currentRequest,memories,partnerWorld,realWorldObservations,recentMessages,relationshipState,sharedFacts,userFacts',
+        'Generation view exact allowlist drifted.'
+      );
+      assert(
+        generationView.persona.profile.identity.partnerName === 'Partner' &&
+          generationView.persona.pack.firstPerson === '俺',
+        'Generation view lost approved character data.'
+      );
+      assert(
+        generationView.runtime == null &&
+          generationView.schemaVersion == null &&
+          generationView.persona.pack.packId == null &&
+          generationView.persona.pack.packVersion == null &&
+          generationView.persona.profile.schemaVersion == null &&
+          generationView.data.authority == null,
+        'Operational metadata leaked into the generation view.'
+      );
+      var serializedGenerationView = JSON.stringify(generationView);
+      [
+        APP_CONSTANTS.CHARACTER.CONTEXT_SCHEMA_VERSION,
+        APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION,
+        APP_CONSTANTS.CHARACTER.POLICY_VERSION,
+        APP_CONSTANTS.CHARACTER.CATALOG_VERSION,
+        classified.runtime.characterPackId,
+        classified.runtime.characterPackVersion,
+        '"authority"'
+      ].forEach(function(forbidden) {
+        assert(
+          serializedGenerationView.indexOf(forbidden) === -1,
+          'Generation view serialized an operational version or authority field.'
+        );
+      });
+      assert(Object.isFrozen(generationView), 'Generation view must be immutable.');
+
+      var unclassifiedError = null;
+      try {
+        CharacterContextService.assertClassifiedActive(base, 'chat');
+      } catch (error) {
+        unclassifiedError = error;
+      }
+      assert(
+        unclassifiedError && unclassifiedError.code === 'VALIDATION_REQUEST_INVALID',
+        'Unclassified context passed an approved-output boundary.'
+      );
+
+      var earlySurfaceError = null;
+      try {
+        CharacterContextService.assertUnclassifiedActive(base, 'proactive');
+      } catch (error) {
+        earlySurfaceError = error;
+      }
+      assert(
+        earlySurfaceError &&
+          earlySurfaceError.details.reason === 'CHARACTER_CONTEXT_SURFACE_MISMATCH',
+        'Unclassified context passed the wrong pre-classification surface.'
+      );
+
+      var wrongSurfaceError = null;
+      try {
+        CharacterContextService.assertClassifiedActive(classified, 'diary');
+      } catch (error) {
+        wrongSurfaceError = error;
+      }
+      assert(
+        wrongSurfaceError &&
+          wrongSurfaceError.details.reason === 'CHARACTER_CONTEXT_SURFACE_MISMATCH',
+        'Classified context passed the wrong surface boundary.'
+      );
 
       var rebound = null;
       try {
@@ -892,7 +1401,7 @@ function runA9CharacterProfileTests() {
         forgedError = error;
       }
       assert(
-        forgedError && forgedError.details.reason === 'CHARACTER_CONTEXT_DATA_INVALID',
+        forgedError && forgedError.details.reason === 'CHARACTER_CONTEXT_INVALID',
         'Invalid typed data passed.'
       );
 
@@ -909,7 +1418,7 @@ function runA9CharacterProfileTests() {
           forgedError = error;
         }
         assert(
-          forgedError && forgedError.details.reason === 'CHARACTER_CONTEXT_DATA_INVALID',
+          forgedError && forgedError.details.reason === 'CHARACTER_CONTEXT_INVALID',
           'Invalid object-shaped data passed.'
         );
       });
@@ -923,8 +1432,37 @@ function runA9CharacterProfileTests() {
         forgedError = error;
       }
       assert(
-        forgedError && forgedError.details.reason === 'CHARACTER_CONTEXT_STALE',
+        forgedError && forgedError.details.reason === 'CHARACTER_CONTEXT_INVALID',
         'Context with a forged active profile passed.'
+      );
+
+      forged = JSON.parse(JSON.stringify(base));
+      forged.persona.pack.firstPerson = '私';
+      forgedError = null;
+      try {
+        CharacterContextService.withConversationMode(forged, 'CHARACTER');
+      } catch (error) {
+        forgedError = error;
+      }
+      assert(
+        forgedError &&
+          forgedError.details.reason === 'CHARACTER_CONTEXT_INVALID',
+        'Context with a forged CharacterPack passed.'
+      );
+
+      forged = JSON.parse(JSON.stringify(base));
+      forged.runtime.characterPackVersion = 'warm-kansai-caretaker.stale';
+      forgedError = null;
+      try {
+        CharacterContextService.withConversationMode(forged, 'CHARACTER');
+      } catch (error) {
+        forgedError = error;
+      }
+      assert(
+        forgedError &&
+          forgedError.code === 'VALIDATION_REQUEST_INVALID' &&
+          forgedError.details.reason === 'CHARACTER_CONTEXT_INVALID',
+        'Context with a stale CharacterPack binding passed.'
       );
 
       var invalidMode = null;
@@ -943,13 +1481,7 @@ function runA9CharacterProfileTests() {
   test('Partner World creation is allowed only for diary context', function() {
     var stub = {
       requireActive: function() {
-        return {
-          profile: makeValidProfile(),
-          profileSchemaVersion: 'character-profile.v1',
-          profileRevision: 1,
-          policyVersion: 'character-policy.v1',
-          catalogVersion: 'character-catalog.v1'
-        };
+        return makeActiveResolution();
       }
     };
     withGlobal('CharacterProfileService', stub, function() {
@@ -1007,13 +1539,7 @@ function runA9CharacterProfileTests() {
   test('character context rejects legacy authority unsafe values and prototype keys', function() {
     var stub = {
       requireActive: function() {
-        return {
-          profile: makeValidProfile(),
-          profileSchemaVersion: 'character-profile.v1',
-          profileRevision: 1,
-          policyVersion: 'character-policy.v1',
-          catalogVersion: 'character-catalog.v1'
-        };
+        return makeActiveResolution();
       }
     };
     withGlobal('CharacterProfileService', stub, function() {
@@ -1052,21 +1578,25 @@ function runA9CharacterProfileTests() {
     });
   });
 
-  test('runtime mode alone restores legacy without mutating stored v1 state', function() {
-    var snapshot = makeSnapshot('enforced', 'v1', null, 4);
+  test('runtime mode alone restores legacy without mutating stored v1 or v2 state', function() {
+    var snapshot = makeSnapshot('enforced', 'v2', null, 4);
     withGlobal('CharacterConfigRepository', {
       readSnapshot: function() {
         return snapshot;
       }
     }, function() {
       assert(CharacterProfileService.inspectRuntime().state === 'ready', 'Canary should be ready.');
-      var profileRaw = snapshot.profile.rawValue;
-      var revisionRaw = snapshot.revision.rawValue;
+      var profileV1Raw = snapshot.profileV1.rawValue;
+      var revisionV1Raw = snapshot.revisionV1.rawValue;
+      var profileV2Raw = snapshot.profileV2.rawValue;
+      var revisionV2Raw = snapshot.revisionV2.rawValue;
       snapshot.runtimeMode = configEntry('legacy', 'string');
       var rolledBack = CharacterProfileService.inspectRuntime();
       assert(rolledBack.state === 'legacy', 'Runtime rollback should restore legacy.');
-      assert(snapshot.profile.rawValue === profileRaw, 'Rollback changed stored profile.');
-      assert(snapshot.revision.rawValue === revisionRaw, 'Rollback changed revision.');
+      assert(snapshot.profileV1.rawValue === profileV1Raw, 'Rollback changed stored v1 profile.');
+      assert(snapshot.revisionV1.rawValue === revisionV1Raw, 'Rollback changed v1 revision.');
+      assert(snapshot.profileV2.rawValue === profileV2Raw, 'Rollback changed stored v2 profile.');
+      assert(snapshot.revisionV2.rawValue === revisionV2Raw, 'Rollback changed v2 revision.');
       snapshot.runtimeMode = configEntry('enforced', 'string');
       assert(CharacterProfileService.inspectRuntime().profileRevision === 4, 'Profile was not reusable.');
     });
@@ -1105,6 +1635,11 @@ function runA9CharacterProfileTests() {
       assert(context.persona.systemPersona === 'LegacyPersona', 'Legacy persona changed.');
       assert(requestedKeys.indexOf('CHARACTER_RUNTIME_MODE') === -1, 'Legacy context read runtime mode.');
       assert(requestedKeys.indexOf('CHARACTER_PROFILE_V1') === -1, 'Legacy context read v1 profile.');
+      assert(requestedKeys.indexOf('CHARACTER_PROFILE_V2') === -1, 'Legacy context read v2 profile.');
+      assert(
+        requestedKeys.indexOf('CHARACTER_PROFILE_V2_REVISION') === -1,
+        'Legacy context read v2 revision.'
+      );
     });
   });
 

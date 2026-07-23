@@ -3,7 +3,29 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const path = require('path');
 const vm = require('vm');
+
+function listFiles(directory) {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const resolved = path.join(directory, entry.name);
+    return entry.isDirectory() ? listFiles(resolved) : [resolved];
+  });
+}
+
+function assertAlphabeticTopLevelLoadOrder() {
+  const files = listFiles('src')
+    .filter((file) => file.endsWith('.gs'))
+    .sort((left, right) => left.localeCompare(right));
+
+  const smokeContext = { console };
+  vm.createContext(smokeContext);
+  files.forEach((file) => {
+    vm.runInContext(fs.readFileSync(file, 'utf8'), smokeContext, { filename: file });
+  });
+}
+
+assertAlphabeticTopLevelLoadOrder();
 
 function formatDate(value, timeZone, format) {
   const date = value instanceof Date ? value : new Date(value);
@@ -89,6 +111,7 @@ vm.createContext(context);
   'src/common/Constants.gs',
   'src/common/Errors.gs',
   'src/common/Json.gs',
+  'src/common/UnicodeInspection.gs',
   'src/common/Validators.gs',
   'src/common/AppLogger.gs',
   'src/common/LockManager.gs',
@@ -101,8 +124,19 @@ vm.createContext(context);
   'src/infrastructure/GeminiClient.gs',
   'src/infrastructure/GmailNotifier.gs',
   'src/application/QueueService.gs',
+  'src/application/CharacterPackService.gs',
   'src/application/CharacterProfileService.gs',
   'src/application/CharacterContextService.gs',
+  'src/application/CharacterModeClassifier.gs',
+  'src/application/CharacterResponseCatalog.gs',
+  'src/application/CharacterPayloadService.gs',
+  'src/application/CharacterFixedPolicy.gs',
+  'src/application/CharacterSemanticVerifier.gs',
+  'src/application/ImmersionGuard.gs',
+  'src/application/CharacterMetricsService.gs',
+  'src/application/ApprovedCharacterArtifactService.gs',
+  'src/application/CharacterSinkAdapter.gs',
+  'src/application/CharacterOutputCoordinator.gs',
   'src/application/OperationalHealthService.gs',
   'src/application/MaintenanceService.gs',
   'src/application/MemoryService.gs',
@@ -125,6 +159,11 @@ vm.createContext(context);
   'src/tests/A7IntegrationSelfTest.gs',
   'src/tests/A8ProactiveConversationTests.gs',
   'src/tests/A9CharacterProfileTests.gs',
+  'src/tests/A10ImmersionClassifierCatalogTests.gs',
+  'src/tests/A10ImmersionPolicyCorpusTests.gs',
+  'src/tests/A10ImmersionGuardTests.gs',
+  'src/tests/A10ImmersionArtifactTests.gs',
+  'src/tests/A10ImmersionCoordinatorTests.gs',
   'src/tests/RunAllTests.gs'
 ].forEach((file) => {
   vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
