@@ -79,6 +79,11 @@
 - `MAIL_QUOTA_EXHAUSTED` 専用再試行
 - 自発通知の全ローカル条件
 - Mail quota確認
+- 新規 `PROACTIVE_SEND` のlegacy/enforced runtime snapshot
+- enforced件名・本文の共通guard、最大1回rewrite、template fallback禁止
+- 承認artifact必須のmarker/mail sinkとqueue lease fencing
+- 配送失敗時のexact pair再承認、生成なしretry、quarantine
+- no approval時の `DONE / NO_APPROVED_PROACTIVE_OUTPUT` とnext-check-only更新
 - `WEEKLY_BACKUP`
 - 清掃
 

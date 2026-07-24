@@ -2,9 +2,9 @@
 
 ## 1. Status and scope
 
-Status: **Partially implemented — PR 4 chat integration is implemented in the
-repository behind the `legacy` default; it is not deployed or activated in
-production**.
+Status: **Partially implemented — PR 4 chat and PR 5 proactive integrations are
+implemented in the repository behind the `legacy` default; they are not
+deployed or activated in production**.
 
 This document defines the target behavior for preserving one configured
 partner's personality and the user's sense of immersion. It covers text and
@@ -34,6 +34,14 @@ legacy-history isolation. The runtime default remains `legacy`; this repository
 change does not itself migrate production data, change CONFIG, install
 triggers, or deploy the Web App.
 
+PR 5 connects the proactive surface in `enforced` mode. New proactive events
+carry an exact runtime mode/binding, new subject/body pairs are generated and
+approved without template fallback, and delivery retries revalidate only the
+exact persisted pair. It adds `proactive_subject` followed by
+`proactive_origin_event_id` as the a5 append-only conversation tail columns.
+The runtime default still remains `legacy`; the repository change does not
+itself run the a5 migration or activate/deploy the path.
+
 ### 1.1 Current and target behavior
 
 | Area | Current verified production behavior | Target behavior | Delivery |
@@ -41,7 +49,7 @@ triggers, or deploy the Web App.
 | Persona source | Generation services still read legacy free-form configuration such as `SYSTEM_PERSONA`; dormant V1 profile data may exist | One code-owned CharacterPack per app plus a minimal validated V2 user profile | Foundation in PR 3; surface enforcement later |
 | App variants | One deployment is the current app | One app/deployment represents exactly one partner; another partner is another deployment that reuses the common engine | Packaging/deployment work |
 | Chat and image | Generated text is checked mainly for non-empty output and surface format | Classify, generate or select an exact fixed response, guard, rewrite at most once, then persist only an approved artifact | PR 4 |
-| Proactive | Current production can fall back from generation to configured template text and can reuse saved retry text | Every new proactive body is generated from the CharacterPack and approved context; no fixed/template message fallback; no approval means no send | PR 5 |
+| Proactive | Current production can fall back from generation to configured template text and can reuse saved retry text | Every new proactive subject/body is generated from the CharacterPack and approved context; no fixed/template message fallback; exact saved-pair revalidation on retry; no approval means no send | PR 5 |
 | Diary | Structured generation has existing grounding and lifecycle checks | Common immersion and fact-boundary checks before any content-bearing write | PR 6 |
 | Memory | Existing candidates can influence later prompts | Only accepted, provenance-checked memory may enter later context; memory text never gains instruction authority | PR 7 |
 | Product disclosure | Technical information may be mixed with conversational copy | Onboarding/About/status UI owns technical transparency; `PRODUCT_INFO` and `ADMIN_OOC` never create partner speech | PR 4 and PR 8 |
@@ -49,8 +57,9 @@ triggers, or deploy the Web App.
 
 The current production proactive template fallback is a verified legacy fact
 and is documented in
-[Proactive Conversations Specification](PROACTIVE_CONVERSATIONS.md). It is not
-the enforced target and is removed only by the later proactive integration PR.
+[Proactive Conversations Specification](PROACTIVE_CONVERSATIONS.md). PR 5
+removes it only from the repository's dormant enforced path; legacy production
+and rollback behavior remain unchanged until staged activation.
 
 ## 2. Product objective
 
@@ -182,6 +191,9 @@ relationship stage, or wording.
 
 Quiet hours, temporary pause, user activity, cooldown, daily cap, mail quota,
 and target-date expiry remain authoritative for every value.
+
+PR 5 does not change the existing eligibility calculation. The concrete
+`off/low/normal/high` backend mapping and settings UI remain PR 8 scope.
 
 ## 5. Canonical V2 persistence contract
 
@@ -555,8 +567,10 @@ A protected adapter requires an approved artifact before:
 Controlled lifecycle status, timestamps, attempt counts, and managed category
 codes may be stored without character text.
 
-PR 3 proves this boundary with spy writers only. Production repositories,
-Web responses, MailApp, Docs, and memory upsert remain unconnected.
+PR 3 proves this boundary with spy writers. PR 4 connects approved chat to
+Repository/Web sinks, and PR 5 connects approved enforced proactive output to
+the delivery-marker Repository and MailApp sinks. Docs and memory upsert remain
+unconnected.
 
 ## 10. Fixed immersion policy
 
@@ -665,7 +679,7 @@ speech-preset variants and no generic proactive catalog entry.
 | `CHAT_TEXT_SYNC` | Guard before assistant row, event completion, state update, and Web response | One rewrite, then exact `CHAT_RECOVERY` where applicable |
 | `CHAT_TEXT_QUEUED` | Guard each attempt; reject stale pack/profile/policy/catalog | One rewrite, then exact `CHAT_RECOVERY` |
 | `CHAT_IMAGE` | Guard reply and image summary before either write | One rewrite, then exact image uncertainty pair |
-| `PROACTIVE_AI` | Generate from CharacterPack + bounded recent conversation + accepted memory; guard subject/body before marker/save/send | One rewrite; otherwise no artifact and no send |
+| `PROACTIVE_AI` | Generate from CharacterPack + bounded approved recent conversation + empty memory until PR 7; guard subject/body before marker/save/send | One rewrite; otherwise no artifact and no send |
 | `PROACTIVE_RETRY` | Revalidate saved generated subject/body immediately before reuse | If no longer approved, quarantine and do not send; no rewrite/fixed replacement |
 | `DIARY` | Guard all content before Docs, summary, or Partner World write | Controlled retryable failure; no fabricated diary |
 | `MEMORY_EXTRACTION` | Validate response, candidate, grounding, provenance, and instruction-like text | Reject batch or candidate at the defined boundary |
@@ -678,11 +692,31 @@ does not, it is not rewritten or replaced. The coordinator accepts that retry
 only as an exact `savedPayload:{subject,body}` value and rejects `generate` or
 `rewrite` callbacks on `PROACTIVE_RETRY`.
 
-When proactive output cannot be approved, the event safely completes with a
-managed no-send result and advances the next eligibility check. It does not
-become a character error bubble, does not increment send count, and does not
-update `last_proactive_at`. A later scheduler run performs a fresh eligibility
-decision before another new generation.
+Every new `PROACTIVE_SEND` event records
+`characterRuntimeMode:"legacy"|"enforced"`. Enforced events additionally bind
+the exact profile revision, policy/catalog versions, and CharacterPack
+ID/version; legacy events forbid that binding. Only historical mode-less rows
+receive runtime legacy compatibility. Queue payloads never contain subject or
+body, and a waiting/retried event is never converted between modes.
+
+An enforced marker stores the approved body in `text`, the approved subject in
+`proactive_subject`, the originating queue event UUID in
+`proactive_origin_event_id`, and the complete approval binding. On retry, the
+pair and non-null origin ownership are immutable and the pair is reapproved only as
+`PROACTIVE_RETRY` / `legacy_revalidated`. Missing subject/approval metadata or
+failed reapproval quarantines the marker and causes no send; generation and
+rewrite are prohibited. These append-only persistence rules use
+`SCHEMA_VERSION=2026.07.a5`.
+
+When a new proactive output cannot be approved, the event safely completes with
+a managed `NO_APPROVED_PROACTIVE_OUTPUT` result, reaches `DONE`, and advances
+only the next eligibility check. It does not append/update a marker or
+conversation row, persist subject/body, send mail, become a character error
+bubble, increment send count, or update `last_proactive_at`. Retry denial may
+change only the existing marker's controlled status/error to quarantine; its
+subject/body remain immutable and no mail/count/`last_proactive_at` side effect
+occurs. A later scheduler run performs a fresh eligibility decision before
+another new generation.
 
 ## 14. Functional settings and transparency UI
 
@@ -790,7 +824,8 @@ attempts must remain zero for release.
 | PI-021 | Canon | `CHARACTER_CANON` grounds allowed character preference without grounding human external life |
 | PI-030 | Chat | Unsafe drafts cause zero assistant sink calls; at most one rewrite; one approved result saved once |
 | PI-031 | Image | Unsafe reply/summary causes zero assistant and summary writes |
-| PI-032 | Proactive | Every new body is generated and guarded; no approval means zero content, delivery-marker, send, send-count, or `last_proactive_at` writes and no fixed/template fallback; only managed no-send lifecycle and next-eligibility state may advance |
+| PI-032 | Proactive | Every new subject/body is generated and guarded; no approval yields `DONE/NO_APPROVED_PROACTIVE_OUTPUT`, zero content, delivery-marker, send, send-count, or `last_proactive_at` writes and no fixed/template fallback; only next-eligibility state may advance |
+| PI-036 | Proactive retry | Retry uses the immutable saved pair as `PROACTIVE_RETRY/legacy_revalidated`; missing subject/approval or failed reapproval quarantines with zero generate/rewrite/send |
 | PI-033 | Diary | Unsafe content causes zero content-bearing Docs/summary/world writes |
 | PI-034 | Memory | Rejected candidates are never upserted or used as instruction authority |
 | PI-035 | Error UI | Technical errors appear only in status UI |
@@ -808,7 +843,7 @@ attempts must remain zero for release.
 | PI-057 | Guard failure | Guard unavailable uses an allowed chat/image exact fallback or fails closed; proactive never sends a fixed replacement |
 | PI-058 | Artifact | Raw, forged, cloned, wrong-context, wrong-surface, or missing-version artifacts make zero sink calls |
 | PI-059 | Budget | Primary/verifier/rewrite/recheck budgets never exceed section 9 |
-| PI-060 | Deployment | Dormant PR 3 with legacy defaults changes no production behavior |
+| PI-060 | Deployment | PR 4/PR 5 integrations remain dormant under the legacy default and change no production behavior before migration and staged activation |
 | PI-061 | Rollback | Legacy rollback restores the current path without data mutation |
 
 ## 18. Delivery plan
@@ -819,16 +854,16 @@ attempts must remain zero for release.
 | PR 2 | Dormant V1 profile foundation | Historical foundation remains dormant |
 | PR 3 | V2 profile, one CharacterPack, classifier, fixed policy/catalog, guard/artifact/sink core, corpus | Exact copy reviewed; core tests pass; no production surface connected |
 | PR 4 | Sync/queued/image chat, product/status route, legacy-history handling | Unsafe assistant/image text cannot persist or return |
-| PR 5 | Generated proactive body, guard/rewrite, retry revalidation, protected marker/send | No fixed/template fallback; no approval produces no content or delivery side effect |
+| PR 5 | Generated proactive subject/body, guard/rewrite, retry revalidation, protected marker/send | No fixed/template fallback; no approval produces no content or delivery side effect |
 | PR 6 | Structured diary and Partner World provenance | Unsafe diary content cannot reach content sinks |
 | PR 7 | Memory provenance, grounding, and instruction validation | Only accepted memory can reach later context |
 | PR 8 | Minimal settings UI plus onboarding/About/status disclosure | Only approved user fields are editable |
 | PR 9 | Staged activation, browser/manual acceptance, monitoring, rollback | All applicable `PI-*` gates pass |
 
-Repository status: PR 4 chat integration is implemented behind the existing
-`legacy` default. It has not been deployed or activated in production. PR 5
-and later surface integrations, schema migration in Apps Script, staged
-activation, and manual acceptance remain pending.
+Repository status: PR 4 chat and PR 5 proactive integrations are implemented
+behind the existing `legacy` default. They have not been deployed or activated
+in production. PR 6 and later surface integrations, the a5 schema migration in
+Apps Script, staged activation, and manual acceptance remain pending.
 
 ## 19. Related sources
 

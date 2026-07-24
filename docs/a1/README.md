@@ -62,4 +62,5 @@ v0.2はPR #1のChanges requestedを反映した再レビュー版である。
   別deploymentとし、profile selectorで切り替えない。
 - `PRODUCT_INFO` / `ADMIN_OOC` はcharacter artifactを作らず、技術透明性は
   onboarding/About/status UIへ出す。
-- 新しいproactive本文は毎回生成し、固定または設定template fallbackを送らない。
+- enforced経路の新しいproactive件名・本文は毎回生成し、固定または設定template
+  fallbackを送らない。

@@ -39,6 +39,7 @@
 | GEMINI_TEMPORARY_FAILURE | true | COMMON_BACKOFF | 5xx・通信失敗 |
 | STORAGE_WRITE_FAILED | true | COMMON_BACKOFF | 保存失敗 |
 | STORAGE_DATA_CORRUPTED | false | NONE | JSON・スキーマ破損 |
+| MAIL_SEND_FAILED | true | COMMON_BACKOFF | MailApp配送時の一時失敗（provider詳細は保持しない） |
 | MAIL_QUOTA_EXHAUSTED | true | NEXT_DAILY_WINDOW | MailApp残量なし |
 | QUEUE_LOCK_BUSY | true | COMMON_BACKOFF | ロック取得不可 |
 | QUEUE_DEAD | false | NONE | 最大再試行超過 |

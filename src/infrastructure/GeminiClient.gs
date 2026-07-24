@@ -88,6 +88,29 @@ var GeminiClient = (function() {
       };
     }
 
+    if (schemaName === 'character-proactive') {
+      return {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          subject: {
+            type: 'string',
+            minLength: 1,
+            maxLength: APP_CONSTANTS.CHARACTER.SURFACE_LIMITS.PROACTIVE.subject
+          },
+          body: {
+            type: 'string',
+            minLength: 1,
+            maxLength: APP_CONSTANTS.CHARACTER.SURFACE_LIMITS.PROACTIVE.body
+          }
+        },
+        required: [
+          'subject',
+          'body'
+        ]
+      };
+    }
+
     if (schemaName === 'immersion-semantic-verdict') {
       return {
         type: 'object',

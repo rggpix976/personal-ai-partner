@@ -1,6 +1,6 @@
 var APP_CONSTANTS = Object.freeze({
   TIME_ZONE: 'Asia/Tokyo',
-  SCHEMA_VERSION: '2026.07.a3',
+  SCHEMA_VERSION: '2026.07.a5',
   DEFAULT_CONVERSATION_ID: 'default',
   USER_STATE_SINGLETON_ID: 'default',
   DAILY_MAIL_RETRY_TIME: '08:05',
@@ -291,7 +291,9 @@ var APP_CONSTANTS = Object.freeze({
       { name: 'approval_profile_revision', type: 'int', required: false },
       { name: 'approval_catalog_version', type: 'string', required: false },
       { name: 'approval_character_pack_id', type: 'string', required: false },
-      { name: 'approval_character_pack_version', type: 'string', required: false }
+      { name: 'approval_character_pack_version', type: 'string', required: false },
+      { name: 'proactive_subject', type: 'string', required: false },
+      { name: 'proactive_origin_event_id', type: 'string', required: false }
     ],
     event_queue: [
       { name: 'event_id', type: 'string', required: true },

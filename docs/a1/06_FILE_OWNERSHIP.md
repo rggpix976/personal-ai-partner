@@ -20,8 +20,10 @@
 | `src/application/DiaryService.gs` | A5 | A6 |
 | `src/application/QueueService.gs` | A6 | A1, A2, A7 |
 | `src/application/ProactiveMessageService.gs` | A6 | A5 |
+| `src/application/CharacterProactiveContextService.gs` | A6 | A1, A4, A7 |
 | `src/application/MaintenanceService.gs` | A6 | A2 |
 | `src/infrastructure/GeminiClient.gs` | A4 | A1, A7 |
+| `src/infrastructure/CharacterProactiveGeminiAdapter.gs` | A6 | A1, A4, A7 |
 | `src/infrastructure/SheetRepository.gs` | A2 | A1 |
 | `src/infrastructure/DocumentRepository.gs` | A2 | A5 |
 | `src/infrastructure/DriveTempRepository.gs` | A2 | A4, A7 |

@@ -438,6 +438,7 @@ def check_event_contract(results: Results) -> None:
             "elapsedMinutes": 300,
             "timeWeight": 1.0,
             "reason": "deterministic_probability_hit",
+            "characterRuntimeMode": "legacy",
         },
         "WEEKLY_BACKUP": {"backupDate": "2026-07-05", "requestedAt": NOW},
     }
@@ -452,6 +453,92 @@ def check_event_contract(results: Results) -> None:
         "characterPackId": "warm-kansai-caretaker",
         "characterPackVersion": "warm-kansai-caretaker.v1",
     }
+    enforced_proactive_payload = dict(samples["PROACTIVE_SEND"])
+    enforced_proactive_payload["characterRuntimeMode"] = "enforced"
+    enforced_proactive_payload["characterBinding"] = character_binding
+    assert_valid(
+        results,
+        validator,
+        base_event("PROACTIVE_SEND", enforced_proactive_payload),
+        "Event PROACTIVE_SEND enforced binding valid",
+    )
+
+    missing_proactive_mode = dict(samples["PROACTIVE_SEND"])
+    missing_proactive_mode.pop("characterRuntimeMode")
+    assert_invalid(
+        results,
+        validator,
+        base_event("PROACTIVE_SEND", missing_proactive_mode),
+        "Event PROACTIVE_SEND new payload requires runtime mode",
+    )
+
+    missing_proactive_binding = dict(enforced_proactive_payload)
+    missing_proactive_binding.pop("characterBinding")
+    assert_invalid(
+        results,
+        validator,
+        base_event("PROACTIVE_SEND", missing_proactive_binding),
+        "Event PROACTIVE_SEND enforced mode requires binding",
+    )
+
+    legacy_proactive_with_binding = dict(enforced_proactive_payload)
+    legacy_proactive_with_binding["characterRuntimeMode"] = "legacy"
+    assert_invalid(
+        results,
+        validator,
+        base_event("PROACTIVE_SEND", legacy_proactive_with_binding),
+        "Event PROACTIVE_SEND legacy mode forbids binding",
+    )
+
+    wrong_proactive_binding = dict(enforced_proactive_payload)
+    wrong_proactive_binding["characterBinding"] = dict(character_binding)
+    wrong_proactive_binding["characterBinding"]["policyVersion"] = (
+        "character-policy.v999"
+    )
+    assert_invalid(
+        results,
+        validator,
+        base_event("PROACTIVE_SEND", wrong_proactive_binding),
+        "Event PROACTIVE_SEND rejects unknown binding version",
+    )
+
+    extra_proactive_binding = dict(enforced_proactive_payload)
+    extra_proactive_binding["characterBinding"] = dict(character_binding)
+    extra_proactive_binding["characterBinding"]["unexpected"] = True
+    assert_invalid(
+        results,
+        validator,
+        base_event("PROACTIVE_SEND", extra_proactive_binding),
+        "Event PROACTIVE_SEND rejects extra binding metadata",
+    )
+
+    proactive_with_subject = dict(enforced_proactive_payload)
+    proactive_with_subject["subject"] = "must not be queued"
+    assert_invalid(
+        results,
+        validator,
+        base_event("PROACTIVE_SEND", proactive_with_subject),
+        "Event PROACTIVE_SEND queue payload forbids subject",
+    )
+
+    proactive_with_body = dict(enforced_proactive_payload)
+    proactive_with_body["body"] = "must not be queued"
+    assert_invalid(
+        results,
+        validator,
+        base_event("PROACTIVE_SEND", proactive_with_body),
+        "Event PROACTIVE_SEND queue payload forbids body",
+    )
+
+    proactive_with_unknown_reason = dict(enforced_proactive_payload)
+    proactive_with_unknown_reason["reason"] = "free_form_reason"
+    assert_invalid(
+        results,
+        validator,
+        base_event("PROACTIVE_SEND", proactive_with_unknown_reason),
+        "Event PROACTIVE_SEND rejects unknown reason code",
+    )
+
     enforced_chat_payload = {
         "requestId": UUID_1,
         "userMessageId": UUID_2,

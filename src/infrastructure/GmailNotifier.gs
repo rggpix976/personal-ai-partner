@@ -14,13 +14,22 @@ var GmailNotifier = (function() {
         to: '[REDACTED_OWNER_EMAIL]'
       };
     }
-    MailApp.sendEmail({
-      to: to,
-      subject: subject,
-      body: body,
-      name: options.name || 'Personal AI Partner',
-      noReply: options.noReply === true
-    });
+    try {
+      MailApp.sendEmail({
+        to: to,
+        subject: subject,
+        body: body,
+        name: options.name || 'Personal AI Partner',
+        noReply: options.noReply === true
+      });
+    } catch (ignoredProviderError) {
+      // Provider exceptions can include recipient or message fragments. Keep
+      // both the queue error and debug log on a generic retryable contract.
+      throw createAppError(
+        'MAIL_SEND_FAILED',
+        'Mail delivery failed.'
+      );
+    }
     return {
       sent: true,
       dryRun: false
@@ -30,10 +39,11 @@ var GmailNotifier = (function() {
   function getRemainingQuota() {
     try {
       return Number(MailApp.getRemainingDailyQuota());
-    } catch (error) {
-      throw createAppError('MAIL_QUOTA_EXHAUSTED', 'Mail quota is unavailable.', null, {
-        cause: error
-      });
+    } catch (ignoredProviderError) {
+      throw createAppError(
+        'MAIL_QUOTA_EXHAUSTED',
+        'Mail quota is unavailable.'
+      );
     }
   }
 

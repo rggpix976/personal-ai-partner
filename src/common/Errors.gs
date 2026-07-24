@@ -17,6 +17,7 @@ var APP_ERROR_DEFINITIONS = Object.freeze({
   GEMINI_TEMPORARY_FAILURE: { userMessage: 'The AI service is temporarily unavailable.', retryable: true, retryStrategy: 'COMMON_BACKOFF', httpStatus: 503 },
   STORAGE_WRITE_FAILED: { userMessage: 'A storage write failed.', retryable: true, retryStrategy: 'COMMON_BACKOFF', httpStatus: 503 },
   STORAGE_DATA_CORRUPTED: { userMessage: 'Stored data is corrupted.', retryable: false, retryStrategy: 'NONE', httpStatus: 500 },
+  MAIL_SEND_FAILED: { userMessage: 'Mail delivery is temporarily unavailable.', retryable: true, retryStrategy: 'COMMON_BACKOFF', httpStatus: 503 },
   MAIL_QUOTA_EXHAUSTED: { userMessage: 'Mail quota is exhausted for today.', retryable: true, retryStrategy: 'NEXT_DAILY_WINDOW', httpStatus: 429 },
   QUEUE_LOCK_BUSY: { userMessage: 'The queue is locked by another worker.', retryable: true, retryStrategy: 'COMMON_BACKOFF', httpStatus: 409 },
   QUEUE_DEAD: { userMessage: 'The queue item reached the retry limit.', retryable: false, retryStrategy: 'NONE', httpStatus: 409 },

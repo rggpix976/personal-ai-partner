@@ -483,11 +483,17 @@ function runA8ProactiveConversationTests() {
         },
         ensureDefaultUserState: function() {
           return {
+            last_user_message_at:
+              '2026-07-14T08:00:00+09:00',
             last_proactive_at: null,
             proactive_count_date: '2026-07-14',
             proactive_count: 0,
-            next_proactive_check_at: null
+            next_proactive_check_at: null,
+            quiet_until: null
           };
+        },
+        getUserState: function() {
+          return this.ensureDefaultUserState();
         },
         updateUserState: function(patch) {
           statePatch = patch;
@@ -498,19 +504,31 @@ function runA8ProactiveConversationTests() {
         }
       },
       GmailNotifier: {
+        getRemainingQuota: function() {
+          return 10;
+        },
         send: function(ownerEmail, subject, body) {
           sentBodies.push(body);
         }
       }
     }, function() {
-      var result = ProactiveMessageService.send({
+      var prepared = ProactiveMessageService.prepareDispatch({
         targetDate: '2026-07-14',
         sequence: 1,
-        dedupeKey: 'PROACTIVE_MESSAGE:2026-07-14:1',
-        subject: 'Subject',
-        body: 'A newly generated body must not replace the stored one.',
-        sentAt: '2026-07-14T12:00:00+09:00'
-      });
+        requestedAt: '2026-07-14T12:00:00+09:00',
+        decisionSlot: '1',
+        messageDedupeKey:
+          'PROACTIVE_MESSAGE:2026-07-14:1',
+        probability: 1,
+        sample: 0,
+        elapsedMinutes: 300,
+        timeWeight: 1,
+        reason: 'local_silence_threshold',
+        characterRuntimeMode: 'legacy'
+      }, '2026-07-14T12:00:00+09:00');
+      var result = ProactiveMessageService.send(
+        prepared.message
+      );
 
       assert(result.sent === true, 'Failed marker retry must send successfully.');
       assert(result.duplicate === false, 'A failed marker is not a completed duplicate.');
@@ -550,11 +568,16 @@ function runA8ProactiveConversationTests() {
         },
         ensureDefaultUserState: function() {
           return {
+            last_user_message_at:
+              '2026-07-14T08:00:00+09:00',
             last_proactive_at: null,
             proactive_count_date: '2026-07-14',
             proactive_count: 0,
             next_proactive_check_at: null
           };
+        },
+        getUserState: function() {
+          return this.ensureDefaultUserState();
         },
         updateUserState: function(patch) {
           statePatch = patch;
@@ -567,17 +590,23 @@ function runA8ProactiveConversationTests() {
         }
       }
     }, function() {
-      var result = ProactiveMessageService.send({
+      var result = ProactiveMessageService.prepareDispatch({
         targetDate: '2026-07-14',
         sequence: 1,
-        dedupeKey: 'PROACTIVE_MESSAGE:2026-07-14:1',
-        subject: 'Subject',
-        body: 'Completed proactive body.',
-        sentAt: '2026-07-14T12:00:00+09:00'
-      });
+        requestedAt: '2026-07-14T12:00:00+09:00',
+        decisionSlot: '1',
+        messageDedupeKey:
+          'PROACTIVE_MESSAGE:2026-07-14:1',
+        probability: 1,
+        sample: 0,
+        elapsedMinutes: 300,
+        timeWeight: 1,
+        reason: 'local_silence_threshold',
+        characterRuntimeMode: 'legacy'
+      }, '2026-07-14T12:00:00+09:00');
 
-      assert(result.sent === false, 'Completed marker must not send again.');
-      assert(result.duplicate === true, 'Completed marker must be a duplicate.');
+      assert(result.eligible === false, 'Completed marker must not send again.');
+      assert(result.reason === 'ALREADY_DELIVERED', 'Completed marker must be authoritative.');
       assert(sendCalls === 0, 'Completed marker must not call Gmail.');
       assert(
         statePatch && statePatch.proactive_count === 1,
@@ -684,6 +713,68 @@ function runA8ProactiveConversationTests() {
       assert(
         prepared.message.body === 'Configured fallback body for User.',
         'The configured template should replace the failed generation.'
+      );
+    });
+  });
+
+  test('queue normalizer enforces proactive runtime mode and content-free payloads', function() {
+    var base = {
+      targetDate: '2026-07-14',
+      sequence: 1,
+      requestedAt: '2026-07-14T12:00:00+09:00',
+      decisionSlot: '495744',
+      messageDedupeKey: 'PROACTIVE_MESSAGE:2026-07-14:1',
+      probability: 0.5,
+      sample: 0.2,
+      elapsedMinutes: 300,
+      timeWeight: 1,
+      reason: 'deterministic_probability_hit',
+      characterRuntimeMode: 'legacy'
+    };
+    var normalized = QueueService.__test.normalizePayload(
+      'PROACTIVE_SEND',
+      base
+    );
+    assert(
+      normalized.characterRuntimeMode === 'legacy' &&
+        normalized.characterBinding == null,
+      'Legacy proactive mode was not preserved.'
+    );
+
+    [
+      { patch: { characterRuntimeMode: null } },
+      { patch: { reason: 'free_form_reason' } },
+      { patch: { subject: 'queued content' } },
+      { patch: { body: 'queued content' } },
+      {
+        patch: {
+          characterRuntimeMode: 'enforced'
+        }
+      }
+    ].forEach(function(fixture) {
+      var candidate = {};
+      Object.keys(base).forEach(function(key) {
+        candidate[key] = base[key];
+      });
+      Object.keys(fixture.patch).forEach(function(key) {
+        if (fixture.patch[key] == null) {
+          delete candidate[key];
+        } else {
+          candidate[key] = fixture.patch[key];
+        }
+      });
+      var thrown = null;
+      try {
+        QueueService.__test.normalizePayload(
+          'PROACTIVE_SEND',
+          candidate
+        );
+      } catch (error) {
+        thrown = error;
+      }
+      assert(
+        thrown && thrown.code === 'VALIDATION_REQUEST_INVALID',
+        'Invalid proactive queue payload was accepted.'
       );
     });
   });

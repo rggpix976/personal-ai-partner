@@ -83,6 +83,16 @@
 | input_tokens | int | 任意 |  | 入力トークン |
 | output_tokens | int | 任意 |  | 出力トークン |
 | error_code | string | 任意 |  | 失敗コード |
+| approval_surface | string | 任意 |  | 承認surface |
+| approval_source | string | 任意 |  | 承認source |
+| approval_policy_version | string | 任意 |  | 承認policy version |
+| approval_profile_schema_version | string | 任意 |  | 承認profile schema |
+| approval_profile_revision | int | 任意 |  | 承認profile revision |
+| approval_catalog_version | string | 任意 |  | 承認catalog version |
+| approval_character_pack_id | string | 任意 |  | 承認CharacterPack ID |
+| approval_character_pack_version | string | 任意 |  | 承認CharacterPack version |
+| proactive_subject | string | 任意 |  | enforced proactive markerの承認済み件名（内部列） |
+| proactive_origin_event_id | string | 任意 |  | proactive markerを起票・隔離したqueue event UUID（内部列） |
 
 ### 3.4 `event_queue`
 
@@ -251,8 +261,13 @@ PR 3はdormant coreだけを追加するため、この文書にV2 default契約
 productionで `setup()` / `migrateSchema()` を実行しない。
 
 現行productionのproactive template fallbackはlegacy動作として維持される。PR 5の
-enforced V2経路は、新しいproactive本文を毎回生成し、guardと最大1回rewrite後も
-承認できなければ送信・保存・marker・回数更新を行わず次回eligibilityを待つ。
+enforced V2経路は、新しいproactive件名・本文を毎回生成し、guardと最大1回rewrite後も
+承認できなければ送信・保存・marker・回数更新を行わず、
+`next_proactive_check_at`だけを進める。配送失敗時は保存済みのexact pairだけを
+現行bindingへ再承認し、生成・rewrite・template置換を行わない。内部配送列は
+`proactive_subject`、`proactive_origin_event_id` の順で末尾へ追加し、schema
+versionは `2026.07.a5` とする。このcode変更だけではmigrationや本番有効化を
+実行しない。
 
 ## 6. `setup()` の責務
 
@@ -360,7 +375,9 @@ enforced V2経路は、新しいproactive本文を毎回生成し、guardと最�
 - シート全件scanを共通化し、無制限に繰り返さない。
 - Date型とJSON日時の変換を共通化する。
 - JSON列は必ず検証する。
-- `conversation_logs` は `(request_id, role)` を複合一意として扱う。
+- `conversation_logs` のuser/assistant行は `(request_id, role)` を複合一意として扱う。
+- proactive system markerは専用lookupでcompletedを最優先し、activeを全eventで
+  共有し、quarantineだけをorigin event UUIDで区別する。
 - `getConversationByRequestId(requestId)` は `{requestId, userMessage, assistantMessage}` を返す。
 - SheetsにDB制約はないため、同一roleの重複をRepositoryが書込み前に防ぐ。
 
