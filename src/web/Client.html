@@ -45,7 +45,9 @@
     backgroundPollTimer: null,
     backgroundPollInFlight: false,
     backgroundPollToken: 0,
-    backgroundPollingEnabled: false
+    backgroundPollingEnabled: false,
+    settings: null,
+    savingSettings: false
   };
 
   var elements = {};
@@ -70,6 +72,25 @@
     elements.historyNote = document.getElementById('history-note');
     elements.loadOlderButton = document.getElementById('load-older-button');
     elements.refreshButton = document.getElementById('refresh-button');
+    elements.aboutButton = document.getElementById('about-button');
+    elements.aboutCloseButton = document.getElementById('about-close-button');
+    elements.aboutPanel = document.getElementById('about-panel');
+    elements.aboutMessage = document.getElementById('about-message');
+    elements.aboutBoundary = document.getElementById('about-boundary');
+    elements.settingsButton = document.getElementById('settings-button');
+    elements.settingsCloseButton = document.getElementById('settings-close-button');
+    elements.settingsPanel = document.getElementById('settings-panel');
+    elements.settingsForm = document.getElementById('settings-form');
+    elements.settingsRuntime = document.getElementById('settings-runtime');
+    elements.settingsResult = document.getElementById('settings-result');
+    elements.settingsSaveButton = document.getElementById('settings-save-button');
+    elements.onboardingCallout = document.getElementById('onboarding-callout');
+    elements.partnerNameInput = document.getElementById('partner-name-input');
+    elements.userAddressInput = document.getElementById('user-address-input');
+    elements.replyLengthInput = document.getElementById('reply-length-input');
+    elements.proactiveFrequencyInput = document.getElementById('proactive-frequency-input');
+    elements.quietStartInput = document.getElementById('quiet-start-input');
+    elements.quietEndInput = document.getElementById('quiet-end-input');
     elements.composerForm = document.getElementById('composer-form');
     elements.messageInput = document.getElementById('message-input');
     elements.imageInput = document.getElementById('image-input');
@@ -89,6 +110,19 @@
     elements.removeImageButton.addEventListener('click', clearSelectedImage);
     elements.loadOlderButton.addEventListener('click', onLoadOlder);
     elements.refreshButton.addEventListener('click', loadInitialState);
+    elements.aboutButton.addEventListener('click', function() {
+      togglePanel(elements.aboutPanel, elements.aboutButton, true);
+    });
+    elements.aboutCloseButton.addEventListener('click', function() {
+      togglePanel(elements.aboutPanel, elements.aboutButton, false);
+    });
+    elements.settingsButton.addEventListener('click', function() {
+      togglePanel(elements.settingsPanel, elements.settingsButton, true);
+    });
+    elements.settingsCloseButton.addEventListener('click', function() {
+      togglePanel(elements.settingsPanel, elements.settingsButton, false);
+    });
+    elements.settingsForm.addEventListener('submit', onSettingsSubmit);
     elements.messageInput.addEventListener('input', autoResizeTextarea);
     document.addEventListener(
       'visibilitychange',
@@ -114,10 +148,17 @@
           hasMore: false,
           nextBeforeMessageId: null
         };
+        state.settings = response.settings || null;
 
         renderSystem(system);
+        renderProductDisclosure(response.productDisclosure || {});
+        renderSettings(state.settings);
         renderMessages('bottom');
         updatePaginationUi();
+
+        if (state.settings && state.settings.onboardingRequired) {
+          togglePanel(elements.settingsPanel, elements.settingsButton, true);
+        }
 
         if (system.status === 'stopped') {
           setStatus('not-configured', '設定が必要です', joinWarnings(system.warnings, 'アプリの設定が完了していません。'));
@@ -524,6 +565,132 @@
     elements.historyNote.textContent = state.system.userName
       ? state.system.userName + ' としてチャット中'
       : '最新の会話';
+  }
+
+  function renderProductDisclosure(disclosure) {
+    elements.aboutMessage.textContent = disclosure.message || '';
+    elements.aboutBoundary.textContent = disclosure.boundary || '';
+  }
+
+  function renderSettings(settings) {
+    state.settings = settings || null;
+    var available = Boolean(
+      settings &&
+      settings.values &&
+      typeof settings.revision === 'number'
+    );
+    setSettingsEnabled(available && !state.savingSettings);
+    elements.onboardingCallout.classList.toggle(
+      'hidden',
+      !available || !settings.onboardingRequired
+    );
+
+    if (!available) {
+      elements.settingsRuntime.textContent =
+        '設定を読み込めません。アプリのセットアップ状態を確認してください。';
+      elements.settingsResult.textContent = '';
+      return;
+    }
+
+    elements.partnerNameInput.value = settings.values.partnerName || '';
+    elements.userAddressInput.value = settings.values.userAddress || '';
+    elements.replyLengthInput.value = settings.values.replyLength || 'balanced';
+    elements.proactiveFrequencyInput.value =
+      settings.values.proactiveFrequency || 'normal';
+    elements.quietStartInput.value = settings.values.quietStart || '23:00';
+    elements.quietEndInput.value = settings.values.quietEnd || '08:00';
+
+    var runtime = settings.runtime || {};
+    if (!settings.configurationValid) {
+      elements.settingsRuntime.textContent =
+        '保存済み設定に不整合があります。内容を確認して保存し直してください。';
+    } else if (runtime.ready) {
+      elements.settingsRuntime.textContent =
+        '会話設定は有効です。変更は次の生成から反映されます。';
+    } else {
+      elements.settingsRuntime.textContent =
+        '設定は保存できますが、現在は準備モードです。本番有効化は管理手順で行います。';
+    }
+  }
+
+  function onSettingsSubmit(event) {
+    event.preventDefault();
+    if (
+      state.savingSettings ||
+      !state.settings ||
+      typeof state.settings.revision !== 'number'
+    ) {
+      return;
+    }
+
+    var request = {
+      expectedRevision: state.settings.revision,
+      partnerName: elements.partnerNameInput.value,
+      userAddress: elements.userAddressInput.value,
+      replyLength: elements.replyLengthInput.value,
+      proactiveFrequency: elements.proactiveFrequencyInput.value,
+      quietStart: elements.quietStartInput.value,
+      quietEnd: elements.quietEndInput.value
+    };
+
+    state.savingSettings = true;
+    setSettingsEnabled(false);
+    elements.settingsResult.removeAttribute('data-state');
+    elements.settingsResult.textContent = '保存しています…';
+
+    callServer('saveCharacterSettings', [request])
+      .then(function(response) {
+        if (!response || !response.ok || !response.settings) {
+          var message = response && response.error && response.error.message
+            ? response.error.message
+            : '設定を保存できませんでした。';
+          throw new Error(message);
+        }
+        state.settings = response.settings;
+        renderSettings(state.settings);
+        if (state.settings.runtime && state.settings.runtime.ready) {
+          renderSystem({
+            status: state.system.status,
+            partnerName: state.settings.values.partnerName,
+            userName: state.settings.values.userAddress,
+            lastUpdatedAt: state.system.lastUpdatedAt,
+            warnings: state.system.warnings
+          });
+        }
+        elements.settingsResult.setAttribute('data-state', 'saved');
+        elements.settingsResult.textContent = '設定を保存しました。';
+      })
+      .catch(function(error) {
+        elements.settingsResult.setAttribute('data-state', 'error');
+        elements.settingsResult.textContent =
+          error.message || '設定を保存できませんでした。';
+      })
+      .finally(function() {
+        state.savingSettings = false;
+        setSettingsEnabled(Boolean(state.settings && state.settings.values));
+      });
+  }
+
+  function setSettingsEnabled(enabled) {
+    [
+      elements.partnerNameInput,
+      elements.userAddressInput,
+      elements.replyLengthInput,
+      elements.proactiveFrequencyInput,
+      elements.quietStartInput,
+      elements.quietEndInput,
+      elements.settingsSaveButton
+    ].forEach(function(element) {
+      element.disabled = !enabled;
+    });
+  }
+
+  function togglePanel(panel, button, open) {
+    panel.classList.toggle('hidden', !open);
+    button.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+      panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }
 
   function renderMessages(scrollMode) {

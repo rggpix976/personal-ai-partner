@@ -114,9 +114,9 @@ Start with these documents:
   single-CharacterPack deployment model, minimal V2 profile, immersion,
   exceptional responses, product/UI separation, proactive target, and
   acceptance specification; chat, proactive, structured diary, and
-  provenance-checked memory integrations are implemented behind legacy-safe
-  defaults, while activation and the settings surface integration remain
-  pending
+  provenance-checked memory integrations plus the minimal settings/About
+  surface are implemented behind legacy-safe defaults, while production
+  activation and manual acceptance remain pending
 - [`docs/qa/A7_MANUAL_GAS_TEST_PLAN.md`](docs/qa/A7_MANUAL_GAS_TEST_PLAN.md):
   manual Apps Script validation
 - [`docs/qa/A7_SECURITY_REVIEW.md`](docs/qa/A7_SECURITY_REVIEW.md):

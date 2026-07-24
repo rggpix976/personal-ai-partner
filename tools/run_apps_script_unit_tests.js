@@ -130,6 +130,7 @@ vm.createContext(context);
   'src/application/QueueService.gs',
   'src/application/CharacterPackService.gs',
   'src/application/CharacterProfileService.gs',
+  'src/application/CharacterSettingsService.gs',
   'src/application/CharacterContextService.gs',
   'src/application/CharacterChatContextService.gs',
   'src/application/CharacterDiaryContextService.gs',
@@ -180,6 +181,7 @@ vm.createContext(context);
   'src/tests/A12CharacterProactiveIntegrationTests.gs',
   'src/tests/A13CharacterDiaryIntegrationTests.gs',
   'src/tests/A14CharacterMemoryIntegrationTests.gs',
+  'src/tests/A15CharacterSettingsUiTests.gs',
   'src/tests/RunAllTests.gs'
 ].forEach((file) => {
   vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });

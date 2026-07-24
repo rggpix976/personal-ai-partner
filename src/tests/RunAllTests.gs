@@ -20,7 +20,8 @@ function runAllSelfTests() {
     'runA12CharacterProactiveGeminiAdapterTests',
     'runA12CharacterProactiveIntegrationTests',
     'runA13CharacterDiaryIntegrationTests',
-    'runA14CharacterMemoryIntegrationTests'
+    'runA14CharacterMemoryIntegrationTests',
+    'runA15CharacterSettingsUiTests'
   ];
   var summary = {
     ok: true,

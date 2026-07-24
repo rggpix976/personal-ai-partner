@@ -22,10 +22,77 @@ function getInitialState()
     lastUpdatedAt: string,
     warnings: string[]
   },
+  settings: CharacterSettingsSnapshot,
+  productDisclosure: {
+    title: string,
+    message: string,
+    boundary: string
+  },
   messages: MessageDto[],
   pagination: {
     hasMore: boolean,
     nextBeforeMessageId: string | null
+  }
+}
+```
+
+`productDisclosure` は中立なアプリ説明であり、推しの発言、assistant行、
+character artifactには変換しない。
+
+### `getCharacterSettings()`
+
+```javascript
+function getCharacterSettings()
+```
+
+戻り値は成功時
+`{ok:true, settings: CharacterSettingsSnapshot, error:null}`、設定を安全に
+読めない場合は本文・ID・stack traceを含まないcontrolled errorとする。
+
+### `saveCharacterSettings(request)`
+
+```javascript
+function saveCharacterSettings(request)
+```
+
+入力は
+[`contracts/character-settings-request.schema.json`](contracts/character-settings-request.schema.json)
+を正とし、`expectedRevision` と、`partnerName`、`userAddress`、`replyLength`、
+`proactiveFrequency`、`quietStart`、`quietEnd` の完全一致だけを受理する。
+追加field、自由記述persona、prompt、固定文、CharacterPack変更は拒否する。
+全fieldは1回のlock/CAS/write/read-backで保存し、競合時は再読み込みを要求する。
+戻り値は成功時 `{ok:true, settings: CharacterSettingsSnapshot, error:null}`、
+失敗時は本文・ID・stack traceを含まないcontrolled errorとする。
+
+`CharacterSettingsSnapshot` は次の形とする。
+
+```javascript
+{
+  available: true,
+  revision: number,
+  onboardingRequired: boolean,
+  configurationValid: boolean,
+  editableFields: [
+    "partnerName",
+    "userAddress",
+    "replyLength",
+    "proactiveFrequency",
+    "quietStart",
+    "quietEnd"
+  ],
+  values: {
+    partnerName: string,
+    userAddress: string,
+    replyLength: "short" | "balanced" | "long",
+    proactiveFrequency: "off" | "low" | "normal" | "high",
+    quietStart: string,
+    quietEnd: string
+  },
+  runtime: {
+    state: string,
+    mode: string | null,
+    profileMode: string | null,
+    ready: boolean
   }
 }
 ```

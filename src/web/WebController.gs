@@ -27,10 +27,13 @@ var WebController = (function() {
   function getInitialState() {
     assertWebAccess_();
     var system = buildSystemState_();
+    var settings = buildSettingsState_();
     if (system.status === 'stopped') {
       return {
         ok: true,
         system: system,
+        settings: settings,
+        productDisclosure: buildProductDisclosure_(),
         messages: [],
         pagination: {
           hasMore: false,
@@ -43,9 +46,56 @@ var WebController = (function() {
     return {
       ok: true,
       system: system,
+      settings: settings,
+      productDisclosure: buildProductDisclosure_(),
       messages: page.messages,
       pagination: page.pagination
     };
+  }
+
+  function getCharacterSettings() {
+    try {
+      assertWebAccess_();
+      return {
+        ok: true,
+        settings: CharacterSettingsService.getSnapshot(),
+        error: null
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        settings: null,
+        error: {
+          code: 'CHARACTER_CONFIG_INVALID',
+          message: '設定を読み込めません。アプリのセットアップ状態を確認してください。'
+        }
+      };
+    }
+  }
+
+  function saveCharacterSettings(request) {
+    try {
+      assertWebAccess_();
+      return {
+        ok: true,
+        settings: CharacterSettingsService.save(request),
+        error: null
+      };
+    } catch (error) {
+      var normalized = normalizeError(error);
+      return {
+        ok: false,
+        settings: null,
+        error: {
+          code: normalized.code === 'CHARACTER_CONFIG_CONFLICT'
+            ? 'CHARACTER_CONFIG_CONFLICT'
+            : 'VALIDATION_REQUEST_INVALID',
+          message: normalized.code === 'CHARACTER_CONFIG_CONFLICT'
+            ? '設定が別の画面で更新されました。再読み込みしてから、もう一度保存してください。'
+            : '設定内容を確認してください。'
+        }
+      };
+    }
   }
 
   function loadMessages(beforeMessageId, limit) {
@@ -309,6 +359,35 @@ var WebController = (function() {
       userName: userName,
       lastUpdatedAt: lastUpdatedAt,
       warnings: dedupeStrings_(warnings)
+    };
+  }
+
+  function buildSettingsState_() {
+    try {
+      return CharacterSettingsService.getSnapshot();
+    } catch (error) {
+      return {
+        available: false,
+        onboardingRequired: false,
+        configurationValid: false,
+        revision: null,
+        editableFields: [],
+        values: null,
+        runtime: {
+          state: 'blocked',
+          mode: null,
+          profileMode: null,
+          ready: false
+        }
+      };
+    }
+  }
+
+  function buildProductDisclosure_() {
+    return {
+      title: 'このアプリについて',
+      message: 'このアプリは、会話・自発メッセージ・日記・記憶候補の生成にAIを使用します。送信した会話や画像は、返信生成のために設定済みのAIサービスへ送られます。会話履歴や生成結果は、このアプリの保存先に記録されます。',
+      boundary: 'ここに表示する説明や設定・動作状態はアプリからの案内であり、推し本人の発言ではありません。推しの吹き出しには技術説明を混ぜません。'
     };
   }
 
@@ -749,6 +828,8 @@ var WebController = (function() {
   return {
     doGet: doGet,
     getInitialState: getInitialState,
+    getCharacterSettings: getCharacterSettings,
+    saveCharacterSettings: saveCharacterSettings,
     loadMessages: loadMessages,
     loadNewMessages: loadNewMessages,
     sendChat: sendChat,

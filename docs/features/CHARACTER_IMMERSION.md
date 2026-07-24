@@ -729,9 +729,17 @@ The settings screen exposes only:
 4. proactive frequency
 5. notification/quiet hours
 
-All fields are validated atomically before save. Preview text uses the common
-guard and exact CharacterPack; it cannot preview raw prompts or edit fixed
-responses.
+All fields are validated atomically before save. PR 8 does not expose generated
+preview text; any future preview must use the common guard and exact
+CharacterPack and cannot reveal raw prompts or edit fixed responses.
+
+PR 8 implements these controls as one CAS-protected settings form. The only
+persona identity field exposed as a name is `partnerName`; `userAddress` and
+`replyLength` are conversation preferences, while proactive frequency and
+quiet hours are notification preferences outside the profile. The form cannot
+edit first person, dialect, personality, canon, prompt text, fixed responses,
+or CharacterPack selection. Revision zero opens the onboarding panel, and a
+successful atomic save clears that first-run state.
 
 Onboarding/About/status UI discloses, in neutral product voice:
 
@@ -926,10 +934,26 @@ The a7 schema appends `memory_approval_json` and
 `MEMORY_CHARACTER_ENFORCEMENT_ENABLED` defaults to `false`. PR 7 performs no
 production migration, deployment, configuration mutation, or trigger change.
 
-Repository status: PR 4 chat, PR 5 proactive, PR 6 diary, and PR 7 memory
-integrations are implemented behind legacy-safe defaults. They have not been
-deployed or activated in production. PR 8 settings/disclosure, the a7 Apps
-Script migration, staged activation, and manual acceptance remain pending.
+### 18.3 PR 8 settings and disclosure
+
+PR 8 adds the owner-only Web App settings surface, first-run onboarding, an
+About panel, and neutral runtime/configuration state copy. Settings save V2
+profile, revision, proactive frequency, and quiet hours in one ScriptLock/CAS
+operation with a single range write and read-back verification. An exact
+request allowlist prevents prompt or CharacterPack authority from entering the
+settings API.
+
+The About copy explains AI generation and relevant data flow outside partner
+bubbles. The settings status distinguishes saved-but-not-active configuration,
+active configuration, and a repairable invalid profile without exposing IDs,
+URLs, email addresses, prompts, message content, or secrets. This UI does not
+enable enforced runtime or any diary/memory integration flag.
+
+Repository status: PR 4 chat, PR 5 proactive, PR 6 diary, PR 7 memory, and PR 8
+settings/disclosure are implemented behind legacy-safe defaults. They have not
+been deployed or activated in production. The a7 Apps Script migration,
+staged activation, browser/manual acceptance, monitoring, and rollback proof
+remain PR 9 work.
 
 ## 19. Related sources
 

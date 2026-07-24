@@ -17,12 +17,92 @@
           <p class="eyebrow">Personal AI Partner</p>
           <h1 class="title" id="partner-title">Partner</h1>
         </div>
-        <button class="ghost-button" id="refresh-button" type="button">Refresh</button>
+        <div class="topbar-actions">
+          <button class="ghost-button" id="about-button" type="button" aria-expanded="false">このアプリについて</button>
+          <button class="ghost-button" id="settings-button" type="button" aria-expanded="false">設定</button>
+          <button class="ghost-button" id="refresh-button" type="button">更新</button>
+        </div>
       </header>
 
       <section class="status-panel" id="status-panel" aria-live="polite">
         <strong class="status-label" id="status-label">Loading</strong>
         <p class="status-text" id="status-text">Preparing the chat screen.</p>
+      </section>
+
+      <section class="info-panel hidden" id="about-panel" aria-labelledby="about-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Product information</p>
+            <h2 id="about-title">このアプリについて</h2>
+          </div>
+          <button class="ghost-button" id="about-close-button" type="button">閉じる</button>
+        </div>
+        <p id="about-message"></p>
+        <p id="about-boundary"></p>
+        <p class="panel-note">この説明はアプリからの案内です。会話の吹き出しには入りません。</p>
+      </section>
+
+      <section class="info-panel hidden" id="settings-panel" aria-labelledby="settings-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Settings</p>
+            <h2 id="settings-title">推しとの会話設定</h2>
+          </div>
+          <button class="ghost-button" id="settings-close-button" type="button">閉じる</button>
+        </div>
+
+        <div class="onboarding-callout hidden" id="onboarding-callout">
+          <strong>最初に設定してください</strong>
+          <p>推しの名前など、会話に必要な項目を確認して保存します。性格・一人称・関西弁・固定セリフはこのアプリ側で固定され、ここから変更できません。</p>
+        </div>
+
+        <p class="settings-runtime" id="settings-runtime" aria-live="polite"></p>
+
+        <form class="settings-form" id="settings-form">
+          <label>
+            <span>推しの名前</span>
+            <input id="partner-name-input" name="partnerName" type="text" maxlength="40" autocomplete="off" required>
+          </label>
+          <label>
+            <span>推しからの呼ばれ方</span>
+            <input id="user-address-input" name="userAddress" type="text" maxlength="40" autocomplete="off" required>
+          </label>
+          <label>
+            <span>返事の長さ</span>
+            <select id="reply-length-input" name="replyLength">
+              <option value="short">短め</option>
+              <option value="balanced">ふつう</option>
+              <option value="long">長め</option>
+            </select>
+          </label>
+          <label>
+            <span>自発的に話しかける頻度</span>
+            <select id="proactive-frequency-input" name="proactiveFrequency">
+              <option value="off">話しかけない</option>
+              <option value="low">少なめ</option>
+              <option value="normal">ふつう</option>
+              <option value="high">多め</option>
+            </select>
+          </label>
+          <fieldset>
+            <legend>静かにしてほしい時間（日本時間）</legend>
+            <div class="time-fields">
+              <label>
+                <span>開始</span>
+                <input id="quiet-start-input" name="quietStart" type="time" required>
+              </label>
+              <label>
+                <span>終了</span>
+                <input id="quiet-end-input" name="quietEnd" type="time" required>
+              </label>
+            </div>
+          </fieldset>
+          <p class="panel-note">保存は全項目をまとめて行います。名前以外の人格設定や内部指示は編集できません。</p>
+          <div class="settings-actions">
+            <span id="settings-result" role="status" aria-live="polite"></span>
+            <button class="send-button" id="settings-save-button" type="submit">設定を保存</button>
+          </div>
+        </form>
       </section>
 
       <main class="chat-panel">

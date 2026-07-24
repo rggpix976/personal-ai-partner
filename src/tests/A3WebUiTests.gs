@@ -41,6 +41,8 @@ function runA3WebUiTests() {
   test('web controller exposes global wrappers', function() {
     assert(typeof doGet === 'function', 'doGet should exist.');
     assert(typeof getInitialState === 'function', 'getInitialState should exist.');
+    assert(typeof getCharacterSettings === 'function', 'getCharacterSettings should exist.');
+    assert(typeof saveCharacterSettings === 'function', 'saveCharacterSettings should exist.');
     assert(typeof loadMessages === 'function', 'loadMessages should exist.');
     assert(typeof loadNewMessages === 'function', 'loadNewMessages should exist.');
     assert(typeof sendChat === 'function', 'sendChat should exist.');
