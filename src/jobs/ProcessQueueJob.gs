@@ -127,7 +127,11 @@ function postDispatchSuccess_(event, result) {
 function dispatchProactiveSend_(event, nowIso) {
   var preparation = ProactiveMessageService.prepareDispatch(
     event.payload,
-    nowIso
+    nowIso,
+    {
+      eventId: event.eventId,
+      leaseToken: event.lockedBy
+    }
   );
 
   if (preparation.reason === 'MAIL_QUOTA_EXHAUSTED') {

@@ -4,8 +4,9 @@
 
 This document defines the **current production/legacy behavior** of
 probabilistic, AI-generated proactive conversations introduced by Issue #18
-and released as Apps Script version 7. The approved CharacterPack target is
-recorded separately in section 14.1 and is not yet deployed.
+and released as Apps Script version 7. The PR 5 repository implementation adds
+the approved CharacterPack path behind the existing `legacy` default. It is
+specified separately in section 14.1 and is not yet deployed or activated.
 
 Production configuration as of 2026-07-20:
 
@@ -19,9 +20,11 @@ The production rollout passed three stages: the new code with conservative
 defaults, probability-only activation, and probability plus Gemini generation.
 The only time-driven jobs are `processQueueJob` and `schedulerJob`.
 
-PR 3 does not modify or connect this production path. PR 5 will replace only
-the enforced V2 proactive content path after the dormant guard core is
-accepted. Historical behavior and rollout evidence below remain factual.
+PR 3 did not modify or connect this production path. PR 5 adds a dormant
+`enforced` V2 proactive content path while preserving the verified `legacy`
+path and its rollback controls. Historical behavior and rollout evidence below
+remain factual; code/tests/docs in PR 5 do not migrate the sheet, change
+production CONFIG, install triggers, or deploy the Web App.
 
 ## 2. Goals
 
@@ -234,7 +237,21 @@ Required payload fields:
 | `sample` | Persisted sample in `[0, 1)` |
 | `elapsedMinutes` | Silence duration used for the decision |
 | `timeWeight` | Time-period weight used for the decision |
-| `reason` | Optional decision description |
+| `reason` | Optional managed code: `deterministic_probability_hit` or `local_silence_threshold` |
+| `characterRuntimeMode` | Required for every new event: `legacy` or `enforced` |
+| `characterBinding` | Required only for `enforced`; exact six-field profile/policy/catalog/pack binding |
+
+The exact binding fields are `profileSchemaVersion`, `profileRevision`,
+`policyVersion`, `catalogVersion`, `characterPackId`, and
+`characterPackVersion`. `legacy` payloads forbid `characterBinding`. The
+machine contract rejects a new event without `characterRuntimeMode`; only
+historical rows created before PR 5 may be interpreted by the runtime as
+legacy. Enqueue fixes the mode/binding for the event lifetime, including queue
+retries. A waiting event is never upgraded or downgraded between modes.
+
+`subject` and `body` are forbidden in the queue payload in both modes. New
+enforced content is generated at dispatch; a delivery retry recovers its exact
+saved pair from the delivery marker, not from the event payload.
 
 Queue deduplication key:
 
@@ -307,11 +324,11 @@ Names, persona, and style must come from configuration. They must not be
 hard-coded in implementation or documentation examples.
 
 These prohibitions remain prompt-level guidance on the current production
-proactive path. The dormant PR 3 immersion core mechanically classifies and
-guards these boundaries, as specified in
+legacy proactive path. PR 5 connects the dormant PR 3 immersion core to the
+repository's `enforced` path, where these boundaries are mechanically guarded,
+as specified in
 [Character Persona and Immersion Specification](CHARACTER_IMMERSION.md).
-Integration and enforcement on the proactive production path belong to PR 5
-and are not yet implemented or deployed.
+That code path is not yet deployed or activated in production.
 
 ## 14. Current production output validation and template fallback
 
@@ -348,21 +365,20 @@ This configured-template fallback is a verified current-production and legacy
 rollback behavior. It is not the target behavior of the enforced V2
 CharacterPack path.
 
-### 14.1 Enforced V2 CharacterPack target for PR 5
+### 14.1 Enforced V2 CharacterPack implementation contract (PR 5)
 
-Every **new proactive message body** in the enforced V2 path is generated at
+Every **new proactive subject/body pair** in the enforced V2 path is generated at
 dispatch time from:
 
 - the active code-owned CharacterPack prompt view
 - the minimal active V2 profile
 - bounded recent user and approved partner conversation
-- accepted memory with validated provenance
-- approved Partner World facts, if available for the proactive scope
+- an empty memory list until PR 7 connects provenance-accepted memory
+- an empty Partner World fact list until a later provenance-reviewed integration
 
-Until accepted-memory provenance is integrated, the memory list is empty.
 Existing retrievable legacy memory is not treated as accepted automatically.
-System/error/delivery-marker rows do not enter recent-conversation prompt
-context.
+System/error/delivery-marker rows, unapproved assistant rows, and legacy
+partner rows do not enter recent-conversation prompt context.
 
 Eligibility metadata such as probability, sample, silence duration,
 `decisionSlot`, queue state, request/event/message IDs, and raw last-message
@@ -384,10 +400,11 @@ fixed/configured message body are never used as a replacement when generation,
 rewrite, or guard fails. If no approved artifact is produced:
 
 - no delivery marker is appended or updated with new content
-- no body or conversation row is stored
+- no subject/body pair or conversation row is stored
 - no mail is sent
 - proactive send count and `last_proactive_at` are unchanged
-- the event ends with a managed no-send result
+- the event ends as `DONE` with managed reason
+  `NO_APPROVED_PROACTIVE_OUTPUT`
 - `next_proactive_check_at` advances so a later scheduler run performs a fresh
   eligibility decision
 
@@ -410,15 +427,57 @@ Marker behavior:
 The script lock covers marker and state transitions. It is not held around the
 MailApp call.
 
-If delivery fails, the marker becomes `failed` and preserves its text. The
-next queue retry reuses that saved body, preventing another Gemini call and
-wording changes.
+If delivery fails, `GmailNotifier` maps provider details to the generic,
+retryable `MAIL_SEND_FAILED` contract. The marker becomes `failed` and
+preserves its exact subject/body pair. The next queue retry revalidates that
+saved pair without another generation or rewrite call.
 
-In the enforced V2 path, transport retry remains the same attempted utterance,
-not a new proactive message. The saved generated subject/body must be rebound
-to the current profile/policy/catalog/CharacterPack and revalidated immediately
-before reuse. If it is no longer approved, it is quarantined and not sent. It
-is not rewritten and is not replaced with fixed or template text.
+In the enforced V2 path, the initial `accepted` marker stores the approved body
+in `text`, the approved subject in the append-only `proactive_subject` column,
+the originating queue event UUID in `proactive_origin_event_id`, and the
+complete approval binding. These two internal tail columns follow the eight
+approval columns in that exact order. Their schema version is `2026.07.a5`;
+migration and activation are separate deployment steps.
+
+Transport retry remains the same attempted utterance, not a new proactive
+message. It recovers the exact saved `{subject,body}` pair, rebinds it to the
+current profile/policy/catalog/CharacterPack, and asks the common guard to
+approve it as `PROACTIVE_RETRY` / `legacy_revalidated`. Retry never calls
+generation or rewrite, and neither member of the saved pair may change. A
+marker with a missing subject, incomplete approval metadata, or a pair that no
+longer passes approval is quarantined and not sent; it is not repaired,
+rewritten, or replaced with fixed/template text.
+
+A valid retry may set an origin UUID only when the historical marker has null,
+or reuse the same saved UUID; it cannot transfer marker ownership to another
+event. Its storage mutation is limited to attempt time, accepted status,
+cleared error, current approval binding, and that origin UUID. Identity,
+subject/body, model, and token columns cannot change.
+
+A quarantined marker remains as immutable audit evidence. The dedicated lookup
+always treats any completed marker for the message key as globally
+authoritative, then returns the latest non-quarantine active marker regardless
+of origin. Only when neither exists may an optional exact origin event UUID
+retrieve its matching quarantine row for audit/reconciliation. A lookup
+without that origin does not return quarantine. Because the send count did not
+advance, a later fresh eligibility decision may use the same daily sequence
+and append a new marker without mutating the quarantined row.
+
+Partial or invalid approval metadata is tolerated only by this internal marker
+reader: it clears the returned body/subject, returns no approval object, and
+marks `invalidCharacterApproval=true`. Public and ordinary conversation DTOs
+remain strict. Quarantine changes only controlled status/error/origin metadata;
+the persisted subject/body and malformed approval cells remain audit evidence.
+
+`accepted`, `failed`, and quarantined proactive markers are internal delivery
+state and audit evidence. Conversation readers exclude them from the web UI,
+memory extraction, and diary input. Only a `completed` proactive marker becomes
+visible conversation content.
+
+The worker rechecks its queue lease before enforced generation and immediately
+before the protected marker/mail sink. A worker that is already stale at either
+checkpoint cannot generate or acquire the delivery marker; mail follows only
+after the protected marker claim succeeds.
 
 After successful delivery:
 
@@ -499,7 +558,9 @@ Those persona/style/body-template keys describe the current production/legacy
 path. The enforced V2 path reads partner voice and proactive guidance from the
 code-owned CharacterPack. User settings provide the partner name, user address,
 reply length, proactive frequency, and quiet-hour controls; they do not expose
-a proactive prompt or body-template editor.
+a proactive prompt or body-template editor. PR 5 keeps runtime mode at
+`legacy` by default; activating `enforced` requires the separately reviewed
+schema migration and production rollout.
 
 ## 18. Production rollout evidence
 
@@ -592,9 +653,10 @@ or trigger replacement. The two flags are independent: AI can be disabled
 while probability remains active, or the policy can return to threshold while
 the selected generation mode remains independently configurable.
 
-After V2 activation, these flags still provide complete rollback to the
-verified legacy path. They do not permit configured template text as fallback
-inside the enforced V2 path.
+After V2 activation, rollback changes `CHARACTER_RUNTIME_MODE` back to
+`legacy` while preserving the append-only a5 sheet columns. The existing
+generation/policy flags then retain their verified legacy meanings. They do
+not permit configured template text as fallback inside an enforced event.
 
 For suspected queue loss, duplicate delivery, or data-integrity failure:
 
@@ -605,8 +667,9 @@ For suspected queue loss, duplicate delivery, or data-integrity failure:
 
 ## 21. Source of truth
 
-The implementation and tests below are the source of truth for the current
-production/legacy path and its historical rollout evidence. The target
+The implementation and tests below are the source of truth for both the current
+production/legacy path and the repository's dormant PR 5 enforced path.
+Historical rollout evidence applies only to legacy production. The
 single-CharacterPack content, guard, no-fixed-fallback, UI-transparency, and
 protected-sink rules are defined in
 [Character Persona and Immersion Specification](CHARACTER_IMMERSION.md).
@@ -614,7 +677,9 @@ protected-sink rules are defined in
 Implementation:
 
 - [`../../src/application/ProactiveMessageService.gs`](../../src/application/ProactiveMessageService.gs)
+- [`../../src/application/CharacterProactiveContextService.gs`](../../src/application/CharacterProactiveContextService.gs)
 - [`../../src/application/QueueService.gs`](../../src/application/QueueService.gs)
+- [`../../src/infrastructure/CharacterProactiveGeminiAdapter.gs`](../../src/infrastructure/CharacterProactiveGeminiAdapter.gs)
 - [`../../src/jobs/SchedulerJob.gs`](../../src/jobs/SchedulerJob.gs)
 - [`../../src/jobs/ProcessQueueJob.gs`](../../src/jobs/ProcessQueueJob.gs)
 - [`../../src/common/Constants.gs`](../../src/common/Constants.gs)
@@ -627,6 +692,9 @@ Tests:
 
 - [`../../src/tests/A6QueueSchedulerTests.gs`](../../src/tests/A6QueueSchedulerTests.gs)
 - [`../../src/tests/A8ProactiveConversationTests.gs`](../../src/tests/A8ProactiveConversationTests.gs)
+- [`../../src/tests/A12CharacterProactiveContextTests.gs`](../../src/tests/A12CharacterProactiveContextTests.gs)
+- [`../../src/tests/A12CharacterProactiveGeminiAdapterTests.gs`](../../src/tests/A12CharacterProactiveGeminiAdapterTests.gs)
+- [`../../src/tests/A10ImmersionCoordinatorTests.gs`](../../src/tests/A10ImmersionCoordinatorTests.gs)
 - [`../../src/tests/RunAllTests.gs`](../../src/tests/RunAllTests.gs)
 
 Contracts and validation:

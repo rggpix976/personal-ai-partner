@@ -79,6 +79,16 @@ historical legacyとしてだけ処理する。
 `completionRoute` の管理コードだけを保存する。手動再試行は元イベントのruntime
 modeとbindingを新イベントへそのまま引き継ぎ、異なるruntimeへ変換しない。
 
+PR 5以降の新規 `PROACTIVE_SEND` も
+`characterRuntimeMode:"legacy"|"enforced"` を必須とする。`enforced` は
+`profileSchemaVersion`、`profileRevision`、`policyVersion`、
+`catalogVersion`、`characterPackId`、`characterPackVersion` のexact
+`characterBinding` を必須とし、`legacy` は `characterBinding` を禁止する。新規
+machine payloadではmode欠落を拒否し、PR 5以前のmode未保存eventだけをruntimeの
+historical legacy compatibilityとして処理する。enqueue後はmode/bindingを維持し、
+retry時を含めてlegacyとenforcedを相互変換しない。queue payloadの
+`subject` / `body` はmodeにかかわらず禁止する。
+
 ## 4.5 `dedupe_key`
 
 ```text
@@ -103,13 +113,20 @@ spoke after `requestedAt`. The queue event is deduplicated by
 conversation delivery is deduplicated separately by
 `PROACTIVE_MESSAGE:{targetDate}:{sequence}`.
 
-現行productionは生成失敗時の設定template fallbackを持つ。PR 3はこの経路を変更
-しない。PR 5のenforced V2経路では、queue payloadへ本文を保存せず、dispatch時に
-CharacterPackと承認済みcontextから新しい本文を生成する。guardと最大1回rewrite後も
-承認artifactを得られない場合は、delivery marker、本文、conversation row、
-送信回数、`last_proactive_at`を更新せずeventを安全に終了し、次回の新しい
-eligibility評価を待つ。`PROACTIVE_GENERIC` または設定template本文へのfallbackは
-禁止する。
+現行productionとPR 5の `legacy` 経路は生成失敗時の設定template fallbackを持つ。
+PR 5の `enforced` V2経路では、queue payloadへsubject/bodyを保存せず、dispatch時に
+CharacterPackと承認可能なcontextから新しいsubject/bodyを生成する。guardと最大1回
+rewrite後も承認artifactを得られない場合は、managed reason
+`NO_APPROVED_PROACTIVE_OUTPUT` でeventを `DONE` にする。このときdelivery marker、
+subject/body、conversation row、mail、送信回数、`last_proactive_at`を更新せず、
+`next_proactive_check_at` だけを進め、次回の新しいeligibility評価を待つ。
+`PROACTIVE_GENERIC` または設定template本文へのfallbackは禁止する。
+
+enforced delivery失敗後のqueue retryは、markerに保存したexact subject/bodyだけを
+再利用する。`PROACTIVE_RETRY` / `legacy_revalidated` としてcurrent bindingへ
+再bind・再承認し、generate/rewriteを呼ばない。保存済みsubject、完全なapproval
+metadataのいずれかがない、または再承認できないmarkerはquarantineし、本文を
+rewrite・置換・送信しない。
 
 Web clients fetch newly appended conversation messages with
 `loadNewMessages(afterMessageId, limit)`. Clients deduplicate by `messageId`,
@@ -201,11 +218,19 @@ UNIQUE(request_id, role)
 
 - user行: 同一 `request_id` につき最大1件
 - assistant行: 同一 `request_id` につき最大1件
-- `request_id` が `null` のproactive/system行は複合一意の対象外
+- `role=system` のproactive/error行はこのuser/assistant複合一意の対象外
 
 Apps Script/SheetsにはDB制約がないため、Repositoryが書込み前に検査し、重複時は既存行を返す。
+proactive deliveryは専用marker lookupで `request_id=messageDedupeKey` を解決し、
+同じkeyの `completed` markerを全eventに対して最優先する。completedがなければ
+non-quarantineの最新active markerをoriginにかかわらず返し、同じdedupe keyへ
+並行markerを作らない。activeが1件もない場合だけ、呼出元がoptional
+`originEventId` を指定したときに、そのUUIDと一致するquarantine行を監査用に返す。
+origin指定なしではquarantine行を返さない。後日の新しいeligibility eventは、
+quarantine行を変更せず同じsequenceの新markerを追加できるが、同じ
+messageDedupeKeyで `completed` deliveryを2件作ってはならない。
 
-PR 4の承認済みcharacter出力は `conversation_logs` の末尾へ追加した次の列で
+PR 4以降の承認済みcharacter出力は `conversation_logs` の末尾へ追加した次の列で
 監査bindingを保存する。
 
 ```text
@@ -217,11 +242,33 @@ approval_profile_revision
 approval_catalog_version
 approval_character_pack_id
 approval_character_pack_version
+proactive_subject
+proactive_origin_event_id
 ```
 
-8列は全て空、または全て正規な値のどちらかだけを許可する。既存legacy行は空のまま
-読み取り可能で、承認済み行へ自動昇格しない。画像会話では承認された
-`image_summary` のuser行とassistant行の両方へ同じbindingを保存する。
+先頭8列のapproval blockは全て空、または全て正規な値のどちらかだけを許可する。
+その直後へ `proactive_subject`、`proactive_origin_event_id` の順で追加する。
+前者はenforced proactive markerの承認済みsubject、後者はmarkerを起票または
+quarantineしたqueue eventのUUID v4を保存する。本文は従来どおり `text` に保存し、
+subject/bodyのexact pairとevent ownershipをtransport retryで復元できるようにする。
+
+| Row class | approval block | `proactive_subject` | `proactive_origin_event_id` |
+|---|---|---|---|
+| legacy row、通常user row、error row、non-character system row | 全て空 | 空 | 空 |
+| approved chat assistant / approved image summary user row | 全て正規 | 空 | 空 |
+| historical / legacy proactive marker | 全て空 | 空。読み取り互換だけを保証し、enforcedへ自動昇格しない | 空を許可 |
+| new enforced proactive marker | 全て正規。`approval_surface=PROACTIVE_AI`、sourceは `generated` または `rewrite` | 承認済みsubjectと完全一致 | 起票eventのUUID v4 |
+| enforced transport retry marker | current bindingへ再承認した全て正規の値。`approval_surface=PROACTIVE_RETRY`、`approval_source=legacy_revalidated` | 元のsubjectと完全一致し、`text` とともに変更禁止 | 保存済みUUIDと同一。historical nullだけは現在event UUIDを1回設定可能 |
+| quarantined proactive marker | 保存済みblockを監査証跡として変更しない | 保存済み値を変更しない | quarantineを実行したevent UUID。別の非null UUIDへownershipを移さない |
+
+画像会話では承認された `image_summary` のuser行とassistant行の両方へ同じbindingを
+保存する。enforced proactive markerはmail前にsubject、body、approval blockの
+全てが揃っていなければならない。approval blockがpartialまたは不正なmarkerは、
+専用internal DTOだけが本文を空、subjectをnull、`characterApproval=null`、
+`invalidCharacterApproval=true` として安全に読み、通常MessageDtoは従来どおり
+storage corruptionで停止する。破損markerは専用Repository操作でcontent/approvalを
+変更せず、`status=failed`、`error=PROACTIVE_RETRY_QUARANTINED`、current origin
+event UUIDだけを保存して送信しない。
 同一 `(request_id, role)` のdedupeで既存approval metadataが異なる場合は、
 既存行を静かに採用せずstorage corruptionとして停止する。
 
@@ -233,11 +280,16 @@ approval_character_pack_version
 - `migrateSchema()` を用意する。
 - 破壊的変更前にバックアップを作る。
 
-PR 4の追加後は `SCHEMA_VERSION=2026.07.a3` とし、`migrateSchema()` で上記8列を
-末尾へ追加してからenforced runtimeを有効化する。rollbackは、追加列を保持したまま
-PR 4 buildの `CHARACTER_RUNTIME_MODE=legacy` へ戻すか、未知の末尾列を保持できる
-互換修正を含むrollback buildを使う。未修正のpre-PR 4 buildをa3 sheetへ直接
-deployしてはならず、sheetがa3の間はversion propertyもa3のまま維持する。
+PR 4のapproval 8列は `SCHEMA_VERSION=2026.07.a3` で追加した。PR 5は
+その直後へ `proactive_subject`、`proactive_origin_event_id` の順で追加し、
+`SCHEMA_VERSION=2026.07.a5` とする。
+`migrateSchema()` で不足列を上記順に末尾へappendし、a5を確認してからenforced
+proactive runtimeを有効化する。このPRのcode/tests/docs変更だけではmigration、
+CONFIG変更、deploy、trigger変更を実行しない。
+
+rollbackは追加列を保持したまま `CHARACTER_RUNTIME_MODE=legacy` へ戻すか、
+a5の未知末尾列を保持できる互換rollback buildを使う。未修正のpre-PR 5 buildをa5
+sheetへ直接deployしてはならず、sheetがa5の間はversion propertyもa5のまま維持する。
 
 ## 4.11 `CharacterProfileV2` / `CharacterPack`
 
@@ -335,11 +387,10 @@ identityへbindして保持し、JSON round-tripしたlookalikeや同versionの�
 ```
 
 artifactはfactory発行、surface/payload対応、active policy/profile/catalog revisionと
-CharacterPack bindingを
-sink直前に再検証する。raw、wrong-surface、missing-version、stale、偽造artifactでは
-underlying sinkを呼ばない。PR 3ではこの境界をspyで証明するだけで、既存Repository、
-Web response、mail、Docs、memory upsertへ接続しない。永続approval metadataの列設計は
-surface接続PRで追加するため、platform `SCHEMA_VERSION` と既存sheet列は変更しない。
+CharacterPack bindingをsink直前に再検証する。raw、wrong-surface、missing-version、
+stale、偽造artifactではunderlying sinkを呼ばない。PR 3はこの境界をspyで証明し、
+PR 4はchatのRepository/Web、PR 5はenforced proactiveのmarker/mailへ接続する。
+Docsとmemory upsertはまだ接続しない。
 
 DIARYとMEMORYのpayloadはPR 3ではtop-level shape、JSON-safe境界、件数・文字数上限
 だけを固定する。Partner World provenanceとmemory candidate単位の詳細契約は、それぞれ
@@ -353,8 +404,15 @@ runtime/schema双方で検証する。他field・surfaceのUUID-like textは拒�
 
 Proactive approved payloadは `{subject, body}` のまま維持するが、fixed proactive
 catalog payloadは存在しない。新規本文のsourceは `generated` または `rewrite` に
-限る。配送失敗後の同一文面を再利用する場合は、現行pack/profile/policy/catalogへ
-直前に再bindし、`PROACTIVE_RETRY` / `legacy_revalidated` の組み合わせでguardを
-再実行する。`legacy_revalidated` は他surfaceで禁止し、`PROACTIVE_RETRY` では
-`generated` / `rewrite` / `canonical` / `fallback` を禁止する。再承認できない
-保存済み本文は隔離し、rewriteやfixed/template replacementを行わず送信しない。
+限る。承認後はbodyをmarkerの `text`、subjectを `proactive_subject`、起票event UUIDを
+`proactive_origin_event_id` にexact保存する。
+配送失敗後の同一pairを再利用する場合は、現行pack/profile/policy/catalogへ直前に
+再bindし、`PROACTIVE_RETRY` / `legacy_revalidated` の組み合わせでguardを再実行する。
+`legacy_revalidated` は他surfaceで禁止し、`PROACTIVE_RETRY` では
+`generated` / `rewrite` / `canonical` / `fallback` を禁止する。subjectまたは
+approval metadataが欠落するmarkerと、再承認できない保存済みpairは隔離し、
+generate、rewrite、fixed/template replacementを行わず送信しない。
+failed markerの再bind mutationは `createdAt`、`status`、`error`、
+`characterApproval`、`proactiveOriginEventId` だけを許可し、`status=accepted`、
+`error=null`、current/same origin UUIDを必須とする。identity、content、model、
+tokenその他の列を同時に変更してはならない。

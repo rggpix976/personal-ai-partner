@@ -1,4 +1,5 @@
 var ProactiveMessageService = (function() {
+  var issuedDispatches_ = new WeakMap();
   var DEFAULTS = Object.freeze({
     silenceCeilingMinutes: 720,
     probabilityCurve: 1.3,
@@ -122,6 +123,7 @@ var ProactiveMessageService = (function() {
 
       var queueDedupeKey = buildQueueDedupeKey_(today, sequence, decisionSlot);
       var messageDedupeKey = buildMessageDedupeKey_(today, sequence);
+      var runtime = resolveEnqueueRuntime_();
       var payload = {
         targetDate: today,
         sequence: sequence,
@@ -134,8 +136,12 @@ var ProactiveMessageService = (function() {
         timeWeight: timeWeight,
         reason: policyMode === 'probability'
           ? 'deterministic_probability_hit'
-          : 'local_silence_threshold'
+          : 'local_silence_threshold',
+        characterRuntimeMode: runtime.mode
       };
+      if (runtime.mode === 'enforced') {
+        payload.characterBinding = runtime.binding;
+      }
 
       return buildEvaluation_(
         true,
@@ -167,8 +173,15 @@ var ProactiveMessageService = (function() {
     };
   }
 
-  function prepareDispatch(eventPayload, now) {
+  function prepareDispatch(eventPayload, now, options) {
     var payload = normalizeDecisionPayload_(eventPayload, now);
+    var queueClaim = normalizeQueueClaim_(options);
+    ensure(
+      payload.characterRuntimeMode !== 'enforced' || queueClaim != null,
+      'CHARACTER_ARTIFACT_INVALID',
+      'Enforced proactive dispatch requires a current queue lease.'
+    );
+    assertQueueClaimCurrent_(queueClaim, payload);
     var nowDate = normalizeDate_(now);
     var nowIso = toIsoStringInTokyo(nowDate);
     var state = SheetRepository.ensureDefaultUserState();
@@ -176,35 +189,60 @@ var ProactiveMessageService = (function() {
     ensure(state, 'CONFIG_MISSING', 'user_state row is missing.');
 
     var existing = payload.messageDedupeKey
-      ? findExistingMarker_(payload.messageDedupeKey)
+      ? findExistingMarker_(
+        payload.messageDedupeKey,
+        queueClaim ? queueClaim.eventId : null
+      )
       : null;
 
     if (existing && existing.status === 'completed') {
+      reconcileCompletedMarker_(
+        payload,
+        existing,
+        queueClaim,
+        nowIso
+      );
       return buildDispatchResult_(
-        true,
+        false,
         'ALREADY_DELIVERED',
-        {
-          targetDate: payload.targetDate,
-          sequence: payload.sequence,
-          dedupeKey: payload.messageDedupeKey,
-          subject: buildSubject_(payload.targetDate, state, nowIso),
-          body: String(
-            existing.text ||
-            buildBody_(state, nowIso, payload.targetDate)
-          ).trim(),
-          sentAt: existing.createdAt || nowIso,
-          model: existing.model || null,
-          inputTokens: existing.inputTokens == null
-            ? null
-            : existing.inputTokens,
-          outputTokens: existing.outputTokens == null
-            ? null
-            : existing.outputTokens,
-          options: {}
-        },
+        null,
         existing.createdAt || nowIso,
         {
           usedAi: Boolean(existing.model),
+          probability: payload.probability,
+          sample: payload.sample,
+          decisionSlot: payload.decisionSlot
+        }
+      );
+    }
+
+    if (
+      existing &&
+      existing.error &&
+      existing.error.code === 'PROACTIVE_RETRY_QUARANTINED'
+    ) {
+      return completeManagedNoSend_(
+        payload,
+        nowIso,
+        queueClaim,
+        'PROACTIVE_RETRY_QUARANTINED'
+      );
+    }
+
+    if (
+      existing &&
+      queueClaim &&
+      existing.proactiveOriginEventId &&
+      existing.proactiveOriginEventId !== queueClaim.eventId
+    ) {
+      return buildDispatchResult_(
+        false,
+        'DELIVERY_IN_PROGRESS',
+        null,
+        nowIso,
+        {
+          usedAi:
+            payload.characterRuntimeMode === 'enforced',
           probability: payload.probability,
           sample: payload.sample,
           decisionSlot: payload.decisionSlot
@@ -257,6 +295,50 @@ var ProactiveMessageService = (function() {
       return buildDispatchResult_(false, hardGate.reason, null, nowIso);
     }
 
+    if (
+      payload.characterRuntimeMode === 'legacy' &&
+      existing &&
+      existing.status === 'failed' &&
+      existing.characterApproval != null
+    ) {
+      quarantineProactiveMarker_(
+        existing,
+        queueClaim,
+        payload
+      );
+      return completeManagedNoSend_(
+        payload,
+        nowIso,
+        queueClaim,
+        'PROACTIVE_RUNTIME_CHANGED'
+      );
+    }
+
+    if (payload.characterRuntimeMode === 'enforced') {
+      return prepareEnforcedDispatch_(
+        payload,
+        existing,
+        nowIso,
+        queueClaim
+      );
+    }
+
+    return prepareLegacyDispatch_(
+      payload,
+      state,
+      existing,
+      nowIso,
+      queueClaim
+    );
+  }
+
+  function prepareLegacyDispatch_(
+    payload,
+    state,
+    existing,
+    nowIso,
+    queueClaim
+  ) {
     var preparedBody;
     var fallbackReason = null;
 
@@ -314,6 +396,13 @@ var ProactiveMessageService = (function() {
       options: {}
     };
 
+    issueDispatch_(
+      message,
+      'legacy',
+      queueClaim,
+      payload,
+      null
+    );
     return buildDispatchResult_(true, 'READY', message, nowIso, {
       usedAi: preparedBody.usedAi,
       probability: payload.probability,
@@ -323,15 +412,341 @@ var ProactiveMessageService = (function() {
     });
   }
 
+  function prepareEnforcedDispatch_(
+    payload,
+    existing,
+    nowIso,
+    queueClaim
+  ) {
+    SheetRepository.assertProactiveDeliveryColumns();
+    var retrying = Boolean(existing && existing.status === 'failed');
+    if (retrying && !isRetryableApprovedMarker_(existing)) {
+      quarantineProactiveMarker_(
+        existing,
+        queueClaim,
+        payload
+      );
+      return completeManagedNoSend_(
+        payload,
+        nowIso,
+        queueClaim,
+        'PROACTIVE_RETRY_QUARANTINED'
+      );
+    }
+
+    var context;
+    try {
+      context = CharacterProactiveContextService.build({
+        currentTime: nowIso
+      });
+      if (!retrying) {
+        CharacterProactiveContextService.assertBindingMatchesContext(
+          payload.characterBinding,
+          context
+        );
+      }
+    } catch (runtimeError) {
+      var normalizedRuntimeError = normalizeError(runtimeError);
+      if (
+        normalizedRuntimeError.code === 'CHARACTER_CONFIG_INVALID' ||
+        normalizedRuntimeError.code === 'CHARACTER_CONFIG_CONFLICT'
+      ) {
+        return completeManagedNoSend_(
+          payload,
+          nowIso,
+          queueClaim,
+          'PROACTIVE_RUNTIME_CHANGED'
+        );
+      }
+      throw normalizedRuntimeError;
+    }
+    var session = CharacterProactiveGeminiAdapter.createSession();
+    var surface = retrying ? 'PROACTIVE_RETRY' : 'PROACTIVE_AI';
+    var approval;
+    try {
+      var coordinatorOptions = {
+        context: context,
+        surface: surface,
+        classificationSignals:
+          CharacterProactiveContextService.classificationSignals(context),
+        verifierFn: session.verify,
+        metricEmitter: session.emitMetric
+      };
+      if (retrying) {
+        coordinatorOptions.savedPayload = {
+          subject: existing.proactiveSubject,
+          body: String(existing.text)
+        };
+      } else {
+        coordinatorOptions.generate = session.generate;
+        coordinatorOptions.rewrite = session.rewrite;
+      }
+      approval = CharacterOutputCoordinator.approve(coordinatorOptions);
+    } catch (error) {
+      recordCharacterUsageBestEffort_(
+        nowIso,
+        session.getUsage()
+      );
+      var normalized = normalizeError(error);
+      if (normalized.code === 'CHARACTER_OUTPUT_BLOCKED') {
+        if (retrying) {
+          quarantineProactiveMarker_(
+            existing,
+            queueClaim,
+            payload
+          );
+        }
+        return completeManagedNoSend_(
+          payload,
+          nowIso,
+          queueClaim,
+          'NO_APPROVED_PROACTIVE_OUTPUT'
+        );
+      }
+      throw normalized;
+    }
+
+    ensure(
+      approval &&
+        approval.artifact &&
+        approval.classifiedContext,
+      'CHARACTER_OUTPUT_BLOCKED',
+      'No approved proactive output was available.'
+    );
+    recordCharacterUsageBestEffort_(
+      nowIso,
+      session.getUsage()
+    );
+    var approvedPayload = approval.artifact.payload;
+    if (
+      retrying &&
+      (
+        approvedPayload.subject !== existing.proactiveSubject ||
+        approvedPayload.body !== String(existing.text)
+      )
+    ) {
+      quarantineProactiveMarker_(
+        existing,
+        queueClaim,
+        payload
+      );
+      return completeManagedNoSend_(
+        payload,
+        nowIso,
+        queueClaim,
+        'PROACTIVE_RETRY_QUARANTINED'
+      );
+    }
+    var usage = normalizeCharacterUsage_(session.getUsage());
+    var generationMetadata = retrying
+      ? null
+      : session.getGenerationMetadata(approval.artifact.source);
+    var message = {
+      targetDate: payload.targetDate,
+      sequence: payload.sequence,
+      dedupeKey: payload.messageDedupeKey,
+      subject: approvedPayload.subject,
+      body: approvedPayload.body,
+      sentAt: nowIso,
+      model: retrying
+        ? existing.model || null
+        : generationMetadata
+          ? generationMetadata.model || null
+          : null,
+      inputTokens: retrying
+        ? existing.inputTokens
+        : usage.inputTokens,
+      outputTokens: retrying
+        ? existing.outputTokens
+        : usage.outputTokens,
+      options: {},
+      characterDelivery: {
+        artifact: approval.artifact,
+        context: approval.classifiedContext,
+        metricEmitter: session.emitMetric
+      }
+    };
+
+    issueDispatch_(
+      message,
+      'enforced',
+      queueClaim,
+      payload,
+      surface
+    );
+    return buildDispatchResult_(true, 'READY', message, nowIso, {
+      usedAi: true,
+      probability: payload.probability,
+      sample: payload.sample,
+      decisionSlot: payload.decisionSlot,
+      fallbackReason: null
+    });
+  }
+
+  function issueDispatch_(
+    message,
+    mode,
+    queueClaim,
+    queuePayload,
+    expectedSurface
+  ) {
+    ensure(
+      mode === 'legacy' || mode === 'enforced',
+      'CHARACTER_ARTIFACT_INVALID',
+      'Proactive dispatch mode is invalid.'
+    );
+    var normalized = normalizeMessagePayload_(message);
+    var delivery = normalized.characterDelivery;
+    if (mode === 'enforced') {
+      ensure(
+        queueClaim &&
+          delivery &&
+          delivery.artifact &&
+          delivery.context &&
+          typeof delivery.metricEmitter === 'function' &&
+          (
+            expectedSurface === 'PROACTIVE_AI' ||
+            expectedSurface === 'PROACTIVE_RETRY'
+          ),
+        'CHARACTER_ARTIFACT_INVALID',
+        'Enforced proactive dispatch authorization is incomplete.'
+      );
+    } else {
+      ensure(
+        delivery == null && expectedSurface == null,
+        'CHARACTER_ARTIFACT_INVALID',
+        'Legacy proactive dispatch cannot carry character authorization.'
+      );
+    }
+
+    var optionSnapshot = {};
+    Object.keys(normalized.options || {}).forEach(function(key) {
+      optionSnapshot[key] = normalized.options[key];
+    });
+    normalized.options = Object.freeze(optionSnapshot);
+    normalized.characterDelivery = null;
+    normalized = Object.freeze(normalized);
+
+    var deliverySnapshot = delivery
+      ? Object.freeze({
+        artifact: delivery.artifact,
+        context: delivery.context,
+        metricEmitter: delivery.metricEmitter
+      })
+      : null;
+    var claimSnapshot = queueClaim
+      ? Object.freeze({
+        eventId: queueClaim.eventId,
+        leaseToken: queueClaim.leaseToken
+      })
+      : null;
+    var dispatch = Object.freeze({
+      mode: mode,
+      expectedSurface: expectedSurface || null,
+      payload: normalized,
+      characterDelivery: deliverySnapshot,
+      queueClaim: claimSnapshot,
+      queuePayload: snapshotQueuePayload_(queuePayload)
+    });
+    issuedDispatches_.set(message, dispatch);
+    return message;
+  }
+
+  function snapshotQueuePayload_(payload) {
+    if (!payload) {
+      return null;
+    }
+    var snapshot = {
+      targetDate: payload.targetDate,
+      sequence: payload.sequence,
+      requestedAt: payload.requestedAt,
+      decisionSlot: payload.decisionSlot,
+      messageDedupeKey: payload.messageDedupeKey,
+      probability: payload.probability,
+      sample: payload.sample,
+      elapsedMinutes: payload.elapsedMinutes,
+      timeWeight: payload.timeWeight,
+      reason: payload.reason,
+      characterRuntimeMode: payload.characterRuntimeMode
+    };
+    if (payload.characterRuntimeMode === 'enforced') {
+      snapshot.characterBinding = Object.freeze(
+        normalizeCharacterBinding_(payload.characterBinding)
+      );
+    }
+    return Object.freeze(snapshot);
+  }
+
   function send(message) {
-    var payload = normalizeMessagePayload_(message);
+    ensure(
+      message && typeof message === 'object',
+      'CHARACTER_ARTIFACT_INVALID',
+      'Proactive dispatch was not issued by prepareDispatch.'
+    );
+    var dispatch = issuedDispatches_.get(message);
+    ensure(
+      dispatch != null,
+      'CHARACTER_ARTIFACT_INVALID',
+      'Proactive dispatch was not issued by prepareDispatch.'
+    );
+    issuedDispatches_.delete(message);
+
+    var payload = dispatch.payload;
+    if (dispatch.mode === 'enforced') {
+      var delivery = dispatch.characterDelivery;
+      ensure(
+        delivery &&
+          dispatch.expectedSurface &&
+          (
+            dispatch.expectedSurface === 'PROACTIVE_AI' ||
+            dispatch.expectedSurface === 'PROACTIVE_RETRY'
+          ),
+        'CHARACTER_ARTIFACT_INVALID',
+        'Enforced proactive dispatch authorization is invalid.'
+      );
+      return CharacterSinkAdapter.deliver({
+        artifact: delivery.artifact,
+        expectedSurface: dispatch.expectedSurface,
+        context: delivery.context,
+        metricEmitter: delivery.metricEmitter,
+        write: function(approvedPayload, artifact) {
+          ensure(
+            approvedPayload &&
+              approvedPayload.subject === payload.subject &&
+              approvedPayload.body === payload.body,
+            'CHARACTER_ARTIFACT_INVALID',
+            'Approved proactive content changed before delivery.'
+          );
+          return sendNormalized_(
+            payload,
+            dispatch,
+            artifact
+          );
+        }
+      });
+    }
+    ensure(
+      dispatch.mode === 'legacy' &&
+        dispatch.characterDelivery == null,
+      'CHARACTER_ARTIFACT_INVALID',
+      'Legacy proactive dispatch authorization is invalid.'
+    );
+    return sendNormalized_(payload, dispatch, null);
+  }
+
+  function sendNormalized_(payload, dispatch, approvedArtifact) {
     var attemptAt = payload.sentAt || toIsoStringInTokyo(new Date());
     var ownerEmail = PropertiesService.getScriptProperties().getProperty(
       APP_CONSTANTS.PROPERTY_KEYS.OWNER_EMAIL
     );
     ensure(ownerEmail, 'CONFIG_MISSING', 'OWNER_EMAIL is not configured.');
 
-    var claim = claimDelivery_(payload, attemptAt);
+    var claim = claimDelivery_(
+      payload,
+      attemptAt,
+      dispatch,
+      approvedArtifact
+    );
 
     if (claim.action === 'completed') {
       LockManager.withScriptLock(
@@ -393,15 +808,47 @@ var ProactiveMessageService = (function() {
     };
   }
 
-  function claimDelivery_(payload, attemptAt) {
+  function claimDelivery_(
+    payload,
+    attemptAt,
+    dispatch,
+    approvedArtifact
+  ) {
     return LockManager.withScriptLock(
       'proactive-delivery-claim-' + payload.dedupeKey,
       function() {
-        var existing = findExistingMarker_(payload.dedupeKey);
+        if (dispatch.queueClaim) {
+          assertQueueClaimCurrent_(
+            dispatch.queueClaim,
+            dispatch.queuePayload
+          );
+        }
+        var existing = findExistingMarker_(
+          payload.dedupeKey,
+          dispatch.queueClaim
+            ? dispatch.queueClaim.eventId
+            : null
+        );
+        var characterDelivery =
+          dispatch.mode === 'enforced';
 
         if (existing && existing.status === 'completed') {
           return {
             action: 'completed',
+            marker: existing,
+            body: String(existing.text || payload.body)
+          };
+        }
+
+        if (
+          existing &&
+          dispatch.queueClaim &&
+          existing.proactiveOriginEventId &&
+          existing.proactiveOriginEventId !==
+            dispatch.queueClaim.eventId
+        ) {
+          return {
+            action: 'in_progress',
             marker: existing,
             body: String(existing.text || payload.body)
           };
@@ -415,10 +862,15 @@ var ProactiveMessageService = (function() {
           };
         }
 
-        var deliveryBody = existing && existing.text
-          ? String(existing.text)
-          : payload.body;
+        var deliveryBody = characterDelivery
+          ? payload.body
+          : existing && existing.text
+            ? String(existing.text)
+            : payload.body;
         var marker = existing;
+        var characterApproval = characterDelivery
+          ? characterApprovalFromArtifact_(approvedArtifact)
+          : null;
 
         if (!marker) {
           marker = SheetRepository.appendConversation({
@@ -432,16 +884,39 @@ var ProactiveMessageService = (function() {
             status: 'accepted',
             model: payload.model,
             inputTokens: payload.inputTokens,
-            outputTokens: payload.outputTokens
+            outputTokens: payload.outputTokens,
+            proactiveSubject: characterDelivery ? payload.subject : null,
+            proactiveOriginEventId: dispatch.queueClaim
+              ? dispatch.queueClaim.eventId
+              : null,
+            characterApproval: characterApproval
           });
         } else {
+          if (characterDelivery) {
+            ensure(
+              marker.status === 'failed' &&
+                marker.proactiveSubject === payload.subject &&
+                String(marker.text || '') === payload.body &&
+                marker.characterApproval != null,
+              'STORAGE_DATA_CORRUPTED',
+              'Saved proactive content changed before approved retry.'
+            );
+          }
+          var markerPatch = {
+            createdAt: attemptAt,
+            status: 'accepted',
+            error: null
+          };
+          if (characterDelivery) {
+            markerPatch.characterApproval = characterApproval;
+          }
+          if (dispatch.queueClaim) {
+            markerPatch.proactiveOriginEventId =
+              dispatch.queueClaim.eventId;
+          }
           marker = SheetRepository.updateConversationMessage(
             marker.messageId,
-            {
-              createdAt: attemptAt,
-              status: 'accepted',
-              error: null
-            }
+            markerPatch
           );
         }
 
@@ -500,6 +975,197 @@ var ProactiveMessageService = (function() {
         return marker;
       }
     );
+  }
+
+  function completeManagedNoSend_(
+    payload,
+    nowIso,
+    queueClaim,
+    reason
+  ) {
+    LockManager.withScriptLock(
+      'proactive-no-send-' + payload.messageDedupeKey,
+      function() {
+        assertQueueClaimCurrent_(queueClaim, payload);
+        advanceNextCheckOnly_(nowIso);
+      }
+    );
+    return buildDispatchResult_(false, reason, null, nowIso, {
+      usedAi: payload.characterRuntimeMode === 'enforced',
+      probability: payload.probability,
+      sample: payload.sample,
+      decisionSlot: payload.decisionSlot,
+      fallbackReason: null
+    });
+  }
+
+  function reconcileCompletedMarker_(
+    payload,
+    marker,
+    queueClaim,
+    nowIso
+  ) {
+    return LockManager.withScriptLock(
+      'proactive-delivery-reconcile-' +
+        payload.messageDedupeKey,
+      function() {
+        assertQueueClaimCurrent_(queueClaim, payload);
+        updateStateAfterSend_(
+          payload,
+          marker.createdAt || nowIso
+        );
+        return marker;
+      }
+    );
+  }
+
+  function advanceNextCheckOnly_(nowIso) {
+    var state = SheetRepository.ensureDefaultUserState();
+    state = SheetRepository.getUserState() || state;
+    var recheckMinutes = Math.max(
+      1,
+      getConfigInt_(
+        'PROACTIVE_RECHECK_MINUTES',
+        DEFAULTS.recheckMinutes
+      )
+    );
+    var nextCheck = toIsoStringInTokyo(
+      new Date(
+        parseIsoToDate(nowIso).getTime() +
+          recheckMinutes * 60 * 1000
+      )
+    );
+    if (
+      !state.next_proactive_check_at ||
+      getIsoTimeMillis(nextCheck) >
+        getIsoTimeMillis(state.next_proactive_check_at)
+    ) {
+      SheetRepository.updateUserState({
+        next_proactive_check_at: nextCheck
+      });
+    }
+    return nextCheck;
+  }
+
+  function quarantineProactiveMarker_(
+    marker,
+    queueClaim,
+    payload
+  ) {
+    if (!marker || !marker.messageId) {
+      return null;
+    }
+    return LockManager.withScriptLock(
+      'proactive-quarantine-' + marker.messageId,
+      function() {
+        assertQueueClaimCurrent_(queueClaim, payload);
+        var current = findExistingMarker_(payload.messageDedupeKey);
+        if (!current || current.messageId !== marker.messageId) {
+          return null;
+        }
+        ensure(
+          typeof SheetRepository.quarantineProactiveMarker ===
+            'function',
+          'STORAGE_DATA_CORRUPTED',
+          'Proactive quarantine storage boundary is unavailable.'
+        );
+        return SheetRepository.quarantineProactiveMarker(
+          marker.messageId,
+          queueClaim ? queueClaim.eventId : null
+        );
+      }
+    );
+  }
+
+  function isRetryableApprovedMarker_(marker) {
+    var approval = marker && marker.characterApproval;
+    return Boolean(
+      marker &&
+        marker.status === 'failed' &&
+        typeof marker.proactiveSubject === 'string' &&
+        marker.proactiveSubject.trim() !== '' &&
+        String(marker.text || '').trim() !== '' &&
+        approval &&
+        (
+          (
+            approval.surface === 'PROACTIVE_AI' &&
+            (
+              approval.source === 'generated' ||
+              approval.source === 'rewrite'
+            )
+          ) ||
+          (
+            approval.surface === 'PROACTIVE_RETRY' &&
+            approval.source === 'legacy_revalidated'
+          )
+        )
+    );
+  }
+
+  function characterApprovalFromArtifact_(artifact) {
+    return {
+      surface: artifact.surface,
+      source: artifact.source,
+      policyVersion: artifact.policyVersion,
+      profileSchemaVersion: artifact.profileSchemaVersion,
+      profileRevision: artifact.profileRevision,
+      catalogVersion: artifact.catalogVersion,
+      characterPackId: artifact.characterPackId,
+      characterPackVersion: artifact.characterPackVersion
+    };
+  }
+
+  function normalizeCharacterUsage_(usage) {
+    usage = usage || {};
+    return {
+      apiCalls: normalizeUsageNumber_(usage.apiCalls),
+      imageCalls: normalizeUsageNumber_(usage.imageCalls),
+      inputTokens: normalizeUsageNumber_(usage.inputTokens),
+      outputTokens: normalizeUsageNumber_(usage.outputTokens)
+    };
+  }
+
+  function normalizeUsageNumber_(value) {
+    var number = Number(value || 0);
+    if (!isFinite(number) || number < 0) {
+      return 0;
+    }
+    return Math.floor(number);
+  }
+
+  function recordCharacterUsageBestEffort_(
+    createdAt,
+    rawUsage
+  ) {
+    var usage = normalizeCharacterUsage_(rawUsage);
+    if (usage.apiCalls < 1) {
+      return false;
+    }
+    try {
+      SheetRepository.incrementUsageDaily(
+        formatDateInTokyo(parseIsoToDate(createdAt)),
+        {
+          apiCalls: usage.apiCalls,
+          imageCalls: usage.imageCalls,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens
+        }
+      );
+      return true;
+    } catch (error) {
+      try {
+        AppLogger.writeDebugLog(
+          'WARN',
+          'recordProactiveCharacterUsage',
+          'Proactive character usage accounting failed.',
+          {
+            code: normalizeError(error).code
+          },
+          null
+        );
+      } catch (ignored) {}
+      return false;
+    }
   }
 
   function buildTemplateBodyResult_(state, nowIso, targetDate) {
@@ -657,6 +1323,9 @@ var ProactiveMessageService = (function() {
     var timeWeight = eventPayload.timeWeight == null
       ? 1
       : Number(eventPayload.timeWeight);
+    var characterRuntimeMode = eventPayload.characterRuntimeMode == null
+      ? 'legacy'
+      : String(eventPayload.characterRuntimeMode);
 
     ensure(
       Validators.isDateString(targetDate),
@@ -709,8 +1378,14 @@ var ProactiveMessageService = (function() {
       'VALIDATION_REQUEST_INVALID',
       'PROACTIVE_SEND payload.timeWeight must be non-negative.'
     );
+    ensure(
+      characterRuntimeMode === 'legacy' ||
+        characterRuntimeMode === 'enforced',
+      'VALIDATION_REQUEST_INVALID',
+      'PROACTIVE_SEND payload.characterRuntimeMode is invalid.'
+    );
 
-    return {
+    var normalizedPayload = {
       targetDate: targetDate,
       sequence: sequence,
       requestedAt: requestedAt,
@@ -720,8 +1395,21 @@ var ProactiveMessageService = (function() {
       sample: sample,
       elapsedMinutes: elapsedMinutes,
       timeWeight: timeWeight,
-      reason: eventPayload.reason || null
+      reason: eventPayload.reason || null,
+      characterRuntimeMode: characterRuntimeMode
     };
+    if (characterRuntimeMode === 'enforced') {
+      normalizedPayload.characterBinding = normalizeCharacterBinding_(
+        eventPayload.characterBinding
+      );
+    } else {
+      ensure(
+        eventPayload.characterBinding == null,
+        'VALIDATION_REQUEST_INVALID',
+        'Legacy PROACTIVE_SEND payload must not contain a character binding.'
+      );
+    }
+    return normalizedPayload;
   }
 
   function normalizeMessagePayload_(message) {
@@ -775,10 +1463,9 @@ var ProactiveMessageService = (function() {
       targetDate: targetDate,
       sequence: sequence,
       dedupeKey: dedupeKey,
-      subject: String(
-        message.subject ||
-        buildSubject_(targetDate)
-      ),
+      subject: Object.prototype.hasOwnProperty.call(message, 'subject')
+        ? String(message.subject)
+        : buildSubject_(targetDate),
       body: body,
       sentAt: message.sentAt || null,
       model: message.model || null,
@@ -788,7 +1475,8 @@ var ProactiveMessageService = (function() {
       outputTokens: message.outputTokens == null
         ? null
         : Number(message.outputTokens),
-      options: message.options || {}
+      options: message.options || {},
+      characterDelivery: message.characterDelivery || null
     };
   }
 
@@ -1282,15 +1970,191 @@ var ProactiveMessageService = (function() {
       : 0;
   }
 
-  function findExistingMarker_(dedupeKey) {
-    var marker = SheetRepository.getMessageByRequestIdAndRole(
-      dedupeKey,
-      'system'
-    );
+  function findExistingMarker_(dedupeKey, originEventId) {
+    var marker = typeof SheetRepository.getProactiveMarkerByDedupeKey ===
+      'function'
+      ? SheetRepository.getProactiveMarkerByDedupeKey(
+        dedupeKey,
+        originEventId || null
+      )
+      : SheetRepository.getMessageByRequestIdAndRole(
+        dedupeKey,
+        'system'
+      );
     if (!marker || marker.messageType !== 'proactive') {
       return null;
     }
     return marker;
+  }
+
+  function resolveEnqueueRuntime_() {
+    if (!getConfigBool_('PROACTIVE_AI_GENERATION_ENABLED', false)) {
+      return {
+        mode: 'legacy',
+        binding: null
+      };
+    }
+    var inspection = CharacterProfileService.inspectRuntime();
+    if (
+      inspection.state === 'legacy' &&
+      inspection.runtimeMode === 'legacy'
+    ) {
+      return {
+        mode: 'legacy',
+        binding: null
+      };
+    }
+    ensure(
+      inspection.state === 'ready' &&
+        inspection.runtimeMode === 'enforced',
+      'CHARACTER_CONFIG_INVALID',
+      'Character runtime is not ready for proactive generation.',
+      {
+        reason: inspection.reason || 'CHARACTER_RUNTIME_BLOCKED'
+      }
+    );
+    return {
+      mode: 'enforced',
+      binding: CharacterProactiveContextService.bindingFromInspection(
+        inspection
+      )
+    };
+  }
+
+  function normalizeCharacterBinding_(value) {
+    var fields = [
+      'profileSchemaVersion',
+      'profileRevision',
+      'policyVersion',
+      'catalogVersion',
+      'characterPackId',
+      'characterPackVersion'
+    ];
+    ensure(
+      value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        Object.keys(value).length === fields.length &&
+        fields.every(function(field) {
+          return Object.prototype.hasOwnProperty.call(value, field);
+        }) &&
+        value.profileSchemaVersion ===
+          APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION &&
+        typeof value.profileRevision === 'number' &&
+        Number.isSafeInteger(value.profileRevision) &&
+        value.profileRevision > 0 &&
+        value.policyVersion === APP_CONSTANTS.CHARACTER.POLICY_VERSION &&
+        value.catalogVersion === APP_CONSTANTS.CHARACTER.CATALOG_VERSION &&
+        typeof value.characterPackId === 'string' &&
+        /^[a-z0-9][a-z0-9-]{2,63}$/.test(value.characterPackId) &&
+        typeof value.characterPackVersion === 'string' &&
+        /^[a-z0-9][a-z0-9.-]{2,79}$/.test(value.characterPackVersion),
+      'VALIDATION_REQUEST_INVALID',
+      'PROACTIVE_SEND character binding is invalid.'
+    );
+    return {
+      profileSchemaVersion: value.profileSchemaVersion,
+      profileRevision: value.profileRevision,
+      policyVersion: value.policyVersion,
+      catalogVersion: value.catalogVersion,
+      characterPackId: value.characterPackId,
+      characterPackVersion: value.characterPackVersion
+    };
+  }
+
+  function normalizeQueueClaim_(options) {
+    options = options || {};
+    var hasEventId = options.eventId != null &&
+      String(options.eventId).trim() !== '';
+    var hasLeaseToken = options.leaseToken != null &&
+      String(options.leaseToken).trim() !== '';
+    ensure(
+      hasEventId === hasLeaseToken,
+      'VALIDATION_REQUEST_INVALID',
+      'Proactive eventId and leaseToken must be supplied together.'
+    );
+    if (!hasEventId) {
+      return null;
+    }
+    ensure(
+      Validators.isUuidV4(String(options.eventId)),
+      'VALIDATION_REQUEST_INVALID',
+      'Proactive eventId must be a UUID v4.'
+    );
+    return {
+      eventId: String(options.eventId),
+      leaseToken: String(options.leaseToken)
+    };
+  }
+
+  function assertQueueClaimCurrent_(queueClaim, payload) {
+    if (!queueClaim) {
+      return true;
+    }
+    var event = SheetRepository.getEventById(queueClaim.eventId);
+    ensure(
+      event &&
+        event.eventType === 'PROACTIVE_SEND' &&
+        event.payload,
+      'STORAGE_DATA_CORRUPTED',
+      'Proactive queue event linkage is invalid.'
+    );
+    var storedPayload = normalizeDecisionPayload_(
+      event.payload,
+      event.payload.requestedAt ||
+        event.payload.evaluatedAt ||
+        toIsoStringInTokyo(new Date())
+    );
+    ensure(
+      queuePayloadIdentity_(storedPayload) ===
+        queuePayloadIdentity_(payload),
+      'STORAGE_DATA_CORRUPTED',
+      'Proactive queue event payload changed after claim.'
+    );
+    if (
+      event.status !== 'PROCESSING' ||
+      event.lockedBy == null ||
+      String(event.lockedBy) !== queueClaim.leaseToken
+    ) {
+      throw createAppError(
+        'QUEUE_LOCK_BUSY',
+        'Queue event lease no longer belongs to this worker.',
+        {
+          reason: 'QUEUE_LEASE_MISMATCH'
+        }
+      );
+    }
+    return true;
+  }
+
+  function queuePayloadIdentity_(payload) {
+    ensure(
+      payload &&
+        typeof payload === 'object' &&
+        (
+          payload.characterRuntimeMode === 'legacy' ||
+          payload.characterRuntimeMode === 'enforced'
+        ),
+      'STORAGE_DATA_CORRUPTED',
+      'Proactive queue identity is invalid.'
+    );
+    var binding = payload.characterRuntimeMode === 'enforced'
+      ? normalizeCharacterBinding_(payload.characterBinding)
+      : null;
+    return JSON.stringify({
+      targetDate: payload.targetDate,
+      sequence: payload.sequence,
+      requestedAt: payload.requestedAt,
+      decisionSlot: payload.decisionSlot,
+      messageDedupeKey: payload.messageDedupeKey,
+      probability: payload.probability,
+      sample: payload.sample,
+      elapsedMinutes: payload.elapsedMinutes,
+      timeWeight: payload.timeWeight,
+      reason: payload.reason || null,
+      characterRuntimeMode: payload.characterRuntimeMode,
+      characterBinding: binding
+    });
   }
 
   function requireConfig_(key) {

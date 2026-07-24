@@ -103,10 +103,26 @@ function runA2PlatformTests() {
         return column.name;
       });
     var approvalColumns = APP_CONSTANTS.CHARACTER.APPROVAL_COLUMNS;
+    var approvalOffset = schemaHeaders.indexOf(approvalColumns[0]);
     assert(
-      JSON.stringify(schemaHeaders.slice(-approvalColumns.length)) ===
+      JSON.stringify(
+        schemaHeaders.slice(
+          approvalOffset,
+          approvalOffset + approvalColumns.length
+        )
+      ) ===
         JSON.stringify(approvalColumns),
-      'Character approval columns must remain the exact conversation_logs suffix.'
+      'Character approval columns must remain one exact ordered block.'
+    );
+    assert(
+      schemaHeaders[approvalOffset + approvalColumns.length] ===
+        'proactive_subject',
+      'Proactive subject must be the additive column after approval metadata.'
+    );
+    assert(
+      schemaHeaders[approvalOffset + approvalColumns.length + 1] ===
+        'proactive_origin_event_id',
+      'Proactive origin event must follow the proactive subject.'
     );
     assert(
       SheetRepository.__test.assertCharacterApprovalHeaders(schemaHeaders) === true,
@@ -118,7 +134,54 @@ function runA2PlatformTests() {
       ) === true,
       'Future trailing columns must not break rollback to the PR4 approval writer.'
     );
+    assert(
+      SheetRepository.__test.assertProactiveDeliveryHeaders(
+        schemaHeaders
+      ) === true,
+      'Current conversation_logs headers should support proactive delivery.'
+    );
+    assert(
+      SheetRepository.__test.assertProactiveDeliveryHeaders(
+        schemaHeaders.concat(['future_additive_column'])
+      ) === true,
+      'Future trailing columns must preserve proactive delivery compatibility.'
+    );
   });
+
+  expectThrows(
+    'proactive delivery columns reject a missing origin column',
+    function() {
+      var headers = getSheetSchema(
+        APP_CONSTANTS.SHEETS.CONVERSATION_LOGS
+      ).map(function(column) {
+        return column.name;
+      }).filter(function(name) {
+        return name !== 'proactive_origin_event_id';
+      });
+      SheetRepository.__test.assertProactiveDeliveryHeaders(
+        headers
+      );
+    },
+    'STORAGE_DATA_CORRUPTED'
+  );
+
+  expectThrows(
+    'proactive delivery columns reject reversed tail order',
+    function() {
+      var headers = getSheetSchema(
+        APP_CONSTANTS.SHEETS.CONVERSATION_LOGS
+      ).map(function(column) {
+        return column.name;
+      });
+      var subjectIndex = headers.indexOf('proactive_subject');
+      headers[subjectIndex] = 'proactive_origin_event_id';
+      headers[subjectIndex + 1] = 'proactive_subject';
+      SheetRepository.__test.assertProactiveDeliveryHeaders(
+        headers
+      );
+    },
+    'STORAGE_DATA_CORRUPTED'
+  );
 
   test('conversation row writes tolerate future additive columns', function() {
     var originalPropertiesService = PropertiesService;
@@ -314,6 +377,344 @@ function runA2PlatformTests() {
         immutableError && immutableError.code === 'STORAGE_DATA_CORRUPTED',
         'Completed approved image content must be immutable.'
       );
+
+      var proactiveMessageId =
+        '88888888-8888-4888-8888-888888888888';
+      var proactiveOriginEventId =
+        '99999999-9999-4999-8999-999999999999';
+      var proactiveDedupeKey =
+        'PROACTIVE_MESSAGE:2026-07-24:1';
+      var proactiveApproval = {
+        surface: 'PROACTIVE_AI',
+        source: 'generated',
+        policyVersion: APP_CONSTANTS.CHARACTER.POLICY_VERSION,
+        profileSchemaVersion: APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION,
+        profileRevision: 3,
+        catalogVersion: APP_CONSTANTS.CHARACTER.CATALOG_VERSION,
+        characterPackId: 'warm-kansai-caretaker',
+        characterPackVersion: 'warm-kansai-caretaker.v1'
+      };
+      SheetRepository.appendConversation({
+        messageId: proactiveMessageId,
+        requestId: proactiveDedupeKey,
+        createdAt: '2026-07-24T09:02:00+09:00',
+        role: 'system',
+        messageType: 'proactive',
+        text: 'approved proactive body',
+        proactiveSubject: 'approved proactive subject',
+        proactiveOriginEventId: proactiveOriginEventId,
+        status: 'failed',
+        characterApproval: proactiveApproval
+      });
+      assert(
+        rows[rows.length - 1][
+          headers.indexOf('proactive_origin_event_id')
+        ] === proactiveOriginEventId,
+        'Append did not persist the proactive origin event.'
+      );
+      var retryApproval = JSON.parse(
+        JSON.stringify(proactiveApproval)
+      );
+      retryApproval.surface = 'PROACTIVE_RETRY';
+      retryApproval.source = 'legacy_revalidated';
+      retryApproval.profileRevision = 4;
+      var rebound = SheetRepository.updateConversationMessage(
+        proactiveMessageId,
+        {
+          createdAt: '2026-07-24T09:03:00+09:00',
+          status: 'accepted',
+          error: null,
+          characterApproval: retryApproval,
+          proactiveOriginEventId: proactiveOriginEventId
+        }
+      );
+      assert(
+        rebound.characterApproval.surface === 'PROACTIVE_RETRY' &&
+          rebound.characterApproval.profileRevision === 4,
+        'Failed proactive marker did not accept current exact-pair reapproval.'
+      );
+
+      SheetRepository.updateConversationMessage(
+        proactiveMessageId,
+        {
+          status: 'failed',
+          error: {
+            code: 'MAIL_QUOTA_EXHAUSTED'
+          }
+        }
+      );
+      [
+        {
+          label: 'content',
+          extra: {
+            text: 'changed body'
+          }
+        },
+        {
+          label: 'subject',
+          extra: {
+            proactiveSubject: 'changed subject'
+          }
+        },
+        {
+          label: 'identity',
+          extra: {
+            requestId: 'PROACTIVE_MESSAGE:2026-07-24:2'
+          }
+        },
+        {
+          label: 'delivery metadata',
+          extra: {
+            model: 'changed-model'
+          }
+        }
+      ].forEach(function(fixture) {
+        var patch = {
+          createdAt: '2026-07-24T09:04:00+09:00',
+          status: 'accepted',
+          error: null,
+          characterApproval: retryApproval,
+          proactiveOriginEventId: proactiveOriginEventId
+        };
+        Object.keys(fixture.extra).forEach(function(key) {
+          patch[key] = fixture.extra[key];
+        });
+        var mutationError = null;
+        try {
+          SheetRepository.updateConversationMessage(
+            proactiveMessageId,
+            patch
+          );
+        } catch (error) {
+          mutationError = error;
+        }
+        assert(
+          mutationError &&
+            mutationError.code === 'STORAGE_DATA_CORRUPTED',
+          'Failed proactive rebind accepted a forbidden ' +
+            fixture.label +
+            ' field.'
+        );
+      });
+
+      [
+        {
+          label: 'missing origin',
+          patch: {
+            status: 'accepted',
+            error: null,
+            characterApproval: retryApproval
+          },
+          code: 'STORAGE_DATA_CORRUPTED'
+        },
+        {
+          label: 'non-accepted status',
+          patch: {
+            status: 'failed',
+            error: null,
+            characterApproval: retryApproval,
+            proactiveOriginEventId: proactiveOriginEventId
+          },
+          code: 'STORAGE_DATA_CORRUPTED'
+        },
+        {
+          label: 'non-null error',
+          patch: {
+            status: 'accepted',
+            error: {
+              code: 'MAIL_SEND_FAILED'
+            },
+            characterApproval: retryApproval,
+            proactiveOriginEventId: proactiveOriginEventId
+          },
+          code: 'STORAGE_DATA_CORRUPTED'
+        },
+        {
+          label: 'invalid origin',
+          patch: {
+            status: 'accepted',
+            error: null,
+            characterApproval: retryApproval,
+            proactiveOriginEventId: 'not-a-uuid'
+          },
+          code: 'VALIDATION_REQUEST_INVALID'
+        },
+        {
+          label: 'different origin',
+          patch: {
+            status: 'accepted',
+            error: null,
+            characterApproval: retryApproval,
+            proactiveOriginEventId:
+              'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+          },
+          code: 'STORAGE_DATA_CORRUPTED'
+        }
+      ].forEach(function(fixture) {
+        var validationError = null;
+        try {
+          SheetRepository.updateConversationMessage(
+            proactiveMessageId,
+            fixture.patch
+          );
+        } catch (error) {
+          validationError = error;
+        }
+        assert(
+          validationError &&
+            validationError.code === fixture.code,
+          'Failed proactive rebind accepted ' + fixture.label + '.'
+        );
+      });
+
+      var proactiveRow = rows[rows.length - 1];
+      proactiveRow[
+        headers.indexOf('approval_character_pack_version')
+      ] = '';
+      var tolerantMarker =
+        SheetRepository.getProactiveMarkerByDedupeKey(
+          proactiveDedupeKey
+        );
+      assert(
+        tolerantMarker &&
+          tolerantMarker.invalidCharacterApproval === true &&
+          tolerantMarker.characterApproval === null &&
+          tolerantMarker.text === '' &&
+          tolerantMarker.proactiveSubject === null &&
+          tolerantMarker.proactiveOriginEventId ===
+            proactiveOriginEventId,
+        'Partial proactive approval was not returned as a safe marker.'
+      );
+      var strictDtoError = null;
+      try {
+        SheetRepository.getMessageByRequestIdAndRole(
+          proactiveDedupeKey,
+          'system'
+        );
+      } catch (error) {
+        strictDtoError = error;
+      }
+      assert(
+        strictDtoError &&
+          strictDtoError.code === 'STORAGE_DATA_CORRUPTED',
+        'The public/strict DTO silently accepted partial approval.'
+      );
+      var foreignQuarantineError = null;
+      try {
+        SheetRepository.quarantineProactiveMarker(
+          proactiveMessageId,
+          'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+        );
+      } catch (error) {
+        foreignQuarantineError = error;
+      }
+      assert(
+        foreignQuarantineError &&
+          foreignQuarantineError.code ===
+            'STORAGE_DATA_CORRUPTED',
+        'A foreign event took ownership of a proactive quarantine.'
+      );
+      var quarantined = SheetRepository.quarantineProactiveMarker(
+        proactiveMessageId,
+        proactiveOriginEventId
+      );
+      assert(
+        quarantined.invalidCharacterApproval === true &&
+          quarantined.status === 'failed' &&
+          quarantined.error &&
+          quarantined.error.code ===
+            'PROACTIVE_RETRY_QUARANTINED' &&
+          quarantined.proactiveOriginEventId ===
+            proactiveOriginEventId,
+        'Partial approval marker was not quarantined safely.'
+      );
+      assert(
+        SheetRepository.getProactiveMarkerByDedupeKey(
+          proactiveDedupeKey
+        ) === null,
+        'A quarantined marker remained active without an origin lookup.'
+      );
+      assert(
+        SheetRepository.getProactiveMarkerByDedupeKey(
+          proactiveDedupeKey,
+          proactiveOriginEventId
+        ).messageId === proactiveMessageId,
+        'Origin-bound quarantine lookup did not recover its audit row.'
+      );
+
+      var legacyMessageId =
+        'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+      var legacyOriginEventId =
+        'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+      SheetRepository.appendConversation({
+        messageId: legacyMessageId,
+        requestId: 'PROACTIVE_MESSAGE:2026-07-24:legacy-origin',
+        createdAt: '2026-07-24T09:04:30+09:00',
+        role: 'system',
+        messageType: 'proactive',
+        text: '',
+        status: 'failed',
+        error: {
+          code: 'MAIL_SEND_FAILED'
+        },
+        proactiveOriginEventId: legacyOriginEventId
+      });
+      var legacyOriginReplacementError = null;
+      try {
+        SheetRepository.updateConversationMessage(
+          legacyMessageId,
+          {
+            proactiveOriginEventId:
+              'ffffffff-ffff-4fff-8fff-ffffffffffff'
+          }
+        );
+      } catch (error) {
+        legacyOriginReplacementError = error;
+      }
+      assert(
+        legacyOriginReplacementError &&
+          legacyOriginReplacementError.code ===
+            'STORAGE_DATA_CORRUPTED',
+        'A legacy marker without approval allowed a foreign event to replace its origin.'
+      );
+      assert(
+        rows[rows.length - 1][
+          headers.indexOf('proactive_origin_event_id')
+        ] === legacyOriginEventId,
+        'Rejected legacy marker origin replacement mutated the stored owner.'
+      );
+
+      var historicalMessageId =
+        'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+      var claimedHistoricalOrigin =
+        'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+      SheetRepository.appendConversation({
+        messageId: historicalMessageId,
+        requestId: 'PROACTIVE_MESSAGE:2026-07-24:2',
+        createdAt: '2026-07-24T09:05:00+09:00',
+        role: 'system',
+        messageType: 'proactive',
+        text: 'historical approved body',
+        proactiveSubject: 'historical approved subject',
+        status: 'failed',
+        characterApproval: proactiveApproval
+      });
+      SheetRepository.updateConversationMessage(
+        historicalMessageId,
+        {
+          createdAt: '2026-07-24T09:06:00+09:00',
+          status: 'accepted',
+          error: null,
+          characterApproval: retryApproval,
+          proactiveOriginEventId: claimedHistoricalOrigin
+        }
+      );
+      assert(
+        rows[rows.length - 1][
+          headers.indexOf('proactive_origin_event_id')
+        ] === claimedHistoricalOrigin,
+        'A historical null origin could not bind to its current retry event.'
+      );
     } finally {
       PropertiesService = originalPropertiesService;
       if (hadSpreadsheetApp) {
@@ -363,6 +764,219 @@ function runA2PlatformTests() {
     assert(
       !SheetRepository.__test.characterApprovalsEqual(approval, staleApproval),
       'Dedupe must reject mismatched approval metadata.'
+    );
+  });
+
+  test('proactive subject stays internal while marker retry can restore it', function() {
+    var row = {
+      message_id: '11111111-1111-4111-8111-111111111111',
+      request_id: 'PROACTIVE_MESSAGE:2026-07-24:1',
+      created_at: '2026-07-24T09:00:00+09:00',
+      role: 'system',
+      message_type: 'proactive',
+      text: 'approved body',
+      status: 'failed',
+      proactive_subject: 'approved subject',
+      proactive_origin_event_id:
+        '99999999-9999-4999-8999-999999999999',
+      approval_surface: 'PROACTIVE_AI',
+      approval_source: 'generated',
+      approval_policy_version: APP_CONSTANTS.CHARACTER.POLICY_VERSION,
+      approval_profile_schema_version: APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION,
+      approval_profile_revision: 3,
+      approval_catalog_version: APP_CONSTANTS.CHARACTER.CATALOG_VERSION,
+      approval_character_pack_id: 'warm-kansai-caretaker',
+      approval_character_pack_version: 'warm-kansai-caretaker.v1'
+    };
+    var publicDto = SheetRepository.__test.toMessageDto(row);
+    var markerDto = SheetRepository.__test.toProactiveMarkerDto(row);
+    assert(
+      !Object.prototype.hasOwnProperty.call(
+        publicDto,
+        'proactiveSubject'
+      ) &&
+        !Object.prototype.hasOwnProperty.call(
+          publicDto,
+          'proactiveOriginEventId'
+        ) &&
+        !Object.prototype.hasOwnProperty.call(
+          publicDto,
+          'invalidCharacterApproval'
+        ),
+      'Public MessageDto exposed proactive transport metadata.'
+    );
+    assert(
+      markerDto.proactiveSubject === 'approved subject' &&
+        markerDto.proactiveOriginEventId ===
+          '99999999-9999-4999-8999-999999999999' &&
+        markerDto.invalidCharacterApproval === false &&
+        markerDto.characterApproval.surface === 'PROACTIVE_AI',
+      'Internal proactive marker must restore the exact approved pair and origin.'
+    );
+  });
+
+  test('proactive marker lookup prioritizes completion then active and origin-bound quarantine', function() {
+    var dedupeKey = 'PROACTIVE_MESSAGE:2026-07-24:1';
+    var originEventId =
+      '99999999-9999-4999-8999-999999999999';
+    var completed = {
+      request_id: dedupeKey,
+      role: 'system',
+      message_type: 'proactive',
+      status: 'completed',
+      error_code: null,
+      text: 'completed authority'
+    };
+    var selected = SheetRepository.__test.selectProactiveMarkerRow([
+      completed,
+      {
+        request_id: dedupeKey,
+        role: 'system',
+        message_type: 'proactive',
+        error_code: 'PROACTIVE_RETRY_QUARANTINED',
+        text: 'quarantined'
+      },
+      {
+        request_id: dedupeKey,
+        role: 'system',
+        message_type: 'error',
+        error_code: null,
+        text: 'not a marker'
+      },
+      {
+        request_id: dedupeKey,
+        role: 'system',
+        message_type: 'proactive',
+        status: 'accepted',
+        error_code: null,
+        text: 'latest active'
+      }
+    ], dedupeKey);
+    assert(
+      selected === completed,
+      'A newer active row displaced an authoritative completed marker.'
+    );
+    var latestActive =
+      SheetRepository.__test.selectProactiveMarkerRow([
+        {
+          request_id: dedupeKey,
+          role: 'system',
+          message_type: 'proactive',
+          status: 'failed',
+          error_code: 'PROACTIVE_RETRY_QUARANTINED',
+          proactive_origin_event_id: originEventId
+        },
+        {
+          request_id: dedupeKey,
+          role: 'system',
+          message_type: 'proactive',
+          status: 'accepted',
+          error_code: null,
+          text: 'latest active'
+        }
+      ], dedupeKey);
+    assert(
+      latestActive && latestActive.text === 'latest active',
+      'The latest non-quarantine marker was not selected.'
+    );
+    var quarantineOnly = [{
+      request_id: dedupeKey,
+      role: 'system',
+      message_type: 'proactive',
+      status: 'failed',
+      error_code: 'PROACTIVE_RETRY_QUARANTINED',
+      proactive_origin_event_id: originEventId
+    }];
+    assert(
+      SheetRepository.__test.selectProactiveMarkerRow(
+        quarantineOnly,
+        dedupeKey
+      ) === null &&
+        SheetRepository.__test.selectProactiveMarkerRow(
+          quarantineOnly,
+          dedupeKey,
+          'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+        ) === null &&
+        SheetRepository.__test.selectProactiveMarkerRow(
+          quarantineOnly,
+          dedupeKey,
+          originEventId
+        ) === quarantineOnly[0],
+      'Quarantine lookup was not restricted to its exact origin event.'
+    );
+  });
+
+  test('conversation readers expose only completed proactive markers', function() {
+    var visible = SheetRepository.__test.isConversationRowVisible;
+    assert(
+      visible({
+        role: 'system',
+        message_type: 'proactive',
+        status: 'completed'
+      }),
+      'A delivered proactive message must remain visible.'
+    );
+    ['accepted', 'failed'].forEach(function(status) {
+      assert(
+        !visible({
+          role: 'system',
+          message_type: 'proactive',
+          status: status
+        }),
+        'An undelivered proactive marker became conversation content: ' + status
+      );
+    });
+    assert(
+      !visible({
+        role: 'system',
+        message_type: 'proactive',
+        status: 'failed',
+        error_code: 'PROACTIVE_RETRY_QUARANTINED'
+      }),
+      'A quarantined proactive marker became conversation content.'
+    );
+    assert(
+      visible({
+        role: 'assistant',
+        message_type: 'text',
+        status: 'failed'
+      }),
+      'The proactive visibility rule must not hide ordinary conversation rows.'
+    );
+  });
+
+  [
+    {
+      name: 'proactive generation with canonical source',
+      surface: 'PROACTIVE_AI',
+      source: 'canonical'
+    },
+    {
+      name: 'proactive retry with generated source',
+      surface: 'PROACTIVE_RETRY',
+      source: 'generated'
+    },
+    {
+      name: 'legacy revalidation outside retry',
+      surface: 'CHAT_TEXT_SYNC',
+      source: 'legacy_revalidated'
+    }
+  ].forEach(function(fixture) {
+    expectThrows(
+      'character approval rejects ' + fixture.name,
+      function() {
+        SheetRepository.__test.normalizeCharacterApproval({
+          surface: fixture.surface,
+          source: fixture.source,
+          policyVersion: APP_CONSTANTS.CHARACTER.POLICY_VERSION,
+          profileSchemaVersion: APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION,
+          profileRevision: 3,
+          catalogVersion: APP_CONSTANTS.CHARACTER.CATALOG_VERSION,
+          characterPackId: 'warm-kansai-caretaker',
+          characterPackVersion: 'warm-kansai-caretaker.v1'
+        }, 'VALIDATION_REQUEST_INVALID');
+      },
+      'VALIDATION_REQUEST_INVALID'
     );
   });
 
@@ -592,7 +1206,7 @@ function runA2PlatformTests() {
   });
 
   test('character foundation defaults are legacy and structurally valid', function() {
-    assert(APP_CONSTANTS.SCHEMA_VERSION === '2026.07.a3', 'Chat approval columns require schema version a3.');
+    assert(APP_CONSTANTS.SCHEMA_VERSION === '2026.07.a5', 'Origin-bound proactive persistence requires schema version a5.');
     var entries = {};
     APP_CONSTANTS.CONFIG_DEFAULTS.forEach(function(entry) {
       entries[entry.key] = entry;

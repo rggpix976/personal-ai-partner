@@ -239,6 +239,39 @@ var SheetRepository = (function() {
     );
   }
 
+  function assertProactiveDeliveryHeaders_(headers) {
+    assertCharacterApprovalHeaders_(headers);
+    var expectedHeaders = APP_CONSTANTS.SHEET_SCHEMAS[
+      APP_CONSTANTS.SHEETS.CONVERSATION_LOGS
+    ].map(function(column) {
+      return column.name;
+    });
+    var subjectIndex = expectedHeaders.indexOf('proactive_subject');
+    var originEventIndex = expectedHeaders.indexOf(
+      'proactive_origin_event_id'
+    );
+    if (
+      subjectIndex < 0 ||
+      originEventIndex !== subjectIndex + 1 ||
+      !Array.isArray(headers) ||
+      headers.length <= originEventIndex ||
+      headers[subjectIndex] !== 'proactive_subject' ||
+      headers[originEventIndex] !== 'proactive_origin_event_id'
+    ) {
+      throw characterApprovalError_(
+        'STORAGE_DATA_CORRUPTED',
+        'PROACTIVE_DELIVERY_COLUMNS_INVALID'
+      );
+    }
+    return true;
+  }
+
+  function assertProactiveDeliveryColumns() {
+    return assertProactiveDeliveryHeaders_(
+      getHeaders(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS)
+    );
+  }
+
   function normalizeCharacterApproval_(value, errorCode) {
     if (value == null) {
       return null;
@@ -275,6 +308,26 @@ var SheetRepository = (function() {
       !/^[a-z0-9][a-z0-9.-]{2,79}$/.test(value.characterPackVersion)
     ) {
       throw characterApprovalError_(errorCode, 'CHARACTER_APPROVAL_TYPE_INVALID');
+    }
+    if (
+      (
+        value.surface === 'PROACTIVE_AI' &&
+        value.source !== 'generated' &&
+        value.source !== 'rewrite'
+      ) ||
+      (
+        value.surface === 'PROACTIVE_RETRY' &&
+        value.source !== 'legacy_revalidated'
+      ) ||
+      (
+        value.source === 'legacy_revalidated' &&
+        value.surface !== 'PROACTIVE_RETRY'
+      )
+    ) {
+      throw characterApprovalError_(
+        errorCode,
+        'CHARACTER_APPROVAL_SURFACE_SOURCE_INVALID'
+      );
     }
     return {
       surface: value.surface,
@@ -355,7 +408,24 @@ var SheetRepository = (function() {
     );
   }
 
-  function toMessageDto(row) {
+  function normalizeProactiveOriginEventId_(value, errorCode) {
+    if (value == null || String(value).trim() === '') {
+      return null;
+    }
+    var normalized = String(value);
+    if (!Validators.isUuidV4(normalized)) {
+      throw createAppError(
+        errorCode,
+        errorCode === 'STORAGE_DATA_CORRUPTED'
+          ? 'Stored proactive origin event is invalid.'
+          : 'Proactive origin event must be a UUID v4.',
+        { reason: 'PROACTIVE_ORIGIN_EVENT_ID_INVALID' }
+      );
+    }
+    return normalized;
+  }
+
+  function buildMessageDto_(row, characterApproval) {
     return {
       messageId: row.message_id,
       requestId: row.request_id,
@@ -381,8 +451,41 @@ var SheetRepository = (function() {
         code: row.error_code,
         message: row.error_code
       } : null,
-      characterApproval: characterApprovalFromRow_(row)
+      characterApproval: characterApproval
     };
+  }
+
+  function toMessageDto(row) {
+    return buildMessageDto_(row, characterApprovalFromRow_(row));
+  }
+
+  function toProactiveMarkerDto_(row) {
+    var characterApproval = null;
+    var invalidCharacterApproval = false;
+    try {
+      characterApproval = characterApprovalFromRow_(row);
+    } catch (error) {
+      if (!error || error.code !== 'STORAGE_DATA_CORRUPTED') {
+        throw error;
+      }
+      invalidCharacterApproval = true;
+    }
+    var message = buildMessageDto_(row, characterApproval);
+    if (invalidCharacterApproval) {
+      message.text = '';
+      message.proactiveSubject = null;
+    } else {
+      message.proactiveSubject = row.proactive_subject == null ||
+        row.proactive_subject === ''
+        ? null
+        : String(row.proactive_subject);
+    }
+    message.proactiveOriginEventId = normalizeProactiveOriginEventId_(
+      row.proactive_origin_event_id,
+      'STORAGE_DATA_CORRUPTED'
+    );
+    message.invalidCharacterApproval = invalidCharacterApproval;
+    return message;
   }
 
   function appendConversation(message) {
@@ -390,11 +493,33 @@ var SheetRepository = (function() {
     Validators.assertEnum(message.role, APP_CONSTANTS.MESSAGE_ROLES, 'message.role');
     Validators.assertEnum(message.messageType, APP_CONSTANTS.MESSAGE_TYPES, 'message.messageType');
     Validators.assertEnum(message.status, APP_CONSTANTS.MESSAGE_STATUSES, 'message.status');
+    var proactiveOriginEventId = normalizeProactiveOriginEventId_(
+      message.proactiveOriginEventId,
+      'VALIDATION_REQUEST_INVALID'
+    );
+    ensure(
+      proactiveOriginEventId == null ||
+        (
+          message.role === 'system' &&
+          message.messageType === 'proactive'
+        ),
+      'VALIDATION_REQUEST_INVALID',
+      'A proactive origin event may only be stored on a proactive marker.'
+    );
     var approvalRow = characterApprovalToRow_(
       message.characterApproval,
       'VALIDATION_REQUEST_INVALID'
     );
-    if (message.characterApproval != null) {
+    if (
+      message.role === 'system' &&
+      message.messageType === 'proactive' &&
+      (
+        message.characterApproval != null ||
+        proactiveOriginEventId != null
+      )
+    ) {
+      assertProactiveDeliveryColumns();
+    } else if (message.characterApproval != null) {
       assertCharacterApprovalColumns();
     }
     if (message.requestId && (message.role === 'user' || message.role === 'assistant')) {
@@ -431,7 +556,11 @@ var SheetRepository = (function() {
       model: message.model || null,
       input_tokens: message.inputTokens == null ? null : message.inputTokens,
       output_tokens: message.outputTokens == null ? null : message.outputTokens,
-      error_code: message.error ? message.error.code : null
+      error_code: message.error ? message.error.code : null,
+      proactive_subject: message.proactiveSubject == null
+        ? null
+        : String(message.proactiveSubject),
+      proactive_origin_event_id: proactiveOriginEventId
     }, approvalRow);
     appendRow(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS, row);
     return toMessageDto(row);
@@ -446,7 +575,24 @@ var SheetRepository = (function() {
     var touchesApprovedContent =
       Object.prototype.hasOwnProperty.call(normalized, 'text') ||
       Object.prototype.hasOwnProperty.call(normalized, 'image') ||
+      Object.prototype.hasOwnProperty.call(normalized, 'proactiveSubject') ||
+      Object.prototype.hasOwnProperty.call(
+        normalized,
+        'proactiveOriginEventId'
+      ) ||
       Object.prototype.hasOwnProperty.call(normalized, 'characterApproval');
+    if (
+      Object.prototype.hasOwnProperty.call(
+        normalized,
+        'proactiveOriginEventId'
+      )
+    ) {
+      normalized.proactiveOriginEventId =
+        normalizeProactiveOriginEventId_(
+          normalized.proactiveOriginEventId,
+          'VALIDATION_REQUEST_INVALID'
+        );
+    }
     if (touchesApprovedContent) {
       validateCharacterApprovalMutation_(
         messageId,
@@ -486,6 +632,22 @@ var SheetRepository = (function() {
       normalized.output_tokens = normalized.outputTokens;
       delete normalized.outputTokens;
     }
+    if (Object.prototype.hasOwnProperty.call(normalized, 'proactiveSubject')) {
+      normalized.proactive_subject = normalized.proactiveSubject == null
+        ? null
+        : String(normalized.proactiveSubject);
+      delete normalized.proactiveSubject;
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(
+        normalized,
+        'proactiveOriginEventId'
+      )
+    ) {
+      normalized.proactive_origin_event_id =
+        normalized.proactiveOriginEventId;
+      delete normalized.proactiveOriginEventId;
+    }
     if (Object.prototype.hasOwnProperty.call(normalized, 'error')) {
       normalized.error_code = normalized.error ? normalized.error.code : null;
       delete normalized.error;
@@ -502,7 +664,14 @@ var SheetRepository = (function() {
         'VALIDATION_REQUEST_INVALID'
       );
       if (normalized.characterApproval != null) {
-        assertCharacterApprovalColumns();
+        if (
+          normalized.characterApproval.surface === 'PROACTIVE_AI' ||
+          normalized.characterApproval.surface === 'PROACTIVE_RETRY'
+        ) {
+          assertProactiveDeliveryColumns();
+        } else {
+          assertCharacterApprovalColumns();
+        }
       }
       normalized = mergeObjects(normalized, approvalRow);
       delete normalized.characterApproval;
@@ -524,7 +693,88 @@ var SheetRepository = (function() {
       'CONFIG_MISSING',
       'Target conversation message was not found.'
     );
+    if (
+      Object.prototype.hasOwnProperty.call(
+        patch,
+        'proactiveOriginEventId'
+      )
+    ) {
+      var storedOriginEventId = normalizeProactiveOriginEventId_(
+        currentRow.proactive_origin_event_id,
+        'STORAGE_DATA_CORRUPTED'
+      );
+      ensure(
+        currentRow.role === 'system' &&
+          currentRow.message_type === 'proactive',
+        'STORAGE_DATA_CORRUPTED',
+        'A proactive origin event may only be stored on a proactive marker.'
+      );
+      ensure(
+        patch.proactiveOriginEventId != null &&
+          (
+            storedOriginEventId == null ||
+            storedOriginEventId === patch.proactiveOriginEventId
+          ),
+        'STORAGE_DATA_CORRUPTED',
+        'A proactive origin event binding cannot be cleared or replaced.'
+      );
+    }
     var currentApproval = characterApprovalFromRow_(currentRow);
+    if (
+      currentApproval != null &&
+      currentRow.role === 'system' &&
+      currentRow.message_type === 'proactive' &&
+      currentRow.status === 'failed' &&
+      (
+        currentApproval.surface === 'PROACTIVE_AI' ||
+        currentApproval.surface === 'PROACTIVE_RETRY'
+      ) &&
+      desiredApproval != null &&
+      desiredApproval.surface === 'PROACTIVE_RETRY' &&
+      desiredApproval.source === 'legacy_revalidated'
+    ) {
+      var allowedRetryPatchKeys = [
+        'createdAt',
+        'status',
+        'error',
+        'characterApproval',
+        'proactiveOriginEventId'
+      ];
+      var retryPatchKeys = Object.keys(patch);
+      var storedOriginEventId = normalizeProactiveOriginEventId_(
+        currentRow.proactive_origin_event_id,
+        'STORAGE_DATA_CORRUPTED'
+      );
+      var retryOriginEventId = normalizeProactiveOriginEventId_(
+        patch.proactiveOriginEventId,
+        'STORAGE_DATA_CORRUPTED'
+      );
+      ensure(
+        retryPatchKeys.every(function(key) {
+          return allowedRetryPatchKeys.indexOf(key) !== -1;
+        }) &&
+          Object.prototype.hasOwnProperty.call(patch, 'status') &&
+          patch.status === 'accepted' &&
+          Object.prototype.hasOwnProperty.call(patch, 'error') &&
+          patch.error === null &&
+          Object.prototype.hasOwnProperty.call(
+            patch,
+            'characterApproval'
+          ) &&
+          Object.prototype.hasOwnProperty.call(
+            patch,
+            'proactiveOriginEventId'
+          ) &&
+          retryOriginEventId != null &&
+          (
+            storedOriginEventId == null ||
+            storedOriginEventId === retryOriginEventId
+          ),
+        'STORAGE_DATA_CORRUPTED',
+        'A failed proactive marker retry patch is invalid.'
+      );
+      return true;
+    }
     var assistantExists = rows.some(function(row) {
       return (
         row.request_id === currentRow.request_id &&
@@ -599,6 +849,13 @@ var SheetRepository = (function() {
         return false;
       }
     }
+    if (
+      Object.prototype.hasOwnProperty.call(patch, 'proactiveSubject') &&
+      String(patch.proactiveSubject || '') !==
+        String(currentRow.proactive_subject || '')
+    ) {
+      return false;
+    }
     return true;
   }
 
@@ -616,9 +873,18 @@ var SheetRepository = (function() {
     });
   }
 
+  function isConversationRowVisible_(row) {
+    return !(
+      row &&
+      row.role === 'system' &&
+      row.message_type === 'proactive'
+    ) || row.status === 'completed';
+  }
+
   function listRecentMessages(limit) {
     var rows = getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS);
     return rows
+      .filter(isConversationRowVisible_)
       .sort(function(a, b) {
         return compareIsoDatesDescending(a.created_at, b.created_at);
       })
@@ -636,7 +902,10 @@ var SheetRepository = (function() {
     });
     return rows
       .filter(function(row) {
-        return pivot == null || getIsoTimeMillis(row.created_at) < pivot;
+        return isConversationRowVisible_(row) && (
+          pivot == null ||
+          getIsoTimeMillis(row.created_at) < pivot
+        );
       })
       .sort(function(a, b) {
         return compareIsoDatesDescending(a.created_at, b.created_at);
@@ -654,7 +923,8 @@ var SheetRepository = (function() {
     });
     return getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS)
       .filter(function(row) {
-        return Boolean(wanted[row.message_id]);
+        return Boolean(wanted[row.message_id]) &&
+          isConversationRowVisible_(row);
       })
       .sort(function(a, b) {
         return compareIsoDatesAscending(a.created_at, b.created_at);
@@ -666,7 +936,9 @@ var SheetRepository = (function() {
     Validators.assertDateString(summaryDate, 'summaryDate');
     return getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS)
       .filter(function(row) {
-        return row.created_at && formatDateInTokyo(parseIsoToDate(row.created_at)) === summaryDate;
+        return isConversationRowVisible_(row) &&
+          row.created_at &&
+          formatDateInTokyo(parseIsoToDate(row.created_at)) === summaryDate;
       })
       .sort(function(a, b) {
         return compareIsoDatesAscending(a.created_at, b.created_at);
@@ -920,6 +1192,106 @@ var SheetRepository = (function() {
     return rows.length > 0 ? toMessageDto(rows[0]) : null;
   }
 
+  function getProactiveMarkerByDedupeKey(dedupeKey, originEventId) {
+    var normalizedOriginEventId = normalizeProactiveOriginEventId_(
+      originEventId,
+      'VALIDATION_REQUEST_INVALID'
+    );
+    var row = selectProactiveMarkerRow_(
+      getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS),
+      dedupeKey,
+      normalizedOriginEventId
+    );
+    return row ? toProactiveMarkerDto_(row) : null;
+  }
+
+  function selectProactiveMarkerRow_(rows, dedupeKey, originEventId) {
+    var normalizedOriginEventId = normalizeProactiveOriginEventId_(
+      originEventId,
+      'VALIDATION_REQUEST_INVALID'
+    );
+    var candidates = (rows || []).filter(function(row) {
+      return (
+        row.request_id === dedupeKey &&
+        row.role === 'system' &&
+        row.message_type === 'proactive'
+      );
+    });
+    var completed = candidates.filter(function(row) {
+      return row.status === 'completed';
+    });
+    if (completed.length > 0) {
+      return completed[completed.length - 1];
+    }
+    var active = candidates.filter(function(row) {
+      return row.error_code !== 'PROACTIVE_RETRY_QUARANTINED';
+    });
+    if (active.length > 0) {
+      return active[active.length - 1];
+    }
+    if (normalizedOriginEventId == null) {
+      return null;
+    }
+    var matchingQuarantine = candidates.filter(function(row) {
+      return (
+        row.error_code === 'PROACTIVE_RETRY_QUARANTINED' &&
+        row.proactive_origin_event_id === normalizedOriginEventId
+      );
+    });
+    return matchingQuarantine.length > 0
+      ? matchingQuarantine[matchingQuarantine.length - 1]
+      : null;
+  }
+
+  function quarantineProactiveMarker(messageId, originEventId) {
+    Validators.assertUuidV4(messageId, 'messageId');
+    var normalizedOriginEventId = normalizeProactiveOriginEventId_(
+      originEventId,
+      'VALIDATION_REQUEST_INVALID'
+    );
+    ensure(
+      normalizedOriginEventId != null,
+      'VALIDATION_REQUEST_INVALID',
+      'A proactive quarantine requires an origin event.'
+    );
+    var rows = getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS);
+    var currentRow = null;
+    rows.forEach(function(row) {
+      if (row.message_id === messageId) {
+        currentRow = row;
+      }
+    });
+    ensure(
+      currentRow &&
+        currentRow.role === 'system' &&
+        currentRow.message_type === 'proactive' &&
+        currentRow.status === 'failed',
+      'STORAGE_DATA_CORRUPTED',
+      'Only a failed proactive marker may be quarantined.'
+    );
+    var storedOriginEventId = normalizeProactiveOriginEventId_(
+      currentRow.proactive_origin_event_id,
+      'STORAGE_DATA_CORRUPTED'
+    );
+    ensure(
+      storedOriginEventId == null ||
+        storedOriginEventId === normalizedOriginEventId,
+      'STORAGE_DATA_CORRUPTED',
+      'The proactive marker belongs to a different origin event.'
+    );
+    var updatedRow = updateRowByKey(
+      APP_CONSTANTS.SHEETS.CONVERSATION_LOGS,
+      'message_id',
+      messageId,
+      {
+        status: 'failed',
+        error_code: 'PROACTIVE_RETRY_QUARANTINED',
+        proactive_origin_event_id: normalizedOriginEventId
+      }
+    );
+    return toProactiveMarkerDto_(updatedRow);
+  }
+
   function listMessagesAfter(messageId, limit) {
     Validators.assertUuidV4(messageId, 'messageId');
     var rows = getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS);
@@ -948,7 +1320,8 @@ var SheetRepository = (function() {
         };
       })
       .filter(function(entry) {
-        return entry.row.created_at && (
+        return isConversationRowVisible_(entry.row) &&
+          entry.row.created_at && (
           entry.createdAtMillis > pivotTime ||
           (
             entry.createdAtMillis === pivotTime &&
@@ -1151,6 +1524,7 @@ var SheetRepository = (function() {
     getRows: getRows,
     flush: flush,
     assertCharacterApprovalColumns: assertCharacterApprovalColumns,
+    assertProactiveDeliveryColumns: assertProactiveDeliveryColumns,
     appendConversation: appendConversation,
     updateConversationMessage: updateConversationMessage,
     listRecentMessages: listRecentMessages,
@@ -1160,6 +1534,8 @@ var SheetRepository = (function() {
     listMessagesAfter: listMessagesAfter,
     getConversationByRequestId: getConversationByRequestId,
     getMessageByRequestIdAndRole: getMessageByRequestIdAndRole,
+    getProactiveMarkerByDedupeKey: getProactiveMarkerByDedupeKey,
+    quarantineProactiveMarker: quarantineProactiveMarker,
     getUserState: getUserState,
     ensureDefaultUserState: ensureDefaultUserState,
     updateUserState: updateUserState,
@@ -1188,11 +1564,17 @@ var SheetRepository = (function() {
       selectClaimableEvents: selectClaimableEvents_,
       selectRecentDiarySummariesBefore: selectRecentDiarySummariesBefore_,
       assertCharacterApprovalHeaders: assertCharacterApprovalHeaders_,
+      assertProactiveDeliveryHeaders: assertProactiveDeliveryHeaders_,
       normalizeCharacterApproval: normalizeCharacterApproval_,
       characterApprovalToRow: characterApprovalToRow_,
       characterApprovalFromRow: characterApprovalFromRow_,
       characterApprovalsEqual: characterApprovalsEqual_,
-      toMessageDto: toMessageDto
+      normalizeProactiveOriginEventId:
+        normalizeProactiveOriginEventId_,
+      isConversationRowVisible: isConversationRowVisible_,
+      selectProactiveMarkerRow: selectProactiveMarkerRow_,
+      toMessageDto: toMessageDto,
+      toProactiveMarkerDto: toProactiveMarkerDto_
     }
   };
 })();

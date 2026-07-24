@@ -198,10 +198,10 @@ function getHealthStatus()
 }
 ```
 
-`characterApproval` は承認済みcharacter出力または承認済み画像summaryにだけ付与する。
-既存legacy行、user text行、system行、非キャラクターrouteは `null` とし、過去行を
-承認済みへ自動昇格しない。値は保存済みartifactの完全なversion bindingであり、
-一部だけを返してはならない。
+`characterApproval` は承認済みcharacter出力、承認済み画像summary、または
+enforced proactive markerにだけ付与する。既存legacy行、user text行、proactive以外の
+system行、非キャラクターrouteは `null` とし、過去行を承認済みへ自動昇格しない。
+値は保存済みartifactの完全なversion bindingであり、一部だけを返してはならない。
 
 ## 2.3 公開APIの禁止事項
 
@@ -211,3 +211,5 @@ function getHealthStatus()
 - Geminiの生レスポンスを返さない。
 - シート行番号を外部IDとして使わない。
 - `Session.getActiveUser().getEmail()` の取得結果を認可条件にしない。
+- delivery retry専用の `proactive_subject` と
+  `proactive_origin_event_id` を公開MessageDtoへ返さない。

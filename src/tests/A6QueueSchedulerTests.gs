@@ -47,6 +47,44 @@ function runA6QueueSchedulerTests() {
     }
   }
 
+  function buildLegacyProactiveConfig(subject, body) {
+    var values = {
+      QUIET_START: '23:00',
+      QUIET_END: '08:00',
+      SILENCE_MINUTES: 240,
+      PROACTIVE_COOLDOWN_MINUTES: 240,
+      PROACTIVE_MAX_PER_DAY: 2,
+      PROACTIVE_RECHECK_MINUTES: 60,
+      PROACTIVE_AI_GENERATION_ENABLED: false,
+      PROACTIVE_SUBJECT_TEMPLATE: subject,
+      PROACTIVE_BODY_TEMPLATE: body
+    };
+    return {
+      getByKey: function(key) {
+        return Object.prototype.hasOwnProperty.call(values, key)
+          ? { value: values[key] }
+          : null;
+      }
+    };
+  }
+
+  function buildLegacyProactivePayload(targetDate, requestedAt) {
+    return {
+      targetDate: targetDate,
+      sequence: 1,
+      requestedAt: requestedAt,
+      decisionSlot: '1',
+      messageDedupeKey:
+        'PROACTIVE_MESSAGE:' + targetDate + ':1',
+      probability: 1,
+      sample: 0,
+      elapsedMinutes: 300,
+      timeWeight: 1,
+      reason: 'local_silence_threshold',
+      characterRuntimeMode: 'legacy'
+    };
+  }
+
   test('QueueService.enqueue reuses active duplicate dedupe keys', function() {
     var inserted = [];
     withOverrides({
@@ -1157,6 +1195,70 @@ function runA6QueueSchedulerTests() {
     });
   });
 
+  test('managed proactive no-send is durably completed with its reason', function() {
+    var completed = null;
+    var event = {
+      eventId: '11111111-1111-4111-8111-111111111111',
+      eventType: 'PROACTIVE_SEND',
+      lockedBy:
+        'queue-lease:v1:22222222-2222-4222-8222-222222222222',
+      payload: {
+        targetDate: '2026-07-08'
+      }
+    };
+    withOverrides({
+      ProactiveMessageService: {
+        prepareDispatch: function(payload, nowIso, options) {
+          assert(payload === event.payload, 'Queue payload changed before preparation.');
+          assert(
+            Validators.isIsoDateTimeString(nowIso) &&
+              options.eventId === event.eventId &&
+              options.leaseToken === event.lockedBy,
+            'Queue claim was not passed to proactive preparation.'
+          );
+          return {
+            eligible: false,
+            reason: 'NO_APPROVED_PROACTIVE_OUTPUT',
+            message: null,
+            createdAt: nowIso
+          };
+        },
+        send: function() {
+          throw new Error('Managed no-send reached the mail sink.');
+        }
+      },
+      QueueService: {
+        markDone: function(eventId, result, leaseToken) {
+          completed = {
+            eventId: eventId,
+            result: result,
+            leaseToken: leaseToken
+          };
+        },
+        markRetry: function() {
+          throw new Error('Managed no-send was retried.');
+        },
+        markDead: function() {
+          throw new Error('Managed no-send was marked dead.');
+        }
+      },
+      AppLogger: {
+        writeDebugLog: function() {}
+      }
+    }, function() {
+      processSingleQueueEvent_(event, generateUuidV4());
+    });
+    assert(
+      completed &&
+        completed.eventId === event.eventId &&
+        completed.leaseToken === event.lockedBy &&
+        completed.result.skipped === true &&
+        completed.result.reason ===
+          'NO_APPROVED_PROACTIVE_OUTPUT',
+      'Managed no-send reason was not persisted in DONE result.'
+    );
+  });
+
   test('PROACTIVE_SEND preserves the enqueue decision and skips after new user activity', function() {
     var done = [];
     var sendCalls = 0;
@@ -1928,6 +2030,42 @@ function runA6QueueSchedulerTests() {
     });
   });
 
+  test('GmailNotifier sanitizes provider send failures as retryable mail errors', function() {
+    var privateMarker = 'PRIVATE-RECIPIENT-AND-SUBJECT';
+    withOverrides({
+      MailApp: {
+        getRemainingDailyQuota: function() {
+          return 10;
+        },
+        sendEmail: function() {
+          throw new Error(privateMarker);
+        }
+      }
+    }, function() {
+      var thrown = null;
+      try {
+        GmailNotifier.send(
+          'owner@example.com',
+          'Private subject',
+          'Private body'
+        );
+      } catch (error) {
+        thrown = error;
+      }
+      assert(
+        thrown &&
+          thrown.code === 'MAIL_SEND_FAILED' &&
+          thrown.retryable === true &&
+          thrown.retryStrategy === 'COMMON_BACKOFF',
+        'Provider send failure did not become a retryable mail error.'
+      );
+      assert(
+        JSON.stringify(thrown.toLogObject()).indexOf(privateMarker) === -1,
+        'Provider exception details leaked into the log-safe mail error.'
+      );
+    });
+  });
+
   test('ProactiveMessageService.send claims a marker before mail and completes it after success', function() {
     var storedMarker = null;
     var appendCalls = 0;
@@ -1935,6 +2073,10 @@ function runA6QueueSchedulerTests() {
     var usageCalls = 0;
 
     withOverrides({
+      ConfigRepository: buildLegacyProactiveConfig(
+        'Hello',
+        'Fresh proactive mail'
+      ),
       LockManager: {
         withScriptLock: function(_, callback) {
           return callback();
@@ -1986,9 +2128,15 @@ function runA6QueueSchedulerTests() {
           return {
             proactive_count_date: '2026-07-08',
             proactive_count: 0,
+            last_user_message_at:
+              '2026-07-08T00:00:00+09:00',
             last_proactive_at: null,
-            next_proactive_check_at: null
+            next_proactive_check_at: null,
+            quiet_until: null
           };
+        },
+        getUserState: function() {
+          return this.ensureDefaultUserState();
         },
         updateUserState: function() {},
         incrementUsageDaily: function() {
@@ -1996,6 +2144,9 @@ function runA6QueueSchedulerTests() {
         }
       },
       GmailNotifier: {
+        getRemainingQuota: function() {
+          return 10;
+        },
         send: function() {
           return {
             sent: true
@@ -2003,14 +2154,16 @@ function runA6QueueSchedulerTests() {
         }
       }
     }, function() {
-      var result = ProactiveMessageService.send({
-        targetDate: '2026-07-08',
-        sequence: 1,
-        dedupeKey: 'PROACTIVE_MESSAGE:2026-07-08:1',
-        subject: 'Hello',
-        body: 'Fresh proactive mail',
-        sentAt: '2026-07-08T08:05:00+09:00'
-      });
+      var prepared = ProactiveMessageService.prepareDispatch(
+        buildLegacyProactivePayload(
+          '2026-07-08',
+          '2026-07-08T08:00:00+09:00'
+        ),
+        '2026-07-08T08:05:00+09:00'
+      );
+      var result = ProactiveMessageService.send(
+        prepared.message
+      );
 
       assert(result.sent === true, 'Send should succeed.');
       assert(appendCalls === 1, 'One marker should be appended.');
@@ -2033,6 +2186,10 @@ function runA6QueueSchedulerTests() {
     var latestStatePatch = null;
 
     withOverrides({
+      ConfigRepository: buildLegacyProactiveConfig(
+        'Hello',
+        'Stored proactive mail'
+      ),
       LockManager: {
         withScriptLock: function(_, callback) {
           return callback();
@@ -2083,9 +2240,15 @@ function runA6QueueSchedulerTests() {
           return {
             proactive_count_date: '2026-07-08',
             proactive_count: 0,
+            last_user_message_at:
+              '2026-07-08T00:00:00+09:00',
             last_proactive_at: null,
-            next_proactive_check_at: null
+            next_proactive_check_at: null,
+            quiet_until: null
           };
+        },
+        getUserState: function() {
+          return this.ensureDefaultUserState();
         },
         updateUserState: function(patch) {
           latestStatePatch = patch;
@@ -2093,6 +2256,9 @@ function runA6QueueSchedulerTests() {
         incrementUsageDaily: function() {}
       },
       GmailNotifier: {
+        getRemainingQuota: function() {
+          return 10;
+        },
         send: function(ownerEmail, subject, body) {
           sendCalls += 1;
           sentBodies.push(body);
@@ -2105,16 +2271,20 @@ function runA6QueueSchedulerTests() {
         }
       }
     }, function() {
+      var payload = buildLegacyProactivePayload(
+        '2026-07-08',
+        '2026-07-08T08:00:00+09:00'
+      );
       var firstError = null;
       try {
-        ProactiveMessageService.send({
-          targetDate: '2026-07-08',
-          sequence: 1,
-          dedupeKey: 'PROACTIVE_MESSAGE:2026-07-08:1',
-          subject: 'Hello',
-          body: 'Stored proactive mail',
-          sentAt: '2026-07-08T08:05:00+09:00'
-        });
+        var firstPrepared =
+          ProactiveMessageService.prepareDispatch(
+            payload,
+            '2026-07-08T08:05:00+09:00'
+          );
+        ProactiveMessageService.send(
+          firstPrepared.message
+        );
       } catch (error) {
         firstError = error;
       }
@@ -2125,14 +2295,14 @@ function runA6QueueSchedulerTests() {
       );
       assert(storedMarker.status === 'failed', 'The marker should be failed.');
 
-      var result = ProactiveMessageService.send({
-        targetDate: '2026-07-08',
-        sequence: 1,
-        dedupeKey: 'PROACTIVE_MESSAGE:2026-07-08:1',
-        subject: 'Hello',
-        body: 'A replacement body that must not be used',
-        sentAt: '2026-07-08T10:05:00+09:00'
-      });
+      var retryPrepared =
+        ProactiveMessageService.prepareDispatch(
+          payload,
+          '2026-07-08T10:05:00+09:00'
+        );
+      var result = ProactiveMessageService.send(
+        retryPrepared.message
+      );
 
       assert(result.sent === true, 'The failed marker should be retried.');
       assert(result.duplicate === false, 'A failed marker is not completed.');
@@ -2248,7 +2418,7 @@ function runA6QueueSchedulerTests() {
     });
   });
 
-  test('ProactiveMessageService.send suppresses a concurrent accepted marker', function() {
+  test('ProactiveMessageService.prepareDispatch suppresses a concurrent accepted marker', function() {
     var sendCalls = 0;
 
     withOverrides({
@@ -2267,6 +2437,12 @@ function runA6QueueSchedulerTests() {
         }
       },
       SheetRepository: {
+        ensureDefaultUserState: function() {
+          return {};
+        },
+        getUserState: function() {
+          return {};
+        },
         getMessageByRequestIdAndRole: function() {
           return {
             messageId: '11111111-1111-4111-8111-111111111111',
@@ -2285,17 +2461,16 @@ function runA6QueueSchedulerTests() {
         }
       }
     }, function() {
-      var result = ProactiveMessageService.send({
-        targetDate: '2026-07-08',
-        sequence: 1,
-        dedupeKey: 'PROACTIVE_MESSAGE:2026-07-08:1',
-        subject: 'Hello',
-        body: 'Claimed proactive body',
-        sentAt: '2026-07-08T08:05:00+09:00'
-      });
+      var result = ProactiveMessageService.prepareDispatch(
+        buildLegacyProactivePayload(
+          '2026-07-08',
+          '2026-07-08T08:00:00+09:00'
+        ),
+        '2026-07-08T08:05:00+09:00'
+      );
 
-      assert(result.sent === false, 'The second claimant must not send.');
-      assert(result.duplicate === true, 'The accepted marker must be treated as claimed.');
+      assert(result.eligible === false, 'The second claimant must not send.');
+      assert(result.reason === 'DELIVERY_IN_PROGRESS', 'The accepted marker must be treated as claimed.');
       assert(sendCalls === 0, 'Gmail must not be called by the second claimant.');
     });
   });

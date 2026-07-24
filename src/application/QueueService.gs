@@ -449,6 +449,9 @@ var QueueService = (function() {
     }
     if (eventType === 'PROACTIVE_SEND') {
       var hasOwn = Object.prototype.hasOwnProperty;
+      var proactiveRuntimeMode = payload.characterRuntimeMode == null
+        ? null
+        : String(payload.characterRuntimeMode);
 
       ensure(
         Validators.isDateString(payload.targetDate),
@@ -497,6 +500,19 @@ var QueueService = (function() {
         'VALIDATION_REQUEST_INVALID',
         'PROACTIVE_SEND payload.timeWeight is required.'
       );
+      ensure(
+        proactiveRuntimeMode === 'legacy' ||
+          proactiveRuntimeMode === 'enforced',
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.characterRuntimeMode is required.'
+      );
+      ensure(
+        !hasOwn.call(payload, 'subject') &&
+          !hasOwn.call(payload, 'body') &&
+          !hasOwn.call(payload, 'message'),
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload must not contain generated content.'
+      );
 
       var sequence = Number(payload.sequence);
       var decisionSlot = String(payload.decisionSlot);
@@ -504,6 +520,9 @@ var QueueService = (function() {
       var sample = Number(payload.sample);
       var elapsedMinutes = Number(payload.elapsedMinutes);
       var timeWeight = Number(payload.timeWeight);
+      var proactiveReason = payload.reason == null
+        ? null
+        : String(payload.reason);
       var expectedMessageDedupeKey =
         'PROACTIVE_MESSAGE:' +
         payload.targetDate +
@@ -545,8 +564,15 @@ var QueueService = (function() {
         'VALIDATION_REQUEST_INVALID',
         'PROACTIVE_SEND payload.timeWeight must be non-negative.'
       );
+      ensure(
+        proactiveReason == null ||
+          proactiveReason === 'deterministic_probability_hit' ||
+          proactiveReason === 'local_silence_threshold',
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.reason is invalid.'
+      );
 
-      return {
+      var proactivePayload = {
         targetDate: payload.targetDate,
         sequence: sequence,
         requestedAt: payload.requestedAt,
@@ -556,8 +582,21 @@ var QueueService = (function() {
         sample: sample,
         elapsedMinutes: elapsedMinutes,
         timeWeight: timeWeight,
-        reason: payload.reason || null
+        reason: proactiveReason,
+        characterRuntimeMode: proactiveRuntimeMode
       };
+      if (proactiveRuntimeMode === 'enforced') {
+        proactivePayload.characterBinding = normalizeCharacterBinding_(
+          payload.characterBinding
+        );
+      } else {
+        ensure(
+          payload.characterBinding == null,
+          'VALIDATION_REQUEST_INVALID',
+          'Legacy PROACTIVE_SEND payload must not contain a character binding.'
+        );
+      }
+      return proactivePayload;
     }
     if (eventType === 'WEEKLY_BACKUP') {
       ensure(Validators.isDateString(payload.backupDate), 'VALIDATION_REQUEST_INVALID', 'WEEKLY_BACKUP payload.backupDate must be a yyyy-MM-dd string.');
@@ -597,7 +636,7 @@ var QueueService = (function() {
         typeof value.characterPackVersion === 'string' &&
         /^[a-z0-9][a-z0-9.-]{2,79}$/.test(value.characterPackVersion),
       'VALIDATION_REQUEST_INVALID',
-      'CHAT_REPLY payload.characterBinding is invalid.'
+      'Queue payload.characterBinding is invalid.'
     );
     return {
       profileSchemaVersion: value.profileSchemaVersion,

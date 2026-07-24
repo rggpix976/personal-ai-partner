@@ -124,16 +124,49 @@ DiaryService.isGenerated(date)
 ```javascript
 ProactiveMessageService.evaluateLocalConditions(now)
 ProactiveMessageService.evaluateByAi(input)
-ProactiveMessageService.prepareDispatch(eventPayload, now)
+ProactiveMessageService.prepareDispatch(eventPayload, now, {eventId, leaseToken})
 ProactiveMessageService.send(message)
 ```
 
-上記は現行production契約であり、設定template fallbackを含む。PR 3はこのserviceへ
-接続しない。PR 5のenforced経路では、新しい自発本文をactive CharacterPack、
-承認可能な直近会話、承認済みmemoryから毎回生成し、共通guardと最大1回rewriteへ
-渡す。承認artifactを得られない場合は送信、本文保存、delivery marker、送信回数、
-`last_proactive_at`を更新せず、次の適格性評価を待つ。固定または設定template本文を
-代替送信しない。
+PR 5はこのserviceへ、既存production互換の `legacy` 経路と、CharacterPackを使う
+`enforced` 経路を併設する。既定値は `legacy` のままであり、このcode/docs変更だけでは
+productionを有効化しない。新規 `PROACTIVE_SEND` はenqueue時の
+`characterRuntimeMode:"legacy"|"enforced"` をdispatchまで維持する。modeがない
+historical eventだけはlegacy互換として扱い、待機中またはretry時にmodeを相互変換しない。
+`enforced` eventは起票時のexact `characterBinding` を必須とし、dispatch時にactive
+profile/policy/catalog/CharacterPackと一致しなければ送信しない。
+`enforced` のprepareにはcurrent queue claimを必須とし、保存eventのcanonical payload
+（mode、binding、decision identityを含む）が引数と完全一致する場合だけ処理する。
+
+`enforced` の新しい自発発言はdispatch時にactive CharacterPack、boundedなuser発言と
+承認済みpartner発言からsubject/bodyを毎回生成し、共通guardと最大1回rewriteへ渡す。
+PR 7でprovenance付きmemoryが接続されるまではmemory contextを空にする。probability、
+silence、decision slot、queue/request/event/message IDなどの適格性・運用metadataは
+model-facing contextへ渡さない。queue payloadにsubject/bodyを保存せず、固定catalog、
+`PROACTIVE_GENERIC`、設定template本文を代替送信しない。
+
+新規generationで承認artifactを得られない場合はmanaged result
+`NO_APPROVED_PROACTIVE_OUTPUT` でeventを `DONE` にし、
+`next_proactive_check_at` だけを進める。delivery marker、subject/body、
+conversation row、mail、送信回数、`last_proactive_at` は一切更新しない。
+
+delivery失敗後の `enforced` retryはmarkerに保存済みのexact
+`{subject: proactive_subject, body: text}` だけを使う。現在bindingへ再bindして
+`PROACTIVE_RETRY` / `legacy_revalidated` として再承認し、generate/rewriteを呼ばない。
+subjectまたは完全なapproval metadataがないmarker、あるいは再承認できないmarkerは
+quarantineして送信しない。generation開始前とprotected marker/mail sink直前に、
+workerが現在のqueue leaseを保持していることを再検証する。
+
+prepareが返すsend可能messageはprocess-local `WeakMap` capabilityへ一回だけbindする。
+`send` は同じobject identityで発行済みのmessageだけを受理し、発行時にsnapshotした
+mode、subject/body、queue claim、expected surface、artifact/contextを使用する。
+callerがmessageをclone・改変したりcharacter envelopeを外したりしてもlegacy sinkへ
+降格できず、未発行または再利用messageは `CHARACTER_ARTIFACT_INVALID` とする。
+
+markerは `proactive_origin_event_id` へ所有queue eventを保存する。active markerの所有権は
+別eventへ移さず、completed markerは常にglobal authorityとする。quarantine markerは
+起票eventの再実行にだけ返して再generationを止め、後続の別eligibility eventに限って
+fresh generationを許可する。
 
 ## 3.7 `QueueService`
 
@@ -163,6 +196,13 @@ PROCESSINGとなった旧形式 `lockedBy` 行だけは移行互換として従�
 前に共通のpersistence sanitizerへ通す。providerのrequest URL、API key、
 Authorization tokenなどの秘密値をevent行へ保存しない。
 
+`PROACTIVE_SEND` の新規payloadはruntime modeを必須とし、`enforced` ではexact
+character bindingを必須、`legacy` ではbindingを禁止する。queue payloadへ
+subject/bodyを持ち込まない。mode欠落を許すのは既存historical rowのruntime
+compatibilityだけであり、新規eventのmachine contractでは拒否する。proactive workerは
+generation前とmarker/mail sink直前にleaseを再確認し、stale workerによるgeneration、
+marker mutation、mail sendを防ぐ。
+
 `requeueDeadAsNewEvent` は既存 `DEAD` 行を変更しない。新しい `event_id` と新しい手動再試行用 `dedupe_key` を生成して新規イベントを登録する。同じ `manualRequestId` の再呼び出しでは既存の手動再試行イベントを返し、二重起票しない。
 
 `assessDeadEventRecovery` は本文、payload、各種IDを返さず、イベント種別、状態、安全な復旧アクション、理由コードだけを返す。自発送信イベントは再送せず、新しい適格性評価を待つ。
@@ -183,8 +223,12 @@ OperationalHealthService.run(now, triggerHealth)
 ```javascript
 SheetRepository.getConversationByRequestId(requestId)
 SheetRepository.appendConversation(message)
+SheetRepository.updateConversationMessage(messageId, patch)
 SheetRepository.listRecentMessages(limit)
 SheetRepository.listMessagesBefore(messageId, limit)
+SheetRepository.getProactiveMarkerByDedupeKey(dedupeKey, originEventId?)
+SheetRepository.quarantineProactiveMarker(messageId, originEventId)
+SheetRepository.assertProactiveDeliveryColumns()
 SheetRepository.getUserState()
 SheetRepository.updateUserState(patch)
 SheetRepository.insertEvent(event)
@@ -205,13 +249,19 @@ SheetRepository.upsertMemory(memory)
 }
 ```
 
-`conversation_logs` の一意性は `request_id` 単独ではなく、`(request_id, role)` の複合一意である。同じ `request_id` に user行とassistant行を各1件まで保存できる。
+`conversation_logs` のchat一意性は `request_id` 単独ではなく、
+`(request_id, role)` の複合一意である。同じ `request_id` にuser行とassistant行を
+各1件まで保存できる。system/proactive markerは専用lookupで解決する。
+`getProactiveMarkerByDedupeKey` だけが内部配送用 `proactiveSubject` と
+`proactiveOriginEventId` を返し、通常の公開MessageDtoへは露出しない。partial/invalid
+approvalは本文・subjectを返さず `invalidCharacterApproval=true` としてquarantine可能に
+する。quarantine markerは同じorigin eventの再実行にだけ返す。
 
 ## 3.10 `CharacterProfileService` / `CharacterPackService`
 
-PR 3のactive targetはV2 profileと1個のcode-owned CharacterPackである。PR 4では
-`enforced` chat経路だけがこれらをactive authorityとして読み、`legacy`経路、
-proactive、diary、memoryはまだ従来動作を維持する。
+PR 3のactive targetはV2 profileと1個のcode-owned CharacterPackである。PR 4の
+`enforced` chat経路とPR 5の `enforced` proactive経路がこれらをactive authorityとして
+読む。`legacy` 経路、diary、memoryはまだ従来動作を維持する。
 
 ```javascript
 CharacterProfileService.validateV2(candidate)
@@ -474,9 +524,12 @@ free generationを呼ばない。`PRODUCT_INFO` / `ADMIN_OOC` は
 rewrite不成立後はsurfaceに許可されたreviewed catalogだけをlocal再評価し、
 Diary/Memory/proactiveまたはcatalog不成立では本文なしでfail closedする。
 proactiveには固定/template fallbackを一切持たせず、`PROACTIVE_GENERIC`を使用しない。
-承認不可時はartifactを返さないため、PR 5のsurface adapterはmarker、本文保存、mail、
-conversation row、送信回数、`last_proactive_at`をすべて0回のまま安全に終了し、
-次回eligibilityを待つ。text chatだけは `currentRequest.text` を必須とし、image、
+新規proactiveの承認不可時はartifactを返さないため、PR 5のsurface adapterは
+`NO_APPROVED_PROACTIVE_OUTPUT` でeventを安全に完了し、marker、subject/body、mail、
+conversation row、送信回数、`last_proactive_at`をすべて0回のまま
+`next_proactive_check_at` だけを進める。retryの承認不可時は既存markerのcontentを
+変えず、status/errorだけをquarantineへ遷移できる。text chatだけは
+`currentRequest.text` を必須とし、image、
 proactive、diary、memoryは空の分類textを許す。戻り値はexact frozen
 `{artifact, classifiedContext}` で、sinkへ同じcontext capabilityを渡せる一方、raw候補を
 含まない。non-characterの場合だけ前述のtyped routeを返す。coordinator自身は
@@ -503,5 +556,6 @@ sink adapterはartifact真正性とstalenessをwrite直前に再検証し、不�
 0回のまま `immersion_unapproved_sink_attempt_total` を記録する。`metricEmitter`は
 必須であり、欠落時もwriteを行わない。artifactはwrite呼び出し前にone-shotとして消費し、
 同一objectの再利用を拒否する。writerが失敗した場合も同じartifactは再利用せず、retryは
-現在contextで新しい承認artifactを取得しなければならない。PR 3ではspy writerへ
-だけ接続し、既存Repository、Web、mail、Docs、memory sinkへは接続しない。
+現在contextで新しい承認artifactを取得しなければならない。PR 3ではspy writerだけへ
+接続した。PR 4はchatのRepository/Web sink、PR 5はenforced proactiveの
+delivery-marker Repositoryとmail sinkへ接続する。Docsとmemory sinkはまだ接続しない。

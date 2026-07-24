@@ -15,7 +15,10 @@ function runAllSelfTests() {
     'runA10ImmersionArtifactTests',
     'runA10ImmersionCoordinatorTests',
     'runA11CharacterChatGeminiAdapterTests',
-    'runA11CharacterChatIntegrationTests'
+    'runA11CharacterChatIntegrationTests',
+    'runA12CharacterProactiveContextTests',
+    'runA12CharacterProactiveGeminiAdapterTests',
+    'runA12CharacterProactiveIntegrationTests'
   ];
   var summary = {
     ok: true,

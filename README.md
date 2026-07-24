@@ -20,9 +20,10 @@ and initiate proactive conversations.
   `schedulerJob` trigger
 - The repository includes the V2 profile target, one code-owned CharacterPack,
   typed context, classifier, reviewed exceptional catalog, guard contracts,
-  authenticated approval artifacts, and the PR 4 sync/queued/image chat
-  integration. The runtime still defaults to `legacy`; V2 activation and
-  production deployment are not yet performed
+  authenticated approval artifacts, the PR 4 sync/queued/image chat
+  integration, and the PR 5 proactive integration. Both integrations remain
+  dormant behind the `legacy` default; V2 activation and production deployment
+  are not yet performed
 - `character-profile.v1` remains dormant compatibility data and is not
   automatically converted to V2
 
@@ -46,6 +47,8 @@ documented in
 - Deterministic probability-based proactive decisions
 - Config-driven AI proactive message generation with template fallback in the
   current production/legacy path
+- Dormant enforced proactive subject/body generation, approval, exact-pair
+  retry validation, and protected delivery-marker persistence
 - Live Web polling for newly persisted messages
 - Weekly backup and retention
 - Static validation, Apps Script self-tests, and staged production validation
@@ -110,8 +113,9 @@ Start with these documents:
 - [`docs/features/CHARACTER_IMMERSION.md`](docs/features/CHARACTER_IMMERSION.md):
   single-CharacterPack deployment model, minimal V2 profile, immersion,
   exceptional responses, product/UI separation, proactive target, and
-  acceptance specification; chat integration is implemented but activation and
-  the proactive/diary/memory/settings surface integrations remain pending
+  acceptance specification; chat and proactive integrations are implemented
+  but activation and the diary/memory/settings surface integrations remain
+  pending
 - [`docs/qa/A7_MANUAL_GAS_TEST_PLAN.md`](docs/qa/A7_MANUAL_GAS_TEST_PLAN.md):
   manual Apps Script validation
 - [`docs/qa/A7_SECURITY_REVIEW.md`](docs/qa/A7_SECURITY_REVIEW.md):
@@ -142,6 +146,15 @@ WEB_APP_URL
 
 `APP_ENV` must be one of the values accepted by
 `Validators.validateScriptProperties`.
+
+The repository schema is `2026.07.a5`. It adds the internal
+`proactive_subject` and `proactive_origin_event_id` tail columns, in that order,
+after the eight character-approval columns. They let an enforced delivery
+retry revalidate the exact saved subject/body pair without transferring marker
+ownership to another queue event.
+Run and verify `migrateSchema()` as a separately approved deployment step
+before activating enforced proactive output; this repository change does not
+run that migration automatically.
 
 ## Main public functions
 
@@ -272,11 +285,13 @@ The first setting restores threshold-only enqueue decisions. The second
 disables Gemini proactive body generation and uses the configured template.
 
 That template behavior is the current production/legacy rollback contract.
-The target enforced CharacterPack path in PR 5 is different: each new
-proactive body is generated, guarded, and rewritten at most once. If no
-approved artifact is produced, nothing is sent or saved and the scheduler
-waits for a later eligibility evaluation; it does not send a fixed or
-configured-template replacement.
+The repository now also contains the dormant PR 5 enforced CharacterPack
+path: each new proactive subject/body pair is generated, guarded, and
+rewritten at most once. If no approved artifact is produced, nothing is sent
+or saved and only the next eligibility check advances; no fixed or configured
+template replaces it. Transport retry revalidates the exact saved pair and
+never regenerates it. This path remains disabled until the separately reviewed
+schema migration and staged activation.
 
 ## Safety notes
 

@@ -13,7 +13,8 @@
     "probability",
     "sample",
     "elapsedMinutes",
-    "timeWeight"
+    "timeWeight",
+    "characterRuntimeMode"
   ],
   "properties": {
     "targetDate": {
@@ -56,8 +57,84 @@
       "type": "number",
       "minimum": 0
     },
+    "characterRuntimeMode": {
+      "enum": [
+        "legacy",
+        "enforced"
+      ]
+    },
+    "characterBinding": {
+      "$ref": "#/$defs/characterBinding"
+    },
     "reason": {
-      "type": ["string", "null"]
+      "enum": [
+        "deterministic_probability_hit",
+        "local_silence_threshold",
+        null
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "characterRuntimeMode": {
+            "const": "enforced"
+          }
+        },
+        "required": [
+          "characterRuntimeMode"
+        ]
+      },
+      "then": {
+        "required": [
+          "characterBinding"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "characterBinding"
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "characterBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policyVersion",
+        "profileSchemaVersion",
+        "profileRevision",
+        "catalogVersion",
+        "characterPackId",
+        "characterPackVersion"
+      ],
+      "properties": {
+        "policyVersion": {
+          "const": "character-policy.v2"
+        },
+        "profileSchemaVersion": {
+          "const": "character-profile.v2"
+        },
+        "profileRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "catalogVersion": {
+          "const": "character-catalog.v2"
+        },
+        "characterPackId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{2,63}$"
+        },
+        "characterPackVersion": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]{2,79}$"
+        }
+      }
     }
   }
 }
