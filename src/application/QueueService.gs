@@ -417,12 +417,37 @@ var QueueService = (function() {
       return chatPayload;
     }
     if (eventType === 'MEMORY_EXTRACT') {
-      return {
+      var memoryPayload = {
         firstMessageId: payload.firstMessageId,
         lastMessageId: payload.lastMessageId,
         sourceMessageIds: payload.sourceMessageIds,
         requestedAt: payload.requestedAt
       };
+      var memoryRuntimeMode = payload.characterRuntimeMode == null
+        ? null
+        : String(payload.characterRuntimeMode);
+      ensure(
+        memoryRuntimeMode == null ||
+          memoryRuntimeMode === 'legacy' ||
+          memoryRuntimeMode === 'enforced',
+        'VALIDATION_REQUEST_INVALID',
+        'MEMORY_EXTRACT payload.characterRuntimeMode is invalid.'
+      );
+      if (memoryRuntimeMode != null) {
+        memoryPayload.characterRuntimeMode = memoryRuntimeMode;
+      }
+      if (memoryRuntimeMode === 'enforced') {
+        memoryPayload.characterBinding = normalizeCharacterBinding_(
+          payload.characterBinding
+        );
+      } else {
+        ensure(
+          payload.characterBinding == null,
+          'VALIDATION_REQUEST_INVALID',
+          'Legacy MEMORY_EXTRACT payload must not contain a character binding.'
+        );
+      }
+      return memoryPayload;
     }
     if (eventType === 'DIARY_GENERATE') {
       ensure(

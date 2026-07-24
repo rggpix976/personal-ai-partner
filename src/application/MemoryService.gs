@@ -8,16 +8,22 @@ var MemoryService = (function() {
     var payload = normalizeExtractionRange_(messageRange);
     var now = payload.requestedAt || toIsoStringInTokyo(new Date());
     var dedupeKey = buildDedupeKey_(payload.firstMessageId, payload.lastMessageId);
+    var runtime = resolveMemoryRuntime_();
+    var eventPayload = {
+      firstMessageId: payload.firstMessageId,
+      lastMessageId: payload.lastMessageId,
+      sourceMessageIds: payload.sourceMessageIds,
+      requestedAt: now,
+      characterRuntimeMode: runtime.mode
+    };
+    if (runtime.mode === 'enforced') {
+      eventPayload.characterBinding = runtime.binding;
+    }
     var event = {
       eventId: generateUuidV4(),
       eventType: 'MEMORY_EXTRACT',
       dedupeKey: dedupeKey,
-      payload: {
-        firstMessageId: payload.firstMessageId,
-        lastMessageId: payload.lastMessageId,
-        sourceMessageIds: payload.sourceMessageIds,
-        requestedAt: now
-      },
+      payload: eventPayload,
       status: 'PENDING',
       attemptCount: 0,
       nextAttemptAt: null,
@@ -54,7 +60,15 @@ var MemoryService = (function() {
     }
   }
 
-  function extract(eventPayload) {
+  function extract(eventPayload, options) {
+    var payload = validateExtractionPayload_(eventPayload);
+    if (payload.characterRuntimeMode === 'enforced') {
+      return extractEnforced_(payload, options);
+    }
+    return extractLegacy_(payload);
+  }
+
+  function extractLegacy_(eventPayload) {
     var payload = validateExtractionPayload_(eventPayload);
     var sourceMessages = SheetRepository.listMessagesByIds(payload.sourceMessageIds);
     ensure(sourceMessages.length > 0, 'VALIDATION_REQUEST_INVALID', 'No source messages were found for memory extraction.');
@@ -64,10 +78,135 @@ var MemoryService = (function() {
     return applyCandidates(candidates);
   }
 
+  function extractEnforced_(payload, options) {
+    var queueClaim = normalizeQueueClaim_(options);
+    ensure(
+      queueClaim != null,
+      'CHARACTER_ARTIFACT_INVALID',
+      'Enforced memory extraction requires a current queue lease.'
+    );
+    assertQueueClaimCurrent_(queueClaim, payload);
+    SheetRepository.assertMemoryProvenanceColumns();
+    var priorOriginRows = (
+      SheetRepository.listActiveMemories() || []
+    ).filter(function(row) {
+      return Array.isArray(row.memory_origin_event_ids_json) &&
+        row.memory_origin_event_ids_json.indexOf(
+          queueClaim.eventId
+        ) !== -1;
+    });
+    if (priorOriginRows.length > 0) {
+      ensure(
+        priorOriginRows.every(function(row) {
+          return CharacterMemoryContextService
+            .isAcceptedMemoryRow(row);
+        }),
+        'STORAGE_DATA_CORRUPTED',
+        'A prior memory extraction write has invalid provenance.'
+      );
+      return {
+        created: 0,
+        confirmed: 0,
+        updated: 0,
+        ignored: 0,
+        rejected: 0,
+        duplicate: true,
+        priorWriteCount: priorOriginRows.length
+      };
+    }
+
+    var sourceMessages = SheetRepository.listMessagesByIds(
+      payload.sourceMessageIds
+    );
+    var allowedSourceMessageIds =
+      CharacterMemoryContextService.acceptedSourceMessageIds(
+        sourceMessages
+      );
+    ensure(
+      allowedSourceMessageIds.length > 0,
+      'VALIDATION_REQUEST_INVALID',
+      'No approved source messages were found for memory extraction.'
+    );
+    var context = CharacterMemoryContextService.build({
+      currentTime: payload.requestedAt,
+      sourceMessages: sourceMessages
+    });
+    CharacterMemoryContextService.assertBindingMatchesContext(
+      payload.characterBinding,
+      context
+    );
+    var session = CharacterMemoryGeminiAdapter.createSession({
+      allowedSourceMessageIds: allowedSourceMessageIds
+    });
+    var approval;
+    try {
+      approval = CharacterOutputCoordinator.approve({
+        context: context,
+        surface: 'MEMORY_EXTRACTION',
+        classificationSignals:
+          CharacterMemoryContextService.classificationSignals(context),
+        generate: session.generate,
+        rewrite: session.rewrite,
+        verifierFn: session.verify,
+        metricEmitter: session.emitMetric
+      });
+    } catch (error) {
+      recordCharacterUsageBestEffort_(
+        payload.requestedAt,
+        session.getUsage()
+      );
+      throw normalizeError(error);
+    }
+    recordCharacterUsageBestEffort_(
+      payload.requestedAt,
+      session.getUsage()
+    );
+    ensure(
+      approval &&
+        approval.artifact &&
+        approval.classifiedContext,
+      'CHARACTER_OUTPUT_BLOCKED',
+      'No approved memory extraction output was available.'
+    );
+    return CharacterSinkAdapter.deliver({
+      artifact: approval.artifact,
+      expectedSurface: 'MEMORY_EXTRACTION',
+      context: approval.classifiedContext,
+      metricEmitter: session.emitMetric,
+      write: function(approvedPayload, artifact) {
+        ensure(
+          JSON.stringify(approvedPayload) ===
+            JSON.stringify(approval.artifact.payload),
+          'CHARACTER_ARTIFACT_INVALID',
+          'Approved memory candidates changed before persistence.'
+        );
+        assertQueueClaimCurrent_(queueClaim, payload);
+        return LockManager.withScriptLock(
+          'memory-apply-candidates',
+          function() {
+            assertQueueClaimCurrent_(queueClaim, payload);
+            return applyCandidatesWithoutLock_(
+              approvedPayload.candidates,
+              {
+                approval: characterApprovalFromArtifact_(artifact),
+                originEventId: queueClaim.eventId
+              }
+            );
+          }
+        );
+      }
+    });
+  }
+
   function applyCandidates(candidates) {
     ensure(Array.isArray(candidates), 'VALIDATION_REQUEST_INVALID', 'Memory candidates must be an array.');
     ensure(candidates.length <= DEFAULTS.maxCandidateCount, 'VALIDATION_REQUEST_INVALID', 'Too many memory candidates.');
     return LockManager.withScriptLock('memory-apply-candidates', function() {
+      return applyCandidatesWithoutLock_(candidates, null);
+    });
+  }
+
+  function applyCandidatesWithoutLock_(candidates, provenance) {
       var counts = {
         created: 0,
         confirmed: 0,
@@ -76,18 +215,40 @@ var MemoryService = (function() {
         rejected: 0
       };
       var now = toIsoStringInTokyo(new Date());
-      var activeRows = SheetRepository.listActiveMemories();
+      var allActiveRows = SheetRepository.listActiveMemories();
+      var activeRows = provenance
+        ? allActiveRows.filter(function(row) {
+          return CharacterMemoryContextService
+            .isAcceptedMemoryRow(row);
+        })
+        : allActiveRows;
       var memoryById = {};
       var memoryByKey = {};
+      var blockedLegacyKeys = {};
 
       activeRows.forEach(function(row) {
         memoryById[row.memory_id] = cloneMemoryRow_(row);
         memoryByKey[row.normalized_key] = cloneMemoryRow_(row);
       });
+      if (provenance) {
+        allActiveRows.forEach(function(row) {
+          if (!memoryById[row.memory_id]) {
+            blockedLegacyKeys[row.normalized_key] = true;
+          }
+        });
+      }
 
       candidates.forEach(function(candidate) {
         try {
-          applyCandidate_(candidate, now, counts, memoryById, memoryByKey);
+          applyCandidate_(
+            candidate,
+            now,
+            counts,
+            memoryById,
+            memoryByKey,
+            provenance,
+            blockedLegacyKeys
+          );
         } catch (error) {
           if (isCandidateRejectionError_(error)) {
             counts.rejected += 1;
@@ -98,7 +259,6 @@ var MemoryService = (function() {
       });
 
       return counts;
-    });
   }
 
   function findRelevant(query, limit) {
@@ -139,6 +299,43 @@ var MemoryService = (function() {
       });
   }
 
+  function findAcceptedRelevant(query, limit) {
+    var normalizedLimit = normalizeLimit_(limit, DEFAULTS.relevantLimit);
+    var text = String(query || '').trim();
+    var tokens = tokenize_(text);
+    return CharacterMemoryContextService.loadAcceptedMemories()
+      .map(function(memory) {
+        var row = cloneMemoryDtoAsRow_(memory);
+        return {
+          row: row,
+          score: scoreMemory_(row, text, tokens)
+        };
+      })
+      .filter(function(entry) {
+        return text ? entry.score > 0 : true;
+      })
+      .sort(function(left, right) {
+        if (left.score !== right.score) {
+          return right.score - left.score;
+        }
+        if (left.row.confidence !== right.row.confidence) {
+          return right.row.confidence - left.row.confidence;
+        }
+        return String(left.row.memory_id).localeCompare(
+          String(right.row.memory_id)
+        );
+      })
+      .slice(0, normalizedLimit)
+      .map(function(entry) {
+        return {
+          category: entry.row.category,
+          normalizedKey: entry.row.normalized_key,
+          content: entry.row.content,
+          confidence: entry.row.confidence
+        };
+      });
+  }
+
   function normalizeExtractionRange_(messageRange) {
     messageRange = messageRange || {};
     var sourceMessageIds = Array.isArray(messageRange.sourceMessageIds)
@@ -175,12 +372,33 @@ var MemoryService = (function() {
     validatePayloadMessageIdArray_(payload.sourceMessageIds, 'eventPayload.sourceMessageIds');
     ensure(Validators.isIsoDateTimeString(payload.requestedAt), 'VALIDATION_REQUEST_INVALID', 'eventPayload.requestedAt must be an ISO 8601 string.');
     ensure(payload.sourceMessageIds.length > 0, 'VALIDATION_REQUEST_INVALID', 'sourceMessageIds must not be empty.');
-    return {
+    var runtimeMode = payload.characterRuntimeMode == null
+      ? 'legacy'
+      : String(payload.characterRuntimeMode);
+    ensure(
+      runtimeMode === 'legacy' || runtimeMode === 'enforced',
+      'VALIDATION_REQUEST_INVALID',
+      'eventPayload.characterRuntimeMode is invalid.'
+    );
+    var normalized = {
       firstMessageId: payload.firstMessageId,
       lastMessageId: payload.lastMessageId,
       sourceMessageIds: uniqueIds_(payload.sourceMessageIds),
-      requestedAt: payload.requestedAt
+      requestedAt: payload.requestedAt,
+      characterRuntimeMode: runtimeMode
     };
+    if (runtimeMode === 'enforced') {
+      normalized.characterBinding = normalizeCharacterBinding_(
+        payload.characterBinding
+      );
+    } else {
+      ensure(
+        payload.characterBinding == null,
+        'VALIDATION_REQUEST_INVALID',
+        'Legacy memory payload cannot contain a character binding.'
+      );
+    }
+    return normalized;
   }
 
   function buildExtractionRequest_(payload, messages) {
@@ -256,7 +474,15 @@ var MemoryService = (function() {
     return true;
   }
 
-  function applyCandidate_(candidate, now, counts, memoryById, memoryByKey) {
+  function applyCandidate_(
+    candidate,
+    now,
+    counts,
+    memoryById,
+    memoryByKey,
+    provenance,
+    blockedLegacyKeys
+  ) {
     validateCandidate_(candidate);
     var normalizedKey = normalizeMemoryKey_(candidate.normalizedKey);
     var action = candidate.action;
@@ -269,11 +495,24 @@ var MemoryService = (function() {
 
     if (action === 'create') {
       rejectUnless_(!candidate.existingMemoryId, 'Create candidates must not include existingMemoryId.');
+      rejectUnless_(
+        !provenance || !blockedLegacyKeys[normalizedKey],
+        'An approved memory cannot silently replace a legacy memory.'
+      );
       if (existingByKey) {
-        upsertExistingMemoryFromCreate_(existingByKey, candidate, now, counts, memoryById, memoryByKey);
+        upsertExistingMemoryFromCreate_(
+          existingByKey,
+          candidate,
+          now,
+          counts,
+          memoryById,
+          memoryByKey,
+          provenance
+        );
         return;
       }
       var created = buildNewMemory_(candidate, now);
+      applyMemoryProvenance_(created, provenance);
       SheetRepository.upsertMemory(created);
       memoryById[created.memoryId] = cloneMemoryDtoAsRow_(created);
       memoryByKey[created.normalizedKey] = cloneMemoryDtoAsRow_(created);
@@ -286,6 +525,7 @@ var MemoryService = (function() {
     rejectUnless_(!existingByKey || existingByKey.memory_id === existing.memory_id, 'normalizedKey points to a different active memory.');
 
     var next = buildUpdatedMemory_(existing, candidate, now);
+    applyMemoryProvenance_(next, provenance);
     SheetRepository.upsertMemory(next);
     memoryById[next.memoryId] = cloneMemoryDtoAsRow_(next);
     memoryByKey[next.normalizedKey] = cloneMemoryDtoAsRow_(next);
@@ -330,7 +570,15 @@ var MemoryService = (function() {
     };
   }
 
-  function upsertExistingMemoryFromCreate_(existingRow, candidate, now, counts, memoryById, memoryByKey) {
+  function upsertExistingMemoryFromCreate_(
+    existingRow,
+    candidate,
+    now,
+    counts,
+    memoryById,
+    memoryByKey,
+    provenance
+  ) {
     var syntheticAction = normalizeContent_(candidate.content) === String(existingRow.content || '').trim()
       ? 'confirm'
       : 'update';
@@ -345,6 +593,7 @@ var MemoryService = (function() {
       reason: candidate.reason
     };
     var next = buildUpdatedMemory_(existingRow, promotedCandidate, now);
+    applyMemoryProvenance_(next, provenance);
     SheetRepository.upsertMemory(next);
     memoryById[next.memoryId] = cloneMemoryDtoAsRow_(next);
     memoryByKey[next.normalizedKey] = cloneMemoryDtoAsRow_(next);
@@ -533,7 +782,10 @@ var MemoryService = (function() {
       last_confirmed_at: row.last_confirmed_at,
       supersedes_memory_id: row.supersedes_memory_id || null,
       usage_count: row.usage_count || 0,
-      last_used_at: row.last_used_at || null
+      last_used_at: row.last_used_at || null,
+      memory_approval_json: row.memory_approval_json || null,
+      memory_origin_event_ids_json:
+        (row.memory_origin_event_ids_json || []).slice()
     };
   }
 
@@ -550,8 +802,241 @@ var MemoryService = (function() {
       last_confirmed_at: memory.lastConfirmedAt,
       supersedes_memory_id: memory.supersedesMemoryId || null,
       usage_count: memory.usageCount || 0,
-      last_used_at: memory.lastUsedAt || null
+      last_used_at: memory.lastUsedAt || null,
+      memory_approval_json: memory.memoryApproval || null,
+      memory_origin_event_ids_json:
+        (memory.memoryOriginEventIds || []).slice()
     };
+  }
+
+  function applyMemoryProvenance_(memory, provenance) {
+    if (!provenance) {
+      return memory;
+    }
+    memory.memoryApproval = provenance.approval;
+    memory.memoryOriginEventId = provenance.originEventId;
+    return memory;
+  }
+
+  function characterApprovalFromArtifact_(artifact) {
+    return {
+      surface: artifact.surface,
+      source: artifact.source,
+      policyVersion: artifact.policyVersion,
+      profileSchemaVersion: artifact.profileSchemaVersion,
+      profileRevision: artifact.profileRevision,
+      catalogVersion: artifact.catalogVersion,
+      characterPackId: artifact.characterPackId,
+      characterPackVersion: artifact.characterPackVersion
+    };
+  }
+
+  function resolveMemoryRuntime_() {
+    if (
+      !getConfigBool_(
+        'MEMORY_CHARACTER_ENFORCEMENT_ENABLED',
+        false
+      )
+    ) {
+      return {
+        mode: 'legacy',
+        binding: null
+      };
+    }
+    var inspection = CharacterProfileService.inspectRuntime();
+    if (
+      inspection.state === 'legacy' &&
+      inspection.runtimeMode === 'legacy'
+    ) {
+      return {
+        mode: 'legacy',
+        binding: null
+      };
+    }
+    ensure(
+      inspection.state === 'ready' &&
+        inspection.runtimeMode === 'enforced',
+      'CHARACTER_CONFIG_INVALID',
+      'Character runtime is not ready for memory extraction.',
+      {
+        reason: inspection.reason || 'CHARACTER_RUNTIME_BLOCKED'
+      }
+    );
+    return {
+      mode: 'enforced',
+      binding:
+        CharacterMemoryContextService.bindingFromInspection(inspection)
+    };
+  }
+
+  function normalizeCharacterBinding_(value) {
+    var fields = [
+      'profileSchemaVersion',
+      'profileRevision',
+      'policyVersion',
+      'catalogVersion',
+      'characterPackId',
+      'characterPackVersion'
+    ];
+    ensure(
+      value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        Object.keys(value).length === fields.length &&
+        fields.every(function(field) {
+          return Object.prototype.hasOwnProperty.call(value, field);
+        }) &&
+        value.profileSchemaVersion ===
+          APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION &&
+        typeof value.profileRevision === 'number' &&
+        Number.isSafeInteger(value.profileRevision) &&
+        value.profileRevision > 0 &&
+        value.policyVersion ===
+          APP_CONSTANTS.CHARACTER.POLICY_VERSION &&
+        value.catalogVersion ===
+          APP_CONSTANTS.CHARACTER.CATALOG_VERSION &&
+        typeof value.characterPackId === 'string' &&
+        /^[a-z0-9][a-z0-9-]{2,63}$/.test(value.characterPackId) &&
+        typeof value.characterPackVersion === 'string' &&
+        /^[a-z0-9][a-z0-9.-]{2,79}$/.test(
+          value.characterPackVersion
+        ),
+      'VALIDATION_REQUEST_INVALID',
+      'MEMORY_EXTRACT character binding is invalid.'
+    );
+    return {
+      profileSchemaVersion: value.profileSchemaVersion,
+      profileRevision: value.profileRevision,
+      policyVersion: value.policyVersion,
+      catalogVersion: value.catalogVersion,
+      characterPackId: value.characterPackId,
+      characterPackVersion: value.characterPackVersion
+    };
+  }
+
+  function normalizeQueueClaim_(options) {
+    options = options || {};
+    var hasEventId = options.eventId != null &&
+      String(options.eventId).trim() !== '';
+    var hasLeaseToken = options.leaseToken != null &&
+      String(options.leaseToken).trim() !== '';
+    ensure(
+      hasEventId === hasLeaseToken,
+      'VALIDATION_REQUEST_INVALID',
+      'Memory eventId and leaseToken must be supplied together.'
+    );
+    if (!hasEventId) {
+      return null;
+    }
+    ensure(
+      Validators.isUuidV4(String(options.eventId)),
+      'VALIDATION_REQUEST_INVALID',
+      'Memory eventId must be a UUID v4.'
+    );
+    return {
+      eventId: String(options.eventId),
+      leaseToken: String(options.leaseToken)
+    };
+  }
+
+  function assertQueueClaimCurrent_(queueClaim, payload) {
+    var event = SheetRepository.getEventById(queueClaim.eventId);
+    ensure(
+      event &&
+        event.eventType === 'MEMORY_EXTRACT' &&
+        event.payload,
+      'STORAGE_DATA_CORRUPTED',
+      'Memory queue event linkage is invalid.'
+    );
+    ensure(
+      memoryQueuePayloadIdentity_(event.payload) ===
+        memoryQueuePayloadIdentity_(payload),
+      'STORAGE_DATA_CORRUPTED',
+      'Memory queue event payload changed after claim.'
+    );
+    if (
+      event.status !== 'PROCESSING' ||
+      event.lockedBy == null ||
+      String(event.lockedBy) !== queueClaim.leaseToken
+    ) {
+      throw createAppError(
+        'QUEUE_LOCK_BUSY',
+        'Queue event lease no longer belongs to this worker.',
+        {
+          reason: 'QUEUE_LEASE_MISMATCH'
+        }
+      );
+    }
+    return true;
+  }
+
+  function memoryQueuePayloadIdentity_(payload) {
+    return JSON.stringify(validateExtractionPayload_(payload));
+  }
+
+  function recordCharacterUsageBestEffort_(createdAt, rawUsage) {
+    var usage = rawUsage || {};
+    var apiCalls = normalizeUsageNumber_(usage.apiCalls);
+    if (apiCalls < 1) {
+      return false;
+    }
+    try {
+      SheetRepository.incrementUsageDaily(
+        formatDateInTokyo(parseIsoToDate(createdAt)),
+        {
+          apiCalls: apiCalls,
+          imageCalls: normalizeUsageNumber_(usage.imageCalls),
+          inputTokens: normalizeUsageNumber_(usage.inputTokens),
+          outputTokens: normalizeUsageNumber_(usage.outputTokens)
+        }
+      );
+      return true;
+    } catch (error) {
+      try {
+        AppLogger.writeDebugLog(
+          'WARN',
+          'recordMemoryCharacterUsage',
+          'Memory character usage accounting failed.',
+          {
+            code: normalizeError(error).code
+          },
+          null
+        );
+      } catch (ignored) {}
+      return false;
+    }
+  }
+
+  function normalizeUsageNumber_(value) {
+    var number = Number(value || 0);
+    if (!isFinite(number) || number < 0) {
+      return 0;
+    }
+    return Math.floor(number);
+  }
+
+  function getConfigBool_(key, fallback) {
+    try {
+      var config = ConfigRepository.getByKey(key);
+      if (!config || config.value == null) {
+        return fallback;
+      }
+      if (
+        config.value === true ||
+        String(config.value).toLowerCase() === 'true'
+      ) {
+        return true;
+      }
+      if (
+        config.value === false ||
+        String(config.value).toLowerCase() === 'false'
+      ) {
+        return false;
+      }
+      return fallback;
+    } catch (error) {
+      return fallback;
+    }
   }
 
   function buildDedupeKey_(firstMessageId, lastMessageId) {
@@ -562,6 +1047,7 @@ var MemoryService = (function() {
     enqueueExtraction: enqueueExtraction,
     extract: extract,
     findRelevant: findRelevant,
+    findAcceptedRelevant: findAcceptedRelevant,
     applyCandidates: applyCandidates,
     __test: {
       buildDedupeKey: buildDedupeKey_,

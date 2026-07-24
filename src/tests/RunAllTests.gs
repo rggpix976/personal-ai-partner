@@ -19,7 +19,8 @@ function runAllSelfTests() {
     'runA12CharacterProactiveContextTests',
     'runA12CharacterProactiveGeminiAdapterTests',
     'runA12CharacterProactiveIntegrationTests',
-    'runA13CharacterDiaryIntegrationTests'
+    'runA13CharacterDiaryIntegrationTests',
+    'runA14CharacterMemoryIntegrationTests'
   ];
   var summary = {
     ok: true,

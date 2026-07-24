@@ -540,8 +540,9 @@ function runA10ImmersionGuardTests() {
       makeContext({ scope: 'memory' })
     );
     assert(
-      benignKeyDecision.verdict === 'ALLOW',
-      'Allowlisted tokenized object key was falsely denied.'
+      benignKeyDecision.verdict === 'VERIFY' &&
+        benignKeyDecision.requiresEvidence === true,
+      'Allowlisted memory content did not reach mandatory grounding.'
     );
   });
 

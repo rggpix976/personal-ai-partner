@@ -306,6 +306,41 @@ var SheetRepository = (function() {
     );
   }
 
+  function assertMemoryProvenanceHeaders_(headers) {
+    var expectedHeaders = APP_CONSTANTS.SHEET_SCHEMAS[
+      APP_CONSTANTS.SHEETS.LONG_TERM_MEMORIES
+    ].map(function(column) {
+      return column.name;
+    });
+    var approvalIndex = expectedHeaders.indexOf(
+      'memory_approval_json'
+    );
+    var originIndex = expectedHeaders.indexOf(
+      'memory_origin_event_ids_json'
+    );
+    if (
+      approvalIndex < 0 ||
+      originIndex !== approvalIndex + 1 ||
+      !Array.isArray(headers) ||
+      headers.length <= originIndex ||
+      headers[approvalIndex] !== 'memory_approval_json' ||
+      headers[originIndex] !== 'memory_origin_event_ids_json'
+    ) {
+      throw createAppError(
+        'STORAGE_DATA_CORRUPTED',
+        'Memory provenance columns are invalid.',
+        { reason: 'MEMORY_PROVENANCE_COLUMNS_INVALID' }
+      );
+    }
+    return true;
+  }
+
+  function assertMemoryProvenanceColumns() {
+    return assertMemoryProvenanceHeaders_(
+      getHeaders(APP_CONSTANTS.SHEETS.LONG_TERM_MEMORIES)
+    );
+  }
+
   function normalizeCharacterApproval_(value, errorCode) {
     if (value == null) {
       return null;
@@ -1468,6 +1503,80 @@ var SheetRepository = (function() {
   function upsertMemory(memory) {
     Validators.assertUuidV4(memory.memoryId, 'memory.memoryId');
     var existingRow = findRowIndexByColumnValue(APP_CONSTANTS.SHEETS.LONG_TERM_MEMORIES, 'memory_id', memory.memoryId);
+    var current = existingRow === -1
+      ? null
+      : getMemoryById(memory.memoryId);
+    var hasOwn = Object.prototype.hasOwnProperty;
+    var suppliesApproval = hasOwn.call(memory, 'memoryApproval');
+    var suppliesOrigin = hasOwn.call(memory, 'memoryOriginEventId');
+    ensure(
+      suppliesApproval === suppliesOrigin,
+      'VALIDATION_REQUEST_INVALID',
+      'Memory provenance fields must be supplied together.'
+    );
+    var storedApproval = current
+      ? current.memory_approval_json || null
+      : null;
+    var storedOrigins = current &&
+      Array.isArray(current.memory_origin_event_ids_json)
+      ? current.memory_origin_event_ids_json.slice()
+      : [];
+    ensure(
+      storedOrigins.length <= 100 &&
+        storedOrigins.every(function(eventId, index) {
+          return Validators.isUuidV4(eventId) &&
+            storedOrigins.indexOf(eventId) === index;
+        }),
+      'STORAGE_DATA_CORRUPTED',
+      'Stored memory origin history is invalid.'
+    );
+    ensure(
+      (storedApproval == null) === (storedOrigins.length === 0),
+      'STORAGE_DATA_CORRUPTED',
+      'Stored memory provenance is incomplete.'
+    );
+    if (suppliesApproval) {
+      var nextApproval = normalizeCharacterApproval_(
+        memory.memoryApproval,
+        'VALIDATION_REQUEST_INVALID'
+      );
+      ensure(
+        nextApproval &&
+          nextApproval.surface === 'MEMORY_EXTRACTION' &&
+          (
+            nextApproval.source === 'generated' ||
+            nextApproval.source === 'rewrite'
+          ),
+        'VALIDATION_REQUEST_INVALID',
+        'Memory approval provenance is invalid.'
+      );
+      var nextOrigin = normalizeProactiveOriginEventId_(
+        memory.memoryOriginEventId,
+        'VALIDATION_REQUEST_INVALID'
+      );
+      ensure(
+        nextOrigin != null,
+        'VALIDATION_REQUEST_INVALID',
+        'Memory origin event is required.'
+      );
+      ensure(
+        storedOrigins.length < 100 ||
+          storedOrigins.indexOf(nextOrigin) !== -1,
+        'STORAGE_DATA_CORRUPTED',
+        'Memory origin history exceeded its safe bound.'
+      );
+      if (storedOrigins.indexOf(nextOrigin) === -1) {
+        storedOrigins.push(nextOrigin);
+      }
+      assertMemoryProvenanceColumns();
+      storedApproval = nextApproval;
+    } else if (current && storedApproval != null) {
+      ensure(
+        approvedMemoryContentUnchanged_(current, memory),
+        'STORAGE_DATA_CORRUPTED',
+        'Approved memory content cannot change without new approval.'
+      );
+    }
     var row = {
       memory_id: memory.memoryId,
       category: memory.category,
@@ -1480,7 +1589,9 @@ var SheetRepository = (function() {
       last_confirmed_at: memory.lastConfirmedAt,
       supersedes_memory_id: memory.supersedesMemoryId || null,
       usage_count: memory.usageCount,
-      last_used_at: memory.lastUsedAt || null
+      last_used_at: memory.lastUsedAt || null,
+      memory_approval_json: storedApproval,
+      memory_origin_event_ids_json: storedOrigins
     };
     if (existingRow === -1) {
       appendRow(APP_CONSTANTS.SHEETS.LONG_TERM_MEMORIES, row);
@@ -1488,6 +1599,20 @@ var SheetRepository = (function() {
       updateRowByKey(APP_CONSTANTS.SHEETS.LONG_TERM_MEMORIES, 'memory_id', memory.memoryId, row);
     }
     return memory;
+  }
+
+  function approvedMemoryContentUnchanged_(current, memory) {
+    return current.category === memory.category &&
+      current.normalized_key === memory.normalizedKey &&
+      current.content === memory.content &&
+      Number(current.confidence) === Number(memory.confidence) &&
+      current.status === memory.status &&
+      JSON.stringify(current.source_message_ids_json || []) ===
+        JSON.stringify(memory.sourceMessageIds || []) &&
+      current.created_at === memory.createdAt &&
+      current.last_confirmed_at === memory.lastConfirmedAt &&
+      (current.supersedes_memory_id || null) ===
+        (memory.supersedesMemoryId || null);
   }
 
   function listRecentDiarySummariesBefore(summaryDate, limit) {
@@ -1652,6 +1777,7 @@ var SheetRepository = (function() {
     assertCharacterApprovalColumns: assertCharacterApprovalColumns,
     assertProactiveDeliveryColumns: assertProactiveDeliveryColumns,
     assertDiaryProvenanceColumns: assertDiaryProvenanceColumns,
+    assertMemoryProvenanceColumns: assertMemoryProvenanceColumns,
     appendConversation: appendConversation,
     updateConversationMessage: updateConversationMessage,
     listRecentMessages: listRecentMessages,
@@ -1693,6 +1819,7 @@ var SheetRepository = (function() {
       assertCharacterApprovalHeaders: assertCharacterApprovalHeaders_,
       assertProactiveDeliveryHeaders: assertProactiveDeliveryHeaders_,
       assertDiaryProvenanceHeaders: assertDiaryProvenanceHeaders_,
+      assertMemoryProvenanceHeaders: assertMemoryProvenanceHeaders_,
       normalizeCharacterApproval: normalizeCharacterApproval_,
       characterApprovalToRow: characterApprovalToRow_,
       characterApprovalFromRow: characterApprovalFromRow_,

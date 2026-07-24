@@ -425,6 +425,7 @@ def check_event_contract(results: Results) -> None:
         "MEMORY_EXTRACT": {
             "firstMessageId": UUID_1, "lastMessageId": UUID_2,
             "sourceMessageIds": [UUID_1, UUID_2], "requestedAt": NOW,
+            "characterRuntimeMode": "legacy",
         },
         "DIARY_GENERATE": {
             "diaryDate": "2026-07-05",
@@ -457,6 +458,43 @@ def check_event_contract(results: Results) -> None:
         "characterPackId": "warm-kansai-caretaker",
         "characterPackVersion": "warm-kansai-caretaker.v1",
     }
+    enforced_memory_payload = dict(samples["MEMORY_EXTRACT"])
+    enforced_memory_payload["characterRuntimeMode"] = "enforced"
+    enforced_memory_payload["characterBinding"] = character_binding
+    assert_valid(
+        results,
+        validator,
+        base_event("MEMORY_EXTRACT", enforced_memory_payload),
+        "Event MEMORY_EXTRACT enforced binding valid",
+    )
+
+    missing_memory_mode = dict(samples["MEMORY_EXTRACT"])
+    missing_memory_mode.pop("characterRuntimeMode")
+    assert_invalid(
+        results,
+        validator,
+        base_event("MEMORY_EXTRACT", missing_memory_mode),
+        "Event MEMORY_EXTRACT new payload requires runtime mode",
+    )
+
+    missing_memory_binding = dict(enforced_memory_payload)
+    missing_memory_binding.pop("characterBinding")
+    assert_invalid(
+        results,
+        validator,
+        base_event("MEMORY_EXTRACT", missing_memory_binding),
+        "Event MEMORY_EXTRACT enforced mode requires binding",
+    )
+
+    legacy_memory_with_binding = dict(samples["MEMORY_EXTRACT"])
+    legacy_memory_with_binding["characterBinding"] = character_binding
+    assert_invalid(
+        results,
+        validator,
+        base_event("MEMORY_EXTRACT", legacy_memory_with_binding),
+        "Event MEMORY_EXTRACT legacy mode forbids binding",
+    )
+
     enforced_proactive_payload = dict(samples["PROACTIVE_SEND"])
     enforced_proactive_payload["characterRuntimeMode"] = "enforced"
     enforced_proactive_payload["characterBinding"] = character_binding

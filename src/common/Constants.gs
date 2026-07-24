@@ -1,6 +1,6 @@
 var APP_CONSTANTS = Object.freeze({
   TIME_ZONE: 'Asia/Tokyo',
-  SCHEMA_VERSION: '2026.07.a6',
+  SCHEMA_VERSION: '2026.07.a7',
   DEFAULT_CONVERSATION_ID: 'default',
   USER_STATE_SINGLETON_ID: 'default',
   DAILY_MAIL_RETRY_TIME: '08:05',
@@ -223,6 +223,7 @@ var APP_CONSTANTS = Object.freeze({
     { key: 'OPS_ALERT_COOLDOWN_MINUTES', value: '720', type: 'int', description: 'Minimum interval between repeated operational health alerts' },
     { key: 'DIARY_DUE_TIME', value: '23:30', type: 'time', description: 'Diary due time' },
     { key: 'DIARY_CHARACTER_ENFORCEMENT_ENABLED', value: 'false', type: 'bool', description: 'Use the approved CharacterPack diary path for newly queued diary events' },
+    { key: 'MEMORY_CHARACTER_ENFORCEMENT_ENABLED', value: 'false', type: 'bool', description: 'Use the approved grounded memory extraction path for newly queued memory events' },
     { key: 'DIARY_MIN_CHARS', value: '300', type: 'int', description: 'Minimum diary length' },
     { key: 'DIARY_MAX_CHARS', value: '800', type: 'int', description: 'Maximum diary length' },
     { key: 'DIARY_STYLE', value: 'Grounded, reflective, and concise diary entry in the configured partner voice.', type: 'string', description: 'Diary style instruction' },
@@ -324,7 +325,9 @@ var APP_CONSTANTS = Object.freeze({
       { name: 'last_confirmed_at', type: 'datetime', required: true },
       { name: 'supersedes_memory_id', type: 'string', required: false },
       { name: 'usage_count', type: 'int', required: true },
-      { name: 'last_used_at', type: 'datetime', required: false }
+      { name: 'last_used_at', type: 'datetime', required: false },
+      { name: 'memory_approval_json', type: 'json', required: false },
+      { name: 'memory_origin_event_ids_json', type: 'json', required: false }
     ],
     daily_summaries: [
       { name: 'summary_date', type: 'date', required: true },
