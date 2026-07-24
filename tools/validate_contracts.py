@@ -251,7 +251,12 @@ def base_message(role: str, message_id: str) -> dict[str, Any]:
         "text": "test",
         "status": "accepted" if role == "user" else "completed",
         "image": None,
+        "replyToMessageId": None,
+        "model": None,
+        "inputTokens": None,
+        "outputTokens": None,
         "error": None,
+        "characterApproval": None,
     }
 
 
@@ -259,6 +264,20 @@ def check_chat_result_contract(results: Results) -> None:
     validator = schema_validator(CONTRACTS / "chat-result.schema.json")
     user = base_message("user", UUID_2)
     assistant = base_message("assistant", UUID_3)
+    assistant["replyToMessageId"] = UUID_2
+    assistant["model"] = "gemini-test"
+    assistant["inputTokens"] = 12
+    assistant["outputTokens"] = 7
+    assistant["characterApproval"] = {
+        "surface": "CHAT_TEXT_SYNC",
+        "source": "generated",
+        "policyVersion": "character-policy.v2",
+        "profileSchemaVersion": "character-profile.v2",
+        "profileRevision": 3,
+        "catalogVersion": "character-catalog.v2",
+        "characterPackId": "warm-kansai-caretaker",
+        "characterPackVersion": "warm-kansai-caretaker.v1",
+    }
 
     completed = {
         "ok": True, "status": "completed", "requestId": UUID_1,
@@ -275,10 +294,22 @@ def check_chat_result_contract(results: Results) -> None:
         "error": {"code": "GEMINI_AUTH_FAILED", "message": "failed"},
         "warnings": [],
     }
+    routed = {
+        "ok": True, "status": "routed", "requestId": UUID_1,
+        "userMessage": user, "assistantMessage": None,
+        "retryAfterSeconds": None, "error": None,
+        "route": "PRODUCT_INFO",
+        "notice": {
+            "title": "このアプリについて",
+            "message": "これは推し本人の発言ではなく、アプリからの案内です。",
+        },
+        "warnings": [],
+    }
 
     assert_valid(results, validator, completed, "ChatResult completed valid")
     assert_valid(results, validator, queued, "ChatResult queued valid")
     assert_valid(results, validator, failed, "ChatResult failed valid")
+    assert_valid(results, validator, routed, "ChatResult routed valid")
 
     bad_completed = dict(completed)
     bad_completed.pop("assistantMessage")
@@ -291,6 +322,80 @@ def check_chat_result_contract(results: Results) -> None:
     bad_failed = dict(failed)
     bad_failed.pop("error")
     assert_invalid(results, validator, bad_failed, "ChatResult failed requires error")
+
+    bad_routed = dict(routed)
+    bad_routed["assistantMessage"] = assistant
+    assert_invalid(
+        results,
+        validator,
+        bad_routed,
+        "ChatResult routed forbids assistantMessage",
+    )
+
+    routed_without_route = dict(routed)
+    routed_without_route.pop("route")
+    assert_invalid(
+        results,
+        validator,
+        routed_without_route,
+        "ChatResult routed requires route",
+    )
+
+    routed_without_notice = dict(routed)
+    routed_without_notice.pop("notice")
+    assert_invalid(
+        results,
+        validator,
+        routed_without_notice,
+        "ChatResult routed requires notice",
+    )
+
+    routed_with_unknown_route = dict(routed)
+    routed_with_unknown_route["route"] = "MODEL_INFO"
+    assert_invalid(
+        results,
+        validator,
+        routed_with_unknown_route,
+        "ChatResult routed rejects unknown route",
+    )
+
+    bad_approval = dict(completed)
+    bad_approval["assistantMessage"] = dict(assistant)
+    bad_approval["assistantMessage"]["characterApproval"] = dict(
+        assistant["characterApproval"]
+    )
+    bad_approval["assistantMessage"]["characterApproval"].pop("profileRevision")
+    assert_invalid(
+        results,
+        validator,
+        bad_approval,
+        "ChatResult character approval requires complete binding metadata",
+    )
+
+    wrong_approval_version = dict(completed)
+    wrong_approval_version["assistantMessage"] = dict(assistant)
+    wrong_approval_version["assistantMessage"]["characterApproval"] = dict(
+        assistant["characterApproval"]
+    )
+    wrong_approval_version["assistantMessage"]["characterApproval"][
+        "policyVersion"
+    ] = "character-policy.v999"
+    assert_invalid(
+        results,
+        validator,
+        wrong_approval_version,
+        "ChatResult character approval rejects unknown policy version",
+    )
+
+    incomplete_message_dto = dict(completed)
+    incomplete_message_dto["assistantMessage"] = dict(assistant)
+    incomplete_message_dto["assistantMessage"].pop("characterApproval")
+    assert_invalid(
+        results,
+        validator,
+        incomplete_message_dto,
+        "ChatResult MessageDto requires nullable runtime fields",
+    )
 
 
 def base_event(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -338,6 +443,162 @@ def check_event_contract(results: Results) -> None:
     }
     for event_type, payload in samples.items():
         assert_valid(results, validator, base_event(event_type, payload), f"Event {event_type} payload valid")
+
+    character_binding = {
+        "profileSchemaVersion": "character-profile.v2",
+        "profileRevision": 3,
+        "policyVersion": "character-policy.v2",
+        "catalogVersion": "character-catalog.v2",
+        "characterPackId": "warm-kansai-caretaker",
+        "characterPackVersion": "warm-kansai-caretaker.v1",
+    }
+    enforced_chat_payload = {
+        "requestId": UUID_1,
+        "userMessageId": UUID_2,
+        "requestedAt": NOW,
+        "image": None,
+        "characterRuntimeMode": "enforced",
+        "characterBinding": character_binding,
+    }
+    assert_valid(
+        results,
+        validator,
+        base_event("CHAT_REPLY", enforced_chat_payload),
+        "Event CHAT_REPLY enforced binding valid",
+    )
+
+    missing_chat_binding = dict(enforced_chat_payload)
+    missing_chat_binding.pop("characterBinding")
+    assert_invalid(
+        results,
+        validator,
+        base_event("CHAT_REPLY", missing_chat_binding),
+        "Event CHAT_REPLY enforced mode requires binding",
+    )
+
+    legacy_with_binding = dict(enforced_chat_payload)
+    legacy_with_binding["characterRuntimeMode"] = "legacy"
+    assert_invalid(
+        results,
+        validator,
+        base_event("CHAT_REPLY", legacy_with_binding),
+        "Event CHAT_REPLY legacy mode forbids binding",
+    )
+
+    wrong_version_binding = dict(enforced_chat_payload)
+    wrong_version_binding["characterBinding"] = dict(character_binding)
+    wrong_version_binding["characterBinding"]["catalogVersion"] = (
+        "character-catalog.v999"
+    )
+    assert_invalid(
+        results,
+        validator,
+        base_event("CHAT_REPLY", wrong_version_binding),
+        "Event CHAT_REPLY rejects unknown binding version",
+    )
+
+    extra_binding_field = dict(enforced_chat_payload)
+    extra_binding_field["characterBinding"] = dict(character_binding)
+    extra_binding_field["characterBinding"]["unexpected"] = True
+    assert_invalid(
+        results,
+        validator,
+        base_event("CHAT_REPLY", extra_binding_field),
+        "Event CHAT_REPLY rejects extra binding metadata",
+    )
+
+    routed_chat_payload = dict(enforced_chat_payload)
+    routed_chat_payload["completionRoute"] = "ADMIN_OOC"
+    assert_valid(
+        results,
+        validator,
+        base_event("CHAT_REPLY", routed_chat_payload),
+        "Event CHAT_REPLY completion route valid",
+    )
+
+    unknown_completion_route = dict(enforced_chat_payload)
+    unknown_completion_route["completionRoute"] = "MODEL_INFO"
+    assert_invalid(
+        results,
+        validator,
+        base_event("CHAT_REPLY", unknown_completion_route),
+        "Event CHAT_REPLY rejects unknown completion route",
+    )
+
+    legacy_completion_route = {
+        "requestId": UUID_1,
+        "userMessageId": UUID_2,
+        "requestedAt": NOW,
+        "image": None,
+        "characterRuntimeMode": "legacy",
+        "completionRoute": "PRODUCT_INFO",
+    }
+    assert_invalid(
+        results,
+        validator,
+        base_event("CHAT_REPLY", legacy_completion_route),
+        "Event CHAT_REPLY legacy mode forbids completion route",
+    )
+
+    unbound_completion_route = {
+        "requestId": UUID_1,
+        "userMessageId": UUID_2,
+        "requestedAt": NOW,
+        "image": None,
+        "completionRoute": "PRODUCT_INFO",
+    }
+    assert_invalid(
+        results,
+        validator,
+        base_event("CHAT_REPLY", unbound_completion_route),
+        "Event CHAT_REPLY completion route requires enforced binding",
+    )
+
+    missing_user_message_id = dict(enforced_chat_payload)
+    missing_user_message_id.pop("userMessageId")
+    assert_invalid(
+        results,
+        validator,
+        base_event("CHAT_REPLY", missing_user_message_id),
+        "Event CHAT_REPLY requires userMessageId",
+    )
+
+    manual_chat_payload = dict(enforced_chat_payload)
+    manual_chat_payload["manualRequestId"] = UUID_3
+    manual_chat_payload["originalEventId"] = UUID_4
+    assert_valid(
+        results,
+        validator,
+        base_event("CHAT_REPLY", manual_chat_payload),
+        "Event CHAT_REPLY manual repair preserves enforced binding",
+    )
+
+    incomplete_manual_chat = dict(manual_chat_payload)
+    incomplete_manual_chat.pop("originalEventId")
+    assert_invalid(
+        results,
+        validator,
+        base_event("CHAT_REPLY", incomplete_manual_chat),
+        "Event CHAT_REPLY manual repair requires originalEventId",
+    )
+
+    missing_manual_request = dict(manual_chat_payload)
+    missing_manual_request.pop("manualRequestId")
+    assert_invalid(
+        results,
+        validator,
+        base_event("CHAT_REPLY", missing_manual_request),
+        "Event CHAT_REPLY manual repair requires manualRequestId",
+    )
+
+    invalid_manual_request = dict(manual_chat_payload)
+    invalid_manual_request["manualRequestId"] = "not-a-uuid"
+    assert_invalid(
+        results,
+        validator,
+        base_event("CHAT_REPLY", invalid_manual_request),
+        "Event CHAT_REPLY manual repair requires UUID v4 identifiers",
+    )
 
     diary_repair_payload = {
         "diaryDate": "2026-07-05",

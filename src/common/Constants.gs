@@ -1,6 +1,6 @@
 var APP_CONSTANTS = Object.freeze({
   TIME_ZONE: 'Asia/Tokyo',
-  SCHEMA_VERSION: '2026.07.a2',
+  SCHEMA_VERSION: '2026.07.a3',
   DEFAULT_CONVERSATION_ID: 'default',
   USER_STATE_SINGLETON_ID: 'default',
   DAILY_MAIL_RETRY_TIME: '08:05',
@@ -96,6 +96,26 @@ var APP_CONSTANTS = Object.freeze({
       'canonical',
       'fallback',
       'legacy_revalidated'
+    ]),
+    APPROVAL_FIELDS: Object.freeze([
+      'surface',
+      'source',
+      'policyVersion',
+      'profileSchemaVersion',
+      'profileRevision',
+      'catalogVersion',
+      'characterPackId',
+      'characterPackVersion'
+    ]),
+    APPROVAL_COLUMNS: Object.freeze([
+      'approval_surface',
+      'approval_source',
+      'approval_policy_version',
+      'approval_profile_schema_version',
+      'approval_profile_revision',
+      'approval_catalog_version',
+      'approval_character_pack_id',
+      'approval_character_pack_version'
     ]),
     GUARD_CATEGORIES: Object.freeze([
       'IMMERSION_SELF_IDENTIFICATION',
@@ -263,7 +283,15 @@ var APP_CONSTANTS = Object.freeze({
       { name: 'model', type: 'string', required: false },
       { name: 'input_tokens', type: 'int', required: false },
       { name: 'output_tokens', type: 'int', required: false },
-      { name: 'error_code', type: 'string', required: false }
+      { name: 'error_code', type: 'string', required: false },
+      { name: 'approval_surface', type: 'string', required: false },
+      { name: 'approval_source', type: 'string', required: false },
+      { name: 'approval_policy_version', type: 'string', required: false },
+      { name: 'approval_profile_schema_version', type: 'string', required: false },
+      { name: 'approval_profile_revision', type: 'int', required: false },
+      { name: 'approval_catalog_version', type: 'string', required: false },
+      { name: 'approval_character_pack_id', type: 'string', required: false },
+      { name: 'approval_character_pack_version', type: 'string', required: false }
     ],
     event_queue: [
       { name: 'event_id', type: 'string', required: true },

@@ -22,6 +22,16 @@ function runA6QueueSchedulerTests() {
     }
   }
 
+  function expectCode(callback, code) {
+    var thrown = null;
+    try {
+      callback();
+    } catch (error) {
+      thrown = error;
+    }
+    assert(thrown && thrown.code === code, 'Expected error code ' + code + '.');
+  }
+
   function withOverrides(overrides, callback) {
     var originalValues = {};
     Object.keys(overrides).forEach(function(key) {
@@ -140,7 +150,15 @@ function runA6QueueSchedulerTests() {
       var claimed = QueueService.claimBatch(2, 'worker-1', '2026-07-07T09:00:00+09:00');
       assert(claimed.length === 2, 'Both eligible events should be claimed.');
       assert(patches[0].patch.status === 'PROCESSING', 'Claim should move the event to PROCESSING.');
-      assert(patches[1].patch.lockedBy === 'worker-1', 'Claim should record the worker id.');
+      assert(
+        QueueService.__test.isManagedLeaseToken(patches[0].patch.lockedBy) &&
+          QueueService.__test.isManagedLeaseToken(patches[1].patch.lockedBy),
+        'Each claim should record a managed opaque lease token.'
+      );
+      assert(
+        patches[0].patch.lockedBy !== patches[1].patch.lockedBy,
+        'Each claimed event must receive a distinct lease token.'
+      );
     });
   });
 
@@ -291,6 +309,81 @@ function runA6QueueSchedulerTests() {
     });
   });
 
+  test('markDone deletes a routed image only after DONE is durable', function() {
+    var updated = false;
+    var trashed = null;
+    withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      SheetRepository: {
+        getEventById: function() {
+          return {
+            eventId: '11111111-1111-4111-8111-111111111111',
+            eventType: 'CHAT_REPLY',
+            status: updated ? 'DONE' : 'PROCESSING',
+            payload: {
+              requestId: '22222222-2222-4222-8222-222222222222',
+              userMessageId: '33333333-3333-4333-8333-333333333333',
+              requestedAt: '2026-07-07T09:00:00+09:00',
+              image: {
+                tempFileId: 'temporary-image-id',
+                name: 'photo.jpg',
+                mimeType: 'image/jpeg',
+                expiresAt: '2026-07-08T09:00:00+09:00'
+              },
+              characterRuntimeMode: 'enforced',
+              characterBinding: {
+                profileSchemaVersion: APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION,
+                profileRevision: 3,
+                policyVersion: APP_CONSTANTS.CHARACTER.POLICY_VERSION,
+                catalogVersion: APP_CONSTANTS.CHARACTER.CATALOG_VERSION,
+                characterPackId: 'warm-kansai-caretaker',
+                characterPackVersion: 'warm-kansai-caretaker.v1'
+              }
+            }
+          };
+        },
+        updateEvent: function(_, patch) {
+          assert(patch.status === 'DONE', 'Route event must be made durable first.');
+          assert(trashed === null, 'Temporary image was deleted before the DONE write.');
+          updated = true;
+        }
+      },
+      DriveTempRepository: {
+        trashTempImage: function(tempFileId) {
+          assert(updated === true, 'Temporary image cleanup ran before DONE was durable.');
+          trashed = tempFileId;
+        }
+      }
+    }, function() {
+      expectCode(function() {
+        QueueService.markDone(
+          '11111111-1111-4111-8111-111111111111',
+          {
+            status: 'routed',
+            route: 'UNKNOWN_ROUTE'
+          }
+        );
+      }, 'STORAGE_DATA_CORRUPTED');
+      assert(updated === false && trashed === null, 'Invalid route changed durable state.');
+
+      QueueService.markDone(
+        '11111111-1111-4111-8111-111111111111',
+        {
+          status: 'routed',
+          route: 'PRODUCT_INFO'
+        }
+      );
+      assert(
+        trashed === 'temporary-image-id',
+        'Durably completed route did not clean its temporary image.'
+      );
+    });
+  });
+
   test('markRetry increments attempts and eventually marks DEAD', function() {
     var patches = [];
     withOverrides({
@@ -322,6 +415,44 @@ function runA6QueueSchedulerTests() {
       );
       assert(patches[0].patch.status === 'DEAD', 'Fifth failure should move the event to DEAD.');
     });
+  });
+
+  test('markRetry redacts credentials before persisting lastError', function() {
+    var patch = null;
+    var secret = 'AIza' + new Array(36).join('B');
+    withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      SheetRepository: {
+        getEventById: function() {
+          return {
+            eventId: '11111111-1111-4111-8111-111111111111',
+            status: 'PROCESSING',
+            attemptCount: 0
+          };
+        },
+        updateEvent: function(_, value) {
+          patch = value;
+        }
+      }
+    }, function() {
+      QueueService.markRetry(
+        '11111111-1111-4111-8111-111111111111',
+        createAppError(
+          'GEMINI_TEMPORARY_FAILURE',
+          'Transport failed: https://example.invalid/generate?key=' + secret
+        ),
+        '2026-07-07T09:05:00+09:00'
+      );
+    });
+    assert(patch && patch.lastError, 'Retry error should be persisted.');
+    assert(
+      patch.lastError.message.indexOf(secret) === -1,
+      'Persisted retry error must not contain provider credentials.'
+    );
   });
 
   test('recoverStale moves PROCESSING to RETRY_WAIT without incrementing attempts', function() {
@@ -361,6 +492,143 @@ function runA6QueueSchedulerTests() {
       assert(recovered.length === 1, 'One stale event should be recovered.');
       assert(patches[0].patch.status === 'RETRY_WAIT', 'Recovered events should move to RETRY_WAIT.');
       assert(!Object.prototype.hasOwnProperty.call(patches[0].patch, 'attemptCount'), 'Stale recovery should not change attemptCount.');
+    });
+  });
+
+  test('stale worker cannot transition an event after a new lease claim', function() {
+    var eventId = '11111111-1111-4111-8111-111111111111';
+    var state = {
+      eventId: eventId,
+      eventType: 'MEMORY_EXTRACT',
+      payload: {},
+      status: 'PENDING',
+      attemptCount: 0,
+      nextAttemptAt: null,
+      lockedAt: null,
+      lockedBy: null,
+      createdAt: '2026-07-07T08:00:00+09:00',
+      updatedAt: '2026-07-07T08:00:00+09:00',
+      completedAt: null,
+      lastError: null
+    };
+
+    function copyState() {
+      return JSON.parse(JSON.stringify(state));
+    }
+
+    withOverrides({
+      LockManager: {
+        withScriptLock: function(_, callback) {
+          return callback();
+        }
+      },
+      ConfigRepository: {
+        getByKey: function() {
+          return { value: 15 };
+        }
+      },
+      SheetRepository: {
+        listClaimableEvents: function() {
+          return state.status === 'PENDING' || state.status === 'RETRY_WAIT'
+            ? [copyState()]
+            : [];
+        },
+        listStaleProcessingEvents: function() {
+          return state.status === 'PROCESSING' ? [copyState()] : [];
+        },
+        updateEvent: function(_, patch) {
+          Object.keys(patch).forEach(function(key) {
+            state[key] = patch[key];
+          });
+          return copyState();
+        },
+        getEventById: function() {
+          return copyState();
+        }
+      }
+    }, function() {
+      var firstClaim = QueueService.claimBatch(
+        1,
+        'worker-a',
+        '2026-07-07T08:00:00+09:00'
+      )[0];
+      var staleLease = firstClaim.lockedBy;
+      assert(
+        QueueService.__test.isManagedLeaseToken(staleLease),
+        'First claim did not receive a managed lease.'
+      );
+
+      QueueService.recoverStale('2026-07-07T09:00:00+09:00');
+      var secondClaim = QueueService.claimBatch(
+        1,
+        'worker-b',
+        '2026-07-07T09:00:00+09:00'
+      )[0];
+      var activeLease = secondClaim.lockedBy;
+      assert(
+        QueueService.__test.isManagedLeaseToken(activeLease) &&
+          activeLease !== staleLease,
+        'Reclaim must replace the stale lease with a new token.'
+      );
+
+      function assertLeaseRejected(callback, label) {
+        var staleError = null;
+        try {
+          callback();
+        } catch (error) {
+          staleError = error;
+        }
+        assert(
+          staleError &&
+            staleError.code === 'QUEUE_LOCK_BUSY' &&
+            staleError.details &&
+            staleError.details.reason === 'QUEUE_LEASE_MISMATCH',
+          label + ' must fail with a managed lease mismatch.'
+        );
+        assert(
+          state.status === 'PROCESSING' && state.lockedBy === activeLease,
+          label + ' changed the new owner lifecycle state.'
+        );
+      }
+
+      assertLeaseRejected(function() {
+        QueueService.markDone(
+          eventId,
+          { createdAt: '2026-07-07T09:01:00+09:00' },
+          staleLease
+        );
+      }, 'Stale DONE transition');
+      assertLeaseRejected(function() {
+        QueueService.markRetry(
+          eventId,
+          createAppError('GEMINI_TEMPORARY_FAILURE', 'temporary'),
+          '2026-07-07T09:05:00+09:00',
+          staleLease
+        );
+      }, 'Stale RETRY_WAIT transition');
+      assertLeaseRejected(function() {
+        QueueService.markDead(
+          eventId,
+          createAppError('VALIDATION_REQUEST_INVALID', 'invalid'),
+          staleLease
+        );
+      }, 'Stale DEAD transition');
+      assertLeaseRejected(function() {
+        QueueService.markDone(
+          eventId,
+          { createdAt: '2026-07-07T09:01:00+09:00' }
+        );
+      }, 'Lease-less managed transition');
+
+      QueueService.markDone(
+        eventId,
+        { createdAt: '2026-07-07T09:02:00+09:00' },
+        activeLease
+      );
+      assert(
+        state.status === 'DONE' && state.lockedBy == null,
+        'Current lease owner could not complete the event.'
+      );
     });
   });
 
@@ -428,7 +696,18 @@ function runA6QueueSchedulerTests() {
             eventType: 'CHAT_REPLY',
             status: 'DEAD',
             payload: {
-              requestId: '11111111-1111-4111-8111-111111111111'
+              requestId: '11111111-1111-4111-8111-111111111111',
+              userMessageId: '33333333-3333-4333-8333-333333333333',
+              requestedAt: '2026-07-07T08:00:00+09:00',
+              characterRuntimeMode: 'enforced',
+              characterBinding: {
+                profileSchemaVersion: APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION,
+                profileRevision: 3,
+                policyVersion: APP_CONSTANTS.CHARACTER.POLICY_VERSION,
+                catalogVersion: APP_CONSTANTS.CHARACTER.CATALOG_VERSION,
+                characterPackId: 'warm-kansai-caretaker',
+                characterPackVersion: 'warm-kansai-caretaker.v1'
+              }
             }
           };
         },
@@ -447,7 +726,66 @@ function runA6QueueSchedulerTests() {
       );
       assert(inserted.eventId !== 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Requeue must create a new event id.');
       assert(event.dedupeKey === 'CHAT_REPLY_MANUAL:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222', 'Manual retry should use the manual dedupe format.');
+      assert(event.payload.characterRuntimeMode === 'enforced', 'Manual retry must preserve enforced runtime mode.');
+      assert(event.payload.characterBinding.profileRevision === 3, 'Manual retry must preserve the exact character binding.');
     });
+  });
+
+  test('CHAT_REPLY payload validation matches its persisted contract', function() {
+    var base = {
+      requestId: '11111111-1111-4111-8111-111111111111',
+      userMessageId: '33333333-3333-4333-8333-333333333333',
+      requestedAt: '2026-07-07T08:00:00+09:00',
+      characterRuntimeMode: 'enforced',
+      characterBinding: {
+        profileSchemaVersion: APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION,
+        profileRevision: 3,
+        policyVersion: APP_CONSTANTS.CHARACTER.POLICY_VERSION,
+        catalogVersion: APP_CONSTANTS.CHARACTER.CATALOG_VERSION,
+        characterPackId: 'warm-kansai-caretaker',
+        characterPackVersion: 'warm-kansai-caretaker.v1'
+      }
+    };
+    function invalid(patch) {
+      var value = JSON.parse(JSON.stringify(base));
+      Object.keys(patch).forEach(function(key) {
+        if (patch[key] === undefined) {
+          delete value[key];
+        } else {
+          value[key] = patch[key];
+        }
+      });
+      expectCode(function() {
+        QueueService.__test.normalizePayload('CHAT_REPLY', value);
+      }, 'VALIDATION_REQUEST_INVALID');
+    }
+
+    invalid({ userMessageId: undefined });
+    invalid({ userMessageId: 'not-a-uuid' });
+    invalid({ requestedAt: 'not-a-date' });
+    invalid({
+      manualRequestId: '22222222-2222-4222-8222-222222222222'
+    });
+    invalid({
+      originalEventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    });
+    invalid({
+      manualRequestId: 'not-a-uuid',
+      originalEventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    });
+    invalid({
+      characterRuntimeMode: 'legacy',
+      characterBinding: null,
+      completionRoute: 'PRODUCT_INFO'
+    });
+
+    var routed = JSON.parse(JSON.stringify(base));
+    routed.completionRoute = 'PRODUCT_INFO';
+    assert(
+      QueueService.__test.normalizePayload('CHAT_REPLY', routed).completionRoute ===
+        'PRODUCT_INFO',
+      'Enforced completion route should remain valid.'
+    );
   });
 
   test('requeueDeadAsNewEvent is idempotent for the same manual request id', function() {
@@ -624,6 +962,85 @@ function runA6QueueSchedulerTests() {
       assert(result.reason === 'QUEUE_LOCK_BUSY', 'The skip reason should be machine-readable.');
       assert(result.claimedCount === 0, 'A skipped worker must not claim events.');
       assert(logged && logged.level === 'WARN', 'The safe skip should be recorded as a warning.');
+    });
+  });
+
+  test('processQueueJob discards a stale lease result and continues its batch', function() {
+    var processed = [];
+    var completed = [];
+    var failureTransitions = 0;
+    var warnings = [];
+    var staleLease = 'queue-lease:v1:11111111-1111-4111-8111-111111111111';
+    var activeLease = 'queue-lease:v1:22222222-2222-4222-8222-222222222222';
+
+    withOverrides({
+      QueueService: {
+        recoverStale: function() {
+          return [];
+        },
+        claimBatch: function() {
+          return [{
+            eventId: '11111111-1111-4111-8111-111111111111',
+            eventType: 'MEMORY_EXTRACT',
+            payload: {},
+            lockedBy: staleLease
+          }, {
+            eventId: '22222222-2222-4222-8222-222222222222',
+            eventType: 'MEMORY_EXTRACT',
+            payload: {},
+            lockedBy: activeLease
+          }];
+        },
+        markDone: function(eventId, _, leaseToken) {
+          if (eventId === '11111111-1111-4111-8111-111111111111') {
+            assert(leaseToken === staleLease, 'Worker did not pass its claim lease.');
+            throw createAppError(
+              'QUEUE_LOCK_BUSY',
+              'lease lost',
+              { reason: 'QUEUE_LEASE_MISMATCH' }
+            );
+          }
+          assert(leaseToken === activeLease, 'Active event lease was not forwarded.');
+          completed.push(eventId);
+        },
+        markRetry: function() {
+          failureTransitions += 1;
+        },
+        markDead: function() {
+          failureTransitions += 1;
+        }
+      },
+      MemoryService: {
+        extract: function() {
+          processed.push('MEMORY_EXTRACT');
+          return {};
+        }
+      },
+      AppLogger: {
+        writeDebugLog: function(level, operation, message, details) {
+          if (
+            level === 'WARN' &&
+            details &&
+            details.reason === 'QUEUE_LEASE_MISMATCH'
+          ) {
+            warnings.push({
+              operation: operation,
+              message: message
+            });
+          }
+        }
+      }
+    }, function() {
+      var result = processQueueJob();
+      assert(result.claimedCount === 2, 'Both claimed events should be assessed.');
+      assert(processed.length === 2, 'Stale result stopped the remaining batch.');
+      assert(
+        completed.length === 1 &&
+          completed[0] === '22222222-2222-4222-8222-222222222222',
+        'Only the current lease owner should complete.'
+      );
+      assert(failureTransitions === 0, 'Stale result attempted a second lifecycle transition.');
+      assert(warnings.length === 1, 'Lease loss should produce one managed warning.');
     });
   });
 

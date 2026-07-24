@@ -106,6 +106,7 @@ var ApprovedCharacterArtifactService = (function() {
       var expectedScope = CharacterPayloadService.contextScopeForSurface(expectedSurface);
       CharacterContextService.assertClassifiedActive(context, expectedScope);
       assertMetadataMatchesContext_(artifact, context);
+      assertMetadataMatchesActiveRuntime_(artifact);
 
       var normalizedPayload = CharacterPayloadService.normalize(
         artifact.surface,
@@ -119,6 +120,30 @@ var ApprovedCharacterArtifactService = (function() {
       if (error && error.code === 'CHARACTER_ARTIFACT_INVALID') {
         throw error;
       }
+      throw artifactError_();
+    }
+  }
+
+  function assertMetadataMatchesActiveRuntime_(value) {
+    var active;
+    try {
+      active = CharacterProfileService.requireActive();
+      CharacterPackService.assertActiveBinding(
+        active && active.characterPackId,
+        active && active.characterPackVersion
+      );
+    } catch (ignored) {
+      throw artifactError_();
+    }
+    if (
+      !active ||
+      value.policyVersion !== active.policyVersion ||
+      value.catalogVersion !== active.catalogVersion ||
+      value.profileSchemaVersion !== active.profileSchemaVersion ||
+      value.profileRevision !== active.profileRevision ||
+      value.characterPackId !== active.characterPackId ||
+      value.characterPackVersion !== active.characterPackVersion
+    ) {
       throw artifactError_();
     }
   }

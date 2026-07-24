@@ -111,7 +111,9 @@ var WebController = (function() {
       ensure(Validators.isUuidV4(requestId), 'CONFIG_MISSING', 'requestId must be a UUID v4.');
 
       var pair = SheetRepository.getConversationByRequestId(requestId);
+      var event = findChatReplyEvent_(requestId);
       if (pair.userMessage && pair.assistantMessage) {
+        ChatService.assertPersistedPair(pair, event);
         return {
           ok: true,
           status: 'completed',
@@ -124,16 +126,35 @@ var WebController = (function() {
         };
       }
 
-      var event = findChatReplyEvent_(requestId);
+      if (
+        pair.userMessage &&
+        event &&
+        event.status === 'DONE' &&
+        event.payload &&
+        isNonCharacterRoute_(event.payload.completionRoute)
+      ) {
+        ChatService.assertPersistedRoute(pair.userMessage, event);
+        return buildRoutedChatResult_(
+          requestId,
+          pair.userMessage,
+          event.payload.completionRoute,
+          []
+        );
+      }
       if (pair.userMessage && event && event.status === 'DEAD') {
+        var queuedErrorCode = event.lastError && event.lastError.code
+          ? event.lastError.code
+          : 'QUEUE_DEAD';
         return buildFailedChatResult_(
           requestId,
           createAppError(
-            event.lastError && event.lastError.code ? event.lastError.code : 'QUEUE_DEAD',
+            queuedErrorCode,
             event.lastError && event.lastError.message ? event.lastError.message : 'The queued reply failed.',
             null,
             {
-              userMessage: event.lastError && event.lastError.message ? event.lastError.message : null
+              userMessage: isCharacterConfigErrorCode_(queuedErrorCode)
+                ? CharacterStatusNoticeService.forConfigError().message
+                : null
             }
           ),
           []
@@ -168,7 +189,18 @@ var WebController = (function() {
   }
 
   function sendChatViaQueueFallback_(request, context) {
+    var runtimeEnvelope = buildQueueRuntimeEnvelope_();
     var imagePayload = request.image ? persistTempImage_(request.image, context) : null;
+    var queuePayload = {
+      requestId: context.requestId,
+      userMessageId: null,
+      requestedAt: context.now,
+      image: imagePayload,
+      characterRuntimeMode: runtimeEnvelope.mode
+    };
+    if (runtimeEnvelope.binding) {
+      queuePayload.characterBinding = runtimeEnvelope.binding;
+    }
     var userMessage = SheetRepository.appendConversation({
       messageId: generateUuidV4(),
       requestId: context.requestId,
@@ -187,17 +219,13 @@ var WebController = (function() {
     SheetRepository.updateUserState({
       last_user_message_at: context.now
     });
+    queuePayload.userMessageId = userMessage.messageId;
 
     SheetRepository.insertEvent({
       eventId: generateUuidV4(),
       eventType: 'CHAT_REPLY',
       dedupeKey: buildChatReplyDedupeKey_(context.requestId),
-      payload: {
-        requestId: context.requestId,
-        userMessageId: userMessage.messageId,
-        requestedAt: context.now,
-        image: imagePayload
-      },
+      payload: queuePayload,
       status: 'PENDING',
       attemptCount: 0,
       nextAttemptAt: null,
@@ -217,7 +245,7 @@ var WebController = (function() {
       assistantMessage: null,
       retryAfterSeconds: DEFAULTS.pendingRetrySeconds,
       error: null,
-      warnings: ['A4 ChatService is not implemented yet. This request is queued for a later worker.']
+      warnings: ['返信処理をキューに登録しました。']
     };
   }
 
@@ -243,6 +271,8 @@ var WebController = (function() {
     var warnings = [];
     var status = 'ready';
     var lastUpdatedAt = toIsoStringInTokyo(new Date());
+    var partnerName = getConfigString_('PARTNER_NAME', DEFAULTS.partnerName);
+    var userName = getConfigString_('USER_NAME', DEFAULTS.userName);
 
     try {
       Validators.validateScriptProperties(PropertiesService.getScriptProperties().getProperties(), 'postSetup');
@@ -254,6 +284,14 @@ var WebController = (function() {
       if (latest.length > 0) {
         lastUpdatedAt = latest[0].createdAt;
       }
+      var characterRuntime = CharacterProfileService.inspectRuntime();
+      if (characterRuntime.state === 'ready') {
+        partnerName = characterRuntime.profile.identity.partnerName;
+        userName = characterRuntime.profile.identity.userAddress;
+      } else if (characterRuntime.runtimeMode === 'enforced') {
+        status = 'stopped';
+        warnings.push(CharacterStatusNoticeService.forConfigError().message);
+      }
     } catch (error) {
       status = 'stopped';
       warnings.push('The app is not fully configured. Run setup() and validatePostSetupProperties() in Apps Script.');
@@ -262,13 +300,13 @@ var WebController = (function() {
 
     if (!hasChatReplyWorker_()) {
       status = status === 'stopped' ? 'stopped' : 'degraded';
-      warnings.push('A4 ChatService is not implemented yet. Sending works as queue intake only.');
+      warnings.push('返信ワーカーを利用できないため、送信内容はキューで受け付けます。');
     }
 
     return {
       status: status,
-      partnerName: getConfigString_('PARTNER_NAME', DEFAULTS.partnerName),
-      userName: getConfigString_('USER_NAME', DEFAULTS.userName),
+      partnerName: partnerName,
+      userName: userName,
       lastUpdatedAt: lastUpdatedAt,
       warnings: dedupeStrings_(warnings)
     };
@@ -418,9 +456,31 @@ var WebController = (function() {
     };
   }
 
+  function buildRoutedChatResult_(requestId, userMessage, route, warnings) {
+    ensure(
+      isNonCharacterRoute_(route),
+      'VALIDATION_REQUEST_INVALID',
+      'Non-character chat route is invalid.'
+    );
+    return {
+      ok: true,
+      status: 'routed',
+      requestId: requestId,
+      userMessage: userMessage,
+      assistantMessage: null,
+      retryAfterSeconds: null,
+      error: null,
+      route: route,
+      notice: CharacterStatusNoticeService.forRoute(route),
+      warnings: warnings || []
+    };
+  }
+
   function findExistingChatResult_(requestId) {
     var pair = SheetRepository.getConversationByRequestId(requestId);
+    var event = findChatReplyEvent_(requestId);
     if (pair.userMessage && pair.assistantMessage) {
+      ChatService.assertPersistedPair(pair, event);
       return {
         ok: true,
         status: 'completed',
@@ -434,13 +494,35 @@ var WebController = (function() {
     }
 
     if (pair.userMessage) {
-      var event = findChatReplyEvent_(requestId);
+      if (
+        event &&
+        event.status === 'DONE' &&
+        event.payload &&
+        isNonCharacterRoute_(event.payload.completionRoute)
+      ) {
+        ChatService.assertPersistedRoute(pair.userMessage, event);
+        return buildRoutedChatResult_(
+          requestId,
+          pair.userMessage,
+          event.payload.completionRoute,
+          []
+        );
+      }
       if (event && event.status === 'DEAD') {
+        var existingErrorCode = event.lastError && event.lastError.code
+          ? event.lastError.code
+          : 'QUEUE_DEAD';
         return buildFailedChatResult_(
           requestId,
           createAppError(
-            event.lastError && event.lastError.code ? event.lastError.code : 'QUEUE_DEAD',
-            event.lastError && event.lastError.message ? event.lastError.message : 'The queued reply failed.'
+            existingErrorCode,
+            event.lastError && event.lastError.message ? event.lastError.message : 'The queued reply failed.',
+            null,
+            {
+              userMessage: isCharacterConfigErrorCode_(existingErrorCode)
+                ? CharacterStatusNoticeService.forConfigError().message
+                : null
+            }
           ),
           []
         );
@@ -478,6 +560,7 @@ var WebController = (function() {
 
     return {
       eventId: rows[0].event_id,
+      payload: rows[0].payload_json || null,
       status: rows[0].status,
       nextAttemptAt: rows[0].next_attempt_at,
       lastError: rows[0].last_error_code ? {
@@ -552,8 +635,40 @@ var WebController = (function() {
     };
   }
 
+  function buildQueueRuntimeEnvelope_() {
+    var inspection = CharacterProfileService.inspectRuntime();
+    if (inspection.state === 'legacy' && inspection.runtimeMode === 'legacy') {
+      return {
+        mode: 'legacy',
+        binding: null
+      };
+    }
+    if (inspection.state === 'ready' && inspection.runtimeMode === 'enforced') {
+      return {
+        mode: 'enforced',
+        binding: CharacterChatContextService.bindingFromInspection(inspection)
+      };
+    }
+    var notice = CharacterStatusNoticeService.forConfigError();
+    throw createAppError(
+      'CHARACTER_CONFIG_INVALID',
+      'Character runtime is not ready.',
+      { reason: inspection.reason || 'CHARACTER_RUNTIME_BLOCKED' },
+      { userMessage: notice.message }
+    );
+  }
+
   function buildChatReplyDedupeKey_(requestId) {
     return 'CHAT_REPLY:' + requestId;
+  }
+
+  function isNonCharacterRoute_(value) {
+    return value === 'PRODUCT_INFO' || value === 'ADMIN_OOC';
+  }
+
+  function isCharacterConfigErrorCode_(value) {
+    return value === 'CHARACTER_CONFIG_INVALID' ||
+      value === 'CHARACTER_CONFIG_CONFLICT';
   }
 
   function dedupeStrings_(values) {
