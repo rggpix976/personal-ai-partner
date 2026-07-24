@@ -18,14 +18,20 @@ var DiaryService = (function() {
     var requestedAt = toIsoStringInTokyo(new Date());
     var dedupeKey = buildDedupeKey_(normalizedDate);
     var candidateEventId = generateUuidV4();
+    var runtime = resolveDiaryRuntime_();
+    var eventPayload = {
+      diaryDate: normalizedDate,
+      requestedAt: requestedAt,
+      characterRuntimeMode: runtime.mode
+    };
+    if (runtime.mode === 'enforced') {
+      eventPayload.characterBinding = runtime.binding;
+    }
     var event = QueueService.enqueue({
       eventId: candidateEventId,
       eventType: 'DIARY_GENERATE',
       dedupeKey: dedupeKey,
-      payload: {
-        diaryDate: normalizedDate,
-        requestedAt: requestedAt
-      },
+      payload: eventPayload,
       status: 'PENDING',
       attemptCount: 0,
       nextAttemptAt: null,
@@ -54,7 +60,15 @@ var DiaryService = (function() {
     return getLifecycleState_(normalizedDate).status === 'DONE';
   }
 
-  function generate(eventPayload) {
+  function generate(eventPayload, options) {
+    var payload = validateGeneratePayload_(eventPayload);
+    if (payload.characterRuntimeMode === 'enforced') {
+      return generateEnforced_(payload, options);
+    }
+    return generateLegacy_(payload);
+  }
+
+  function generateLegacy_(eventPayload) {
     var payload = validateGeneratePayload_(eventPayload);
     var diaryDate = payload.diaryDate;
     var warnings = [];
@@ -147,6 +161,393 @@ var DiaryService = (function() {
     });
   }
 
+  function generateEnforced_(payload, options) {
+    var queueClaim = normalizeQueueClaim_(options);
+    ensure(
+      queueClaim != null,
+      'CHARACTER_ARTIFACT_INVALID',
+      'Enforced diary generation requires a current queue lease.'
+    );
+    assertQueueClaimCurrent_(queueClaim, payload);
+    SheetRepository.assertDiaryProvenanceColumns();
+
+    var diaryDate = payload.diaryDate;
+    var warnings = [];
+    var existingState = getDiaryState_(diaryDate);
+    ensureConsistentDiaryState_(existingState);
+    var persisted = readPersistedApprovedDiary_(
+      existingState.summary,
+      payload,
+      queueClaim
+    );
+
+    if (existingState.generated && !persisted) {
+      // A completed pre-enforcement diary remains authoritative historical
+      // content. It is not retroactively promoted into approved provenance.
+      return repairGeneratedDiaryState_(
+        diaryDate,
+        null,
+        null,
+        warnings
+      );
+    }
+    if (
+      existingState.generated &&
+      persisted &&
+      existingState.summary &&
+      existingState.summary.diary_status === 'DONE'
+    ) {
+      return buildSkippedResult_(diaryDate, warnings);
+    }
+
+    var messages = SheetRepository.listMessagesByDate(diaryDate);
+    var diaryConfig = loadDiaryConfig_();
+    var includePartnerWorld = shouldIncludePartnerWorld_(
+      diaryDate,
+      diaryConfig
+    );
+    if (
+      !persisted &&
+      messages.length === 0 &&
+      !includePartnerWorld
+    ) {
+      return LockManager.withScriptLock(
+        'diary-skip-' + diaryDate,
+        function() {
+          assertQueueClaimCurrent_(queueClaim, payload);
+          var skippedState = getDiaryState_(diaryDate);
+          ensureConsistentDiaryState_(skippedState);
+          if (skippedState.generated) {
+            return repairGeneratedDiaryStateWithoutLock_(
+              diaryDate,
+              messages,
+              null,
+              warnings
+            );
+          }
+          persistDiarySkipped_(diaryDate, messages);
+          return buildSkippedResult_(diaryDate, warnings);
+        }
+      );
+    }
+
+    var context = CharacterDiaryContextService.build({
+      diaryDate: diaryDate,
+      currentTime: payload.requestedAt,
+      messages: messages,
+      mayCreatePartnerWorld: includePartnerWorld
+    });
+    CharacterDiaryContextService.assertBindingMatchesContext(
+      payload.characterBinding,
+      context
+    );
+    var session = CharacterDiaryGeminiAdapter.createSession({
+      diaryDate: diaryDate
+    });
+    var coordinatorOptions = {
+      context: context,
+      surface: 'DIARY',
+      classificationSignals:
+        CharacterDiaryContextService.classificationSignals(context),
+      verifierFn: session.verify,
+      metricEmitter: session.emitMetric
+    };
+    if (persisted) {
+      coordinatorOptions.generate = function() {
+        return persisted.payload;
+      };
+    } else {
+      coordinatorOptions.generate = session.generate;
+      coordinatorOptions.rewrite = session.rewrite;
+    }
+
+    var approval;
+    try {
+      approval = CharacterOutputCoordinator.approve(coordinatorOptions);
+    } catch (error) {
+      recordCharacterUsageBestEffort_(
+        payload.requestedAt,
+        session.getUsage()
+      );
+      throw normalizeError(error);
+    }
+    ensure(
+      approval &&
+        approval.artifact &&
+        approval.classifiedContext,
+      'CHARACTER_OUTPUT_BLOCKED',
+      'No approved diary output was available.'
+    );
+    recordCharacterUsageBestEffort_(
+      payload.requestedAt,
+      session.getUsage()
+    );
+    if (
+      persisted &&
+      JSON.stringify(approval.artifact.payload) !==
+        JSON.stringify(persisted.payload)
+    ) {
+      throw createAppError(
+        'STORAGE_DATA_CORRUPTED',
+        'Persisted diary content changed during reapproval.'
+      );
+    }
+    var generationMetadata = persisted
+      ? null
+      : session.getGenerationMetadata(approval.artifact.source);
+    return deliverApprovedDiary_({
+      payload: payload,
+      queueClaim: queueClaim,
+      messages: messages,
+      warnings: warnings,
+      artifact: approval.artifact,
+      context: approval.classifiedContext,
+      metricEmitter: session.emitMetric,
+      persisted: persisted,
+      generationMetadata: generationMetadata
+    });
+  }
+
+  function deliverApprovedDiary_(input) {
+    return CharacterSinkAdapter.deliver({
+      artifact: input.artifact,
+      expectedSurface: 'DIARY',
+      context: input.context,
+      metricEmitter: input.metricEmitter,
+      write: function(approvedPayload, artifact) {
+        ensure(
+          JSON.stringify(approvedPayload) ===
+            JSON.stringify(input.artifact.payload),
+          'CHARACTER_ARTIFACT_INVALID',
+          'Approved diary content changed before persistence.'
+        );
+        assertQueueClaimCurrent_(input.queueClaim, input.payload);
+        return LockManager.withScriptLock(
+          'diary-generate-' + input.payload.diaryDate,
+          function() {
+            assertQueueClaimCurrent_(
+              input.queueClaim,
+              input.payload
+            );
+            var diaryDate = input.payload.diaryDate;
+            var state = getDiaryState_(diaryDate);
+            ensureConsistentDiaryState_(state);
+            var stored = readPersistedApprovedDiary_(
+              state.summary,
+              input.payload,
+              input.queueClaim
+            );
+            if (
+              stored &&
+              JSON.stringify(stored.payload) !==
+                JSON.stringify(approvedPayload)
+            ) {
+              throw createAppError(
+                'STORAGE_DATA_CORRUPTED',
+                'Approved diary payload does not match persisted provenance.'
+              );
+            }
+            var approvalMetadata = stored
+              ? stored.approval
+              : characterApprovalFromArtifact_(artifact);
+            var originEventId = stored
+              ? stored.originEventId
+              : input.queueClaim.eventId;
+            if (!stored) {
+              persistApprovedDiaryPending_(
+                diaryDate,
+                input.messages,
+                approvedPayload,
+                approvalMetadata,
+                originEventId
+              );
+            }
+
+            var appendResult;
+            if (state.anchorCount === 1 && state.anchor) {
+              appendResult = {
+                appended: false,
+                anchor: state.anchor,
+                documentId: null
+              };
+            } else {
+              appendResult = DocumentRepository.appendDiaryEntry({
+                diaryDate: diaryDate,
+                title: approvedPayload.title,
+                body: renderDiaryBody_(approvedPayload)
+              });
+            }
+            var anchor = appendResult.anchor ||
+              DocumentRepository.findDiaryEntryAnchor(diaryDate);
+            ensure(
+              anchor,
+              'STORAGE_WRITE_FAILED',
+              'Diary document anchor was not available after persistence.'
+            );
+            persistDiarySummary_(
+              diaryDate,
+              input.messages,
+              approvedPayload,
+              anchor,
+              {
+                payload: approvedPayload,
+                approval: approvalMetadata,
+                originEventId: originEventId
+              }
+            );
+            return {
+              generated: appendResult.appended !== false,
+              skipped: appendResult.appended === false,
+              diaryDate: diaryDate,
+              documentId: appendResult.documentId || null,
+              summaryId: diaryDate,
+              model: input.generationMetadata
+                ? input.generationMetadata.model || null
+                : null,
+              warnings: input.warnings || []
+            };
+          }
+        );
+      }
+    });
+  }
+
+  function persistApprovedDiaryPending_(
+    diaryDate,
+    messages,
+    diary,
+    approval,
+    originEventId
+  ) {
+    var now = toIsoStringInTokyo(new Date());
+    var existing = SheetRepository.getDailySummary(diaryDate);
+    SheetRepository.upsertDailySummary({
+      summaryDate: diaryDate,
+      conversationCount: messages.length,
+      summaryText: existing ? existing.summary_text : null,
+      keyTopics: existing ? existing.key_topics_json : null,
+      memoryCandidateCount: existing
+        ? Number(existing.memory_candidate_count || 0)
+        : 0,
+      diaryStatus: 'PENDING',
+      diaryDocAnchor: null,
+      createdAt: existing ? existing.created_at : now,
+      updatedAt: now,
+      diaryPayload: diary,
+      diaryApproval: approval,
+      diaryOriginEventId: originEventId
+    });
+  }
+
+  function readPersistedApprovedDiary_(summary, payload, queueClaim) {
+    if (!summary) {
+      return null;
+    }
+    var hasPayload = summary.diary_payload_json != null;
+    var hasApproval = summary.diary_approval_json != null;
+    var hasOrigin = summary.diary_origin_event_id != null &&
+      String(summary.diary_origin_event_id).trim() !== '';
+    if (!hasPayload && !hasApproval && !hasOrigin) {
+      return null;
+    }
+    ensure(
+      hasPayload && hasApproval && hasOrigin,
+      'STORAGE_DATA_CORRUPTED',
+      'Stored diary provenance is incomplete.'
+    );
+    var normalizedPayload;
+    try {
+      normalizedPayload = CharacterPayloadService.normalize(
+        'DIARY',
+        summary.diary_payload_json
+      );
+    } catch (ignored) {
+      throw createAppError(
+        'STORAGE_DATA_CORRUPTED',
+        'Stored diary payload is invalid.'
+      );
+    }
+    ensure(
+      isDiaryStringList_(normalizedPayload.partnerWorldEvents) &&
+        isDiaryStringList_(normalizedPayload.thingsToRemember) &&
+        isDiaryStringList_(normalizedPayload.unresolvedFollowUps),
+      'STORAGE_DATA_CORRUPTED',
+      'Stored diary collections are invalid.'
+    );
+    var approval = normalizeStoredDiaryApproval_(
+      summary.diary_approval_json
+    );
+    var originEventId = String(summary.diary_origin_event_id);
+    ensure(
+      Validators.isUuidV4(originEventId) &&
+        (
+          originEventId === queueClaim.eventId ||
+          (
+            payload.originalEventId != null &&
+            originEventId === payload.originalEventId
+          )
+        ),
+      'STORAGE_DATA_CORRUPTED',
+      'Stored diary provenance belongs to a different event.'
+    );
+    return {
+      payload: normalizedPayload,
+      approval: approval,
+      originEventId: originEventId
+    };
+  }
+
+  function normalizeStoredDiaryApproval_(value) {
+    var fields = APP_CONSTANTS.CHARACTER.APPROVAL_FIELDS;
+    ensure(
+      value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        Object.keys(value).length === fields.length &&
+        fields.every(function(field) {
+          return Object.prototype.hasOwnProperty.call(value, field);
+        }) &&
+        value.surface === 'DIARY' &&
+        (
+          value.source === 'generated' ||
+          value.source === 'rewrite'
+        ) &&
+        value.policyVersion === APP_CONSTANTS.CHARACTER.POLICY_VERSION &&
+        value.profileSchemaVersion ===
+          APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION &&
+        Number.isSafeInteger(Number(value.profileRevision)) &&
+        Number(value.profileRevision) > 0 &&
+        value.catalogVersion === APP_CONSTANTS.CHARACTER.CATALOG_VERSION &&
+        typeof value.characterPackId === 'string' &&
+        typeof value.characterPackVersion === 'string',
+      'STORAGE_DATA_CORRUPTED',
+      'Stored diary approval is invalid.'
+    );
+    return {
+      surface: value.surface,
+      source: value.source,
+      policyVersion: value.policyVersion,
+      profileSchemaVersion: value.profileSchemaVersion,
+      profileRevision: Number(value.profileRevision),
+      catalogVersion: value.catalogVersion,
+      characterPackId: value.characterPackId,
+      characterPackVersion: value.characterPackVersion
+    };
+  }
+
+  function characterApprovalFromArtifact_(artifact) {
+    return {
+      surface: artifact.surface,
+      source: artifact.source,
+      policyVersion: artifact.policyVersion,
+      profileSchemaVersion: artifact.profileSchemaVersion,
+      profileRevision: artifact.profileRevision,
+      catalogVersion: artifact.catalogVersion,
+      characterPackId: artifact.characterPackId,
+      characterPackVersion: artifact.characterPackVersion
+    };
+  }
+
   function markDailySummaryPending_(diaryDate, now, allowRepairTransition) {
     return LockManager.withScriptLock('diary-pending-' + diaryDate, function() {
       var existing = SheetRepository.getDailySummary(diaryDate);
@@ -184,10 +585,54 @@ var DiaryService = (function() {
     payload = payload || {};
     ensure(Validators.isDateString(payload.diaryDate), 'VALIDATION_REQUEST_INVALID', 'eventPayload.diaryDate must be a yyyy-MM-dd string.');
     ensure(Validators.isIsoDateTimeString(payload.requestedAt), 'VALIDATION_REQUEST_INVALID', 'eventPayload.requestedAt must be an ISO 8601 string.');
-    return {
+    var runtimeMode = payload.characterRuntimeMode == null
+      ? 'legacy'
+      : String(payload.characterRuntimeMode);
+    ensure(
+      runtimeMode === 'legacy' || runtimeMode === 'enforced',
+      'VALIDATION_REQUEST_INVALID',
+      'eventPayload.characterRuntimeMode is invalid.'
+    );
+    var hasManualRequestId = payload.manualRequestId != null;
+    var hasOriginalEventId = payload.originalEventId != null;
+    ensure(
+      hasManualRequestId === hasOriginalEventId,
+      'VALIDATION_REQUEST_INVALID',
+      'Diary manual repair ids must be supplied together.'
+    );
+    if (hasManualRequestId) {
+      Validators.assertUuidV4(
+        payload.manualRequestId,
+        'eventPayload.manualRequestId'
+      );
+      Validators.assertUuidV4(
+        payload.originalEventId,
+        'eventPayload.originalEventId'
+      );
+    }
+    var normalized = {
       diaryDate: payload.diaryDate,
-      requestedAt: payload.requestedAt
+      requestedAt: payload.requestedAt,
+      characterRuntimeMode: runtimeMode,
+      manualRequestId: hasManualRequestId
+        ? payload.manualRequestId
+        : null,
+      originalEventId: hasOriginalEventId
+        ? payload.originalEventId
+        : null
     };
+    if (runtimeMode === 'enforced') {
+      normalized.characterBinding = normalizeCharacterBinding_(
+        payload.characterBinding
+      );
+    } else {
+      ensure(
+        payload.characterBinding == null,
+        'VALIDATION_REQUEST_INVALID',
+        'Legacy diary payload cannot contain a character binding.'
+      );
+    }
+    return normalized;
   }
 
   function getDiaryState_(diaryDate) {
@@ -273,10 +718,10 @@ var DiaryService = (function() {
     return buildSkippedResult_(diaryDate, warnings || [], documentId || null);
   }
 
-  function persistDiarySummary_(diaryDate, messages, diary, anchor) {
+  function persistDiarySummary_(diaryDate, messages, diary, anchor, provenance) {
     var now = toIsoStringInTokyo(new Date());
     var existingSummary = SheetRepository.getDailySummary(diaryDate);
-    SheetRepository.upsertDailySummary({
+    var summary = {
       summaryDate: diaryDate,
       conversationCount: messages.length,
       summaryText: summarizeDiaryForSheet_(diary),
@@ -286,7 +731,13 @@ var DiaryService = (function() {
       diaryDocAnchor: anchor,
       createdAt: existingSummary ? existingSummary.created_at : now,
       updatedAt: now
-    });
+    };
+    if (provenance) {
+      summary.diaryPayload = provenance.payload;
+      summary.diaryApproval = provenance.approval;
+      summary.diaryOriginEventId = provenance.originEventId;
+    }
+    SheetRepository.upsertDailySummary(summary);
     SheetRepository.updateUserState({
       last_diary_date: diaryDate
     });
@@ -496,6 +947,12 @@ var DiaryService = (function() {
     } else if (lifecycle.status === 'DONE' || lifecycle.status === 'NONE') {
       result.action = 'NO_ACTION';
       result.reason = 'DIARY_ALREADY_TERMINAL';
+    } else if (
+      event.payload &&
+      event.payload.characterRuntimeMode === 'enforced'
+    ) {
+      result.action = 'MANUAL_REVIEW_REQUIRED';
+      result.reason = 'ENFORCED_DIARY_REQUIRES_FRESH_QUEUE_LEASE';
     } else if (activeEvent) {
       result.action = 'NO_ACTION';
       result.reason = 'ACTIVE_DIARY_EVENT_EXISTS';
@@ -982,6 +1439,209 @@ var DiaryService = (function() {
 
   function buildDedupeKey_(diaryDate) {
     return 'DIARY_GENERATE:' + diaryDate;
+  }
+
+  function resolveDiaryRuntime_() {
+    if (
+      !getConfigBool_(
+        'DIARY_CHARACTER_ENFORCEMENT_ENABLED',
+        false
+      )
+    ) {
+      return {
+        mode: 'legacy',
+        binding: null
+      };
+    }
+    var inspection = CharacterProfileService.inspectRuntime();
+    if (
+      inspection.state === 'legacy' &&
+      inspection.runtimeMode === 'legacy'
+    ) {
+      return {
+        mode: 'legacy',
+        binding: null
+      };
+    }
+    ensure(
+      inspection.state === 'ready' &&
+        inspection.runtimeMode === 'enforced',
+      'CHARACTER_CONFIG_INVALID',
+      'Character runtime is not ready for diary generation.',
+      {
+        reason: inspection.reason || 'CHARACTER_RUNTIME_BLOCKED'
+      }
+    );
+    return {
+      mode: 'enforced',
+      binding:
+        CharacterDiaryContextService.bindingFromInspection(inspection)
+    };
+  }
+
+  function normalizeCharacterBinding_(value) {
+    var fields = [
+      'profileSchemaVersion',
+      'profileRevision',
+      'policyVersion',
+      'catalogVersion',
+      'characterPackId',
+      'characterPackVersion'
+    ];
+    ensure(
+      value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        Object.keys(value).length === fields.length &&
+        fields.every(function(field) {
+          return Object.prototype.hasOwnProperty.call(value, field);
+        }) &&
+        value.profileSchemaVersion ===
+          APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION &&
+        typeof value.profileRevision === 'number' &&
+        Number.isSafeInteger(value.profileRevision) &&
+        value.profileRevision > 0 &&
+        value.policyVersion ===
+          APP_CONSTANTS.CHARACTER.POLICY_VERSION &&
+        value.catalogVersion ===
+          APP_CONSTANTS.CHARACTER.CATALOG_VERSION &&
+        typeof value.characterPackId === 'string' &&
+        /^[a-z0-9][a-z0-9-]{2,63}$/.test(value.characterPackId) &&
+        typeof value.characterPackVersion === 'string' &&
+        /^[a-z0-9][a-z0-9.-]{2,79}$/.test(
+          value.characterPackVersion
+        ),
+      'VALIDATION_REQUEST_INVALID',
+      'DIARY_GENERATE character binding is invalid.'
+    );
+    return {
+      profileSchemaVersion: value.profileSchemaVersion,
+      profileRevision: value.profileRevision,
+      policyVersion: value.policyVersion,
+      catalogVersion: value.catalogVersion,
+      characterPackId: value.characterPackId,
+      characterPackVersion: value.characterPackVersion
+    };
+  }
+
+  function normalizeQueueClaim_(options) {
+    options = options || {};
+    var hasEventId = options.eventId != null &&
+      String(options.eventId).trim() !== '';
+    var hasLeaseToken = options.leaseToken != null &&
+      String(options.leaseToken).trim() !== '';
+    ensure(
+      hasEventId === hasLeaseToken,
+      'VALIDATION_REQUEST_INVALID',
+      'Diary eventId and leaseToken must be supplied together.'
+    );
+    if (!hasEventId) {
+      return null;
+    }
+    ensure(
+      Validators.isUuidV4(String(options.eventId)),
+      'VALIDATION_REQUEST_INVALID',
+      'Diary eventId must be a UUID v4.'
+    );
+    return {
+      eventId: String(options.eventId),
+      leaseToken: String(options.leaseToken)
+    };
+  }
+
+  function assertQueueClaimCurrent_(queueClaim, payload) {
+    var event = SheetRepository.getEventById(queueClaim.eventId);
+    ensure(
+      event &&
+        event.eventType === 'DIARY_GENERATE' &&
+        event.payload,
+      'STORAGE_DATA_CORRUPTED',
+      'Diary queue event linkage is invalid.'
+    );
+    ensure(
+      diaryQueuePayloadIdentity_(event.payload) ===
+        diaryQueuePayloadIdentity_(payload),
+      'STORAGE_DATA_CORRUPTED',
+      'Diary queue event payload changed after claim.'
+    );
+    if (
+      event.status !== 'PROCESSING' ||
+      event.lockedBy == null ||
+      String(event.lockedBy) !== queueClaim.leaseToken
+    ) {
+      throw createAppError(
+        'QUEUE_LOCK_BUSY',
+        'Queue event lease no longer belongs to this worker.',
+        {
+          reason: 'QUEUE_LEASE_MISMATCH'
+        }
+      );
+    }
+    return true;
+  }
+
+  function diaryQueuePayloadIdentity_(payload) {
+    return JSON.stringify(validateGeneratePayload_(payload));
+  }
+
+  function normalizeCharacterUsage_(usage) {
+    usage = usage || {};
+    return {
+      apiCalls: normalizeUsageNumber_(usage.apiCalls),
+      imageCalls: normalizeUsageNumber_(usage.imageCalls),
+      inputTokens: normalizeUsageNumber_(usage.inputTokens),
+      outputTokens: normalizeUsageNumber_(usage.outputTokens)
+    };
+  }
+
+  function normalizeUsageNumber_(value) {
+    var number = Number(value || 0);
+    if (!isFinite(number) || number < 0) {
+      return 0;
+    }
+    return Math.floor(number);
+  }
+
+  function isDiaryStringList_(value) {
+    return Array.isArray(value) &&
+      value.length <= 50 &&
+      value.every(function(item) {
+        return typeof item === 'string' &&
+          item.trim() !== '' &&
+          item.length <= 1000;
+      });
+  }
+
+  function recordCharacterUsageBestEffort_(createdAt, rawUsage) {
+    var usage = normalizeCharacterUsage_(rawUsage);
+    if (usage.apiCalls < 1) {
+      return false;
+    }
+    try {
+      SheetRepository.incrementUsageDaily(
+        formatDateInTokyo(parseIsoToDate(createdAt)),
+        {
+          apiCalls: usage.apiCalls,
+          imageCalls: usage.imageCalls,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens
+        }
+      );
+      return true;
+    } catch (error) {
+      try {
+        AppLogger.writeDebugLog(
+          'WARN',
+          'recordDiaryCharacterUsage',
+          'Diary character usage accounting failed.',
+          {
+            code: normalizeError(error).code
+          },
+          null
+        );
+      } catch (ignored) {}
+      return false;
+    }
   }
 
   return {

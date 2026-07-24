@@ -113,9 +113,9 @@ Start with these documents:
 - [`docs/features/CHARACTER_IMMERSION.md`](docs/features/CHARACTER_IMMERSION.md):
   single-CharacterPack deployment model, minimal V2 profile, immersion,
   exceptional responses, product/UI separation, proactive target, and
-  acceptance specification; chat and proactive integrations are implemented
-  but activation and the diary/memory/settings surface integrations remain
-  pending
+  acceptance specification; chat, proactive, and structured diary integrations
+  are implemented behind legacy-safe defaults, while activation and the
+  memory/settings surface integrations remain pending
 - [`docs/qa/A7_MANUAL_GAS_TEST_PLAN.md`](docs/qa/A7_MANUAL_GAS_TEST_PLAN.md):
   manual Apps Script validation
 - [`docs/qa/A7_SECURITY_REVIEW.md`](docs/qa/A7_SECURITY_REVIEW.md):

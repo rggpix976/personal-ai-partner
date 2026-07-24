@@ -147,25 +147,69 @@ var GeminiClient = (function() {
       };
     }
 
-    if (schemaName === 'diary-entry') {
+    if (
+      schemaName === 'diary-entry' ||
+      schemaName === 'character-diary'
+    ) {
       return {
         type: 'object',
         additionalProperties: false,
         properties: {
-          title: { type: 'string' },
-          narrative: { type: 'string' },
-          groundedSummary: { type: 'string' },
+          title: schemaName === 'character-diary'
+            ? {
+              type: 'string',
+              minLength: 1,
+              maxLength:
+                APP_CONSTANTS.CHARACTER.SURFACE_LIMITS.DIARY.title
+            }
+            : { type: 'string' },
+          narrative: schemaName === 'character-diary'
+            ? {
+              type: 'string',
+              minLength: 1,
+              maxLength:
+                APP_CONSTANTS.CHARACTER.SURFACE_LIMITS.DIARY.narrative
+            }
+            : { type: 'string' },
+          groundedSummary: schemaName === 'character-diary'
+            ? {
+              type: 'string',
+              maxLength:
+                APP_CONSTANTS.CHARACTER.SURFACE_LIMITS.DIARY.groundedSummary
+            }
+            : { type: 'string' },
           partnerWorldEvents: {
             type: 'array',
-            items: { type: 'string' }
+            maxItems: schemaName === 'character-diary' ? 50 : undefined,
+            items: schemaName === 'character-diary'
+              ? {
+                type: 'string',
+                minLength: 1,
+                maxLength: 1000
+              }
+              : { type: 'string' }
           },
           thingsToRemember: {
             type: 'array',
-            items: { type: 'string' }
+            maxItems: schemaName === 'character-diary' ? 50 : undefined,
+            items: schemaName === 'character-diary'
+              ? {
+                type: 'string',
+                minLength: 1,
+                maxLength: 1000
+              }
+              : { type: 'string' }
           },
           unresolvedFollowUps: {
             type: 'array',
-            items: { type: 'string' }
+            maxItems: schemaName === 'character-diary' ? 50 : undefined,
+            items: schemaName === 'character-diary'
+              ? {
+                type: 'string',
+                minLength: 1,
+                maxLength: 1000
+              }
+              : { type: 'string' }
           }
         },
         required: [

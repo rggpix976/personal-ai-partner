@@ -272,6 +272,40 @@ var SheetRepository = (function() {
     );
   }
 
+  function assertDiaryProvenanceHeaders_(headers) {
+    var expectedHeaders = APP_CONSTANTS.SHEET_SCHEMAS[
+      APP_CONSTANTS.SHEETS.DAILY_SUMMARIES
+    ].map(function(column) {
+      return column.name;
+    });
+    var payloadIndex = expectedHeaders.indexOf('diary_payload_json');
+    var approvalIndex = expectedHeaders.indexOf('diary_approval_json');
+    var originIndex = expectedHeaders.indexOf('diary_origin_event_id');
+    if (
+      payloadIndex < 0 ||
+      approvalIndex !== payloadIndex + 1 ||
+      originIndex !== approvalIndex + 1 ||
+      !Array.isArray(headers) ||
+      headers.length <= originIndex ||
+      headers[payloadIndex] !== 'diary_payload_json' ||
+      headers[approvalIndex] !== 'diary_approval_json' ||
+      headers[originIndex] !== 'diary_origin_event_id'
+    ) {
+      throw createAppError(
+        'STORAGE_DATA_CORRUPTED',
+        'Diary provenance columns are invalid.',
+        { reason: 'DIARY_PROVENANCE_COLUMNS_INVALID' }
+      );
+    }
+    return true;
+  }
+
+  function assertDiaryProvenanceColumns() {
+    return assertDiaryProvenanceHeaders_(
+      getHeaders(APP_CONSTANTS.SHEETS.DAILY_SUMMARIES)
+    );
+  }
+
   function normalizeCharacterApproval_(value, errorCode) {
     if (value == null) {
       return null;
@@ -1497,6 +1531,96 @@ var SheetRepository = (function() {
 
   function upsertDailySummary(summary) {
     Validators.assertDateString(summary.summaryDate, 'summary.summaryDate');
+    var existingRowIndex = findRowIndexByColumnValue(
+      APP_CONSTANTS.SHEETS.DAILY_SUMMARIES,
+      'summary_date',
+      summary.summaryDate
+    );
+    var existingRow = existingRowIndex === -1
+      ? null
+      : getDailySummary(summary.summaryDate);
+    var hasOwn = Object.prototype.hasOwnProperty;
+    var suppliesPayload = hasOwn.call(summary, 'diaryPayload');
+    var suppliesApproval = hasOwn.call(summary, 'diaryApproval');
+    var suppliesOrigin = hasOwn.call(summary, 'diaryOriginEventId');
+    ensure(
+      suppliesPayload === suppliesApproval &&
+        suppliesApproval === suppliesOrigin,
+      'VALIDATION_REQUEST_INVALID',
+      'Diary provenance fields must be supplied together.'
+    );
+
+    var diaryPayload = existingRow
+      ? existingRow.diary_payload_json || null
+      : null;
+    var diaryApproval = existingRow
+      ? existingRow.diary_approval_json || null
+      : null;
+    var diaryOriginEventId = existingRow
+      ? normalizeProactiveOriginEventId_(
+        existingRow.diary_origin_event_id,
+        'STORAGE_DATA_CORRUPTED'
+      )
+      : null;
+
+    if (suppliesPayload) {
+      ensure(
+        summary.diaryPayload &&
+          typeof summary.diaryPayload === 'object' &&
+          !Array.isArray(summary.diaryPayload),
+        'VALIDATION_REQUEST_INVALID',
+        'Diary payload provenance is invalid.'
+      );
+      var normalizedDiaryApproval = normalizeCharacterApproval_(
+        summary.diaryApproval,
+        'VALIDATION_REQUEST_INVALID'
+      );
+      ensure(
+        normalizedDiaryApproval &&
+          normalizedDiaryApproval.surface === 'DIARY' &&
+          (
+            normalizedDiaryApproval.source === 'generated' ||
+            normalizedDiaryApproval.source === 'rewrite'
+          ),
+        'VALIDATION_REQUEST_INVALID',
+        'Diary approval provenance is invalid.'
+      );
+      var normalizedDiaryOrigin = normalizeProactiveOriginEventId_(
+        summary.diaryOriginEventId,
+        'VALIDATION_REQUEST_INVALID'
+      );
+      ensure(
+        normalizedDiaryOrigin != null,
+        'VALIDATION_REQUEST_INVALID',
+        'Diary origin event is required.'
+      );
+      if (diaryPayload != null || diaryApproval != null || diaryOriginEventId != null) {
+        ensure(
+          diaryPayload != null &&
+            diaryApproval != null &&
+            diaryOriginEventId != null &&
+            JSON.stringify(diaryPayload) ===
+              JSON.stringify(summary.diaryPayload) &&
+            JSON.stringify(diaryApproval) ===
+              JSON.stringify(normalizedDiaryApproval) &&
+            diaryOriginEventId === normalizedDiaryOrigin,
+          'STORAGE_DATA_CORRUPTED',
+          'Approved diary provenance is immutable.'
+        );
+      } else {
+        ensure(
+          summary.diaryStatus === 'PENDING' ||
+            summary.diaryStatus === 'DONE',
+          'VALIDATION_REQUEST_INVALID',
+          'Approved diary content must begin in a controlled lifecycle state.'
+        );
+        assertDiaryProvenanceColumns();
+        diaryPayload = summary.diaryPayload;
+        diaryApproval = normalizedDiaryApproval;
+        diaryOriginEventId = normalizedDiaryOrigin;
+      }
+    }
+
     var row = {
       summary_date: summary.summaryDate,
       conversation_count: Number(summary.conversationCount || 0),
@@ -1506,10 +1630,12 @@ var SheetRepository = (function() {
       diary_status: summary.diaryStatus || 'NONE',
       diary_doc_anchor: summary.diaryDocAnchor || null,
       created_at: summary.createdAt,
-      updated_at: summary.updatedAt
+      updated_at: summary.updatedAt,
+      diary_payload_json: diaryPayload,
+      diary_approval_json: diaryApproval,
+      diary_origin_event_id: diaryOriginEventId
     };
-    var existingRow = findRowIndexByColumnValue(APP_CONSTANTS.SHEETS.DAILY_SUMMARIES, 'summary_date', summary.summaryDate);
-    if (existingRow === -1) {
+    if (existingRowIndex === -1) {
       appendRow(APP_CONSTANTS.SHEETS.DAILY_SUMMARIES, row);
     } else {
       updateRowByKey(APP_CONSTANTS.SHEETS.DAILY_SUMMARIES, 'summary_date', summary.summaryDate, row);
@@ -1525,6 +1651,7 @@ var SheetRepository = (function() {
     flush: flush,
     assertCharacterApprovalColumns: assertCharacterApprovalColumns,
     assertProactiveDeliveryColumns: assertProactiveDeliveryColumns,
+    assertDiaryProvenanceColumns: assertDiaryProvenanceColumns,
     appendConversation: appendConversation,
     updateConversationMessage: updateConversationMessage,
     listRecentMessages: listRecentMessages,
@@ -1565,6 +1692,7 @@ var SheetRepository = (function() {
       selectRecentDiarySummariesBefore: selectRecentDiarySummariesBefore_,
       assertCharacterApprovalHeaders: assertCharacterApprovalHeaders_,
       assertProactiveDeliveryHeaders: assertProactiveDeliveryHeaders_,
+      assertDiaryProvenanceHeaders: assertDiaryProvenanceHeaders_,
       normalizeCharacterApproval: normalizeCharacterApproval_,
       characterApprovalToRow: characterApprovalToRow_,
       characterApprovalFromRow: characterApprovalFromRow_,

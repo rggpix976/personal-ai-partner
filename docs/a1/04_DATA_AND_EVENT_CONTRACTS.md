@@ -194,6 +194,25 @@ assistant行または画像summaryの保存直前に同じevent statusとlease�
 `repairDiaryGenerationBacklog()`が対象日を`DONE`または`NONE`へ整合してから
 未解決`DEAD`を再起票する。戻り値は集計値だけとし、IDや本文を含めない。
 
+新規`DIARY_GENERATE` payloadは`characterRuntimeMode`を必須とする。
+`enforced`は起票時点の`characterBinding`も必須とし、`legacy`ではbindingを禁止する。
+既存のmodeなしイベントはruntime互換のため`legacy`として読む。手動修復イベントは
+元イベントのmode/bindingを維持する。
+
+enforced日記は現在の`PROCESSING` leaseを持つworkerだけが処理する。承認後、Docsへの
+書き込みより先に次の3列を同時に保存し、以後は不変とする。
+
+```text
+diary_payload_json
+diary_approval_json
+diary_origin_event_id
+```
+
+途中失敗の再試行では保存済みpayloadそのものを現行policy/profile/catalog/packで
+再検証し、別本文を生成しない。3列の部分欠落、起票event不一致、payload変更、
+lease喪失はcontent sink前にfail closedする。旧日記行を承認済み行へ自動昇格しない。
+Partner World継続情報は`DONE`かつ完全で現行の`DIARY`承認証跡を持つ行だけから読む。
+
 ## 4.8 再試行
 
 共通一時障害:
@@ -389,12 +408,14 @@ identityへbindして保持し、JSON round-tripしたlookalikeや同versionの�
 artifactはfactory発行、surface/payload対応、active policy/profile/catalog revisionと
 CharacterPack bindingをsink直前に再検証する。raw、wrong-surface、missing-version、
 stale、偽造artifactではunderlying sinkを呼ばない。PR 3はこの境界をspyで証明し、
-PR 4はchatのRepository/Web、PR 5はenforced proactiveのmarker/mailへ接続する。
-Docsとmemory upsertはまだ接続しない。
+PR 4はchatのRepository/Web、PR 5はenforced proactiveのmarker/mail、PR 6は
+enforced diaryのDocs/summaryへ接続する。memory upsertはまだ接続しない。
 
 DIARYとMEMORYのpayloadはPR 3ではtop-level shape、JSON-safe境界、件数・文字数上限
-だけを固定する。Partner World provenanceとmemory candidate単位の詳細契約は、それぞれ
-PR 6とPR 7でsurface接続と同時に追加する。machine-readable schemaはnested string、
+だけを固定した。PR 6のDIARY生成・保存経路は3配列を最大50件の非空plain string
+（各1000文字以下）へ限定し、Partner World provenanceを上記3列で保存する。
+memory candidate単位の詳細契約はPR 7でsurface接続と同時に追加する。
+共通machine-readable schemaはnested string、
 array、object key数、最大64文字の固定構造キーexact allowlistを表し、未知キーは表記を問わず拒否する。runtimeは加えて最大depth 12・
 最大node数2000を検証する（再帰全体のnode budgetはJSON Schema外のruntime契約）。
 暫定allowlistはURL、callback、secret、generic internal ID keyを含めない。provenance用の

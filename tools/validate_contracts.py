@@ -426,7 +426,11 @@ def check_event_contract(results: Results) -> None:
             "firstMessageId": UUID_1, "lastMessageId": UUID_2,
             "sourceMessageIds": [UUID_1, UUID_2], "requestedAt": NOW,
         },
-        "DIARY_GENERATE": {"diaryDate": "2026-07-05", "requestedAt": NOW},
+        "DIARY_GENERATE": {
+            "diaryDate": "2026-07-05",
+            "requestedAt": NOW,
+            "characterRuntimeMode": "legacy",
+        },
         "PROACTIVE_SEND": {
             "targetDate": "2026-07-05",
             "sequence": 1,
@@ -690,6 +694,7 @@ def check_event_contract(results: Results) -> None:
     diary_repair_payload = {
         "diaryDate": "2026-07-05",
         "requestedAt": NOW,
+        "characterRuntimeMode": "legacy",
         "manualRequestId": UUID_2,
         "originalEventId": UUID_1,
     }
@@ -716,6 +721,46 @@ def check_event_contract(results: Results) -> None:
         validator,
         base_event("DIARY_GENERATE", missing_manual_request),
         "Event DIARY_GENERATE repair payload requires manualRequestId",
+    )
+
+    enforced_diary_payload = {
+        "diaryDate": "2026-07-05",
+        "requestedAt": NOW,
+        "characterRuntimeMode": "enforced",
+        "characterBinding": character_binding,
+    }
+    assert_valid(
+        results,
+        validator,
+        base_event("DIARY_GENERATE", enforced_diary_payload),
+        "Event DIARY_GENERATE enforced binding valid",
+    )
+
+    missing_diary_mode = dict(samples["DIARY_GENERATE"])
+    missing_diary_mode.pop("characterRuntimeMode")
+    assert_invalid(
+        results,
+        validator,
+        base_event("DIARY_GENERATE", missing_diary_mode),
+        "Event DIARY_GENERATE new payload requires runtime mode",
+    )
+
+    missing_diary_binding = dict(enforced_diary_payload)
+    missing_diary_binding.pop("characterBinding")
+    assert_invalid(
+        results,
+        validator,
+        base_event("DIARY_GENERATE", missing_diary_binding),
+        "Event DIARY_GENERATE enforced mode requires binding",
+    )
+
+    legacy_diary_with_binding = dict(samples["DIARY_GENERATE"])
+    legacy_diary_with_binding["characterBinding"] = character_binding
+    assert_invalid(
+        results,
+        validator,
+        base_event("DIARY_GENERATE", legacy_diary_with_binding),
+        "Event DIARY_GENERATE legacy mode forbids binding",
     )
 
     wrong = base_event("WEEKLY_BACKUP", samples["DIARY_GENERATE"])

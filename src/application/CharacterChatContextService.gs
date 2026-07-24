@@ -22,6 +22,16 @@ var CharacterChatContextService = (function() {
 
     var recentMessages = loadRecentMessages_(currentUserMessage);
     var hasImage = Boolean(currentUserMessage.image || input.hasImage);
+    var partnerWorldFacts =
+      typeof CharacterDiaryContextService !== 'undefined' &&
+      CharacterDiaryContextService &&
+      typeof CharacterDiaryContextService
+        .loadApprovedPartnerWorldFactsBefore === 'function'
+        ? CharacterDiaryContextService.loadApprovedPartnerWorldFactsBefore(
+          String(currentTime).slice(0, 10),
+          12
+        )
+        : [];
     return CharacterContextService.buildActive({
       surface: 'chat',
       currentTime: currentTime,
@@ -41,7 +51,7 @@ var CharacterChatContextService = (function() {
       relationshipState: null,
       partnerWorld: {
         mayCreate: false,
-        approvedFacts: []
+        approvedFacts: partnerWorldFacts
       }
     });
   }
