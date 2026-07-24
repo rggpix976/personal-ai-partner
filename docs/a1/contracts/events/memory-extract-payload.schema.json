@@ -8,7 +8,8 @@
     "firstMessageId",
     "lastMessageId",
     "sourceMessageIds",
-    "requestedAt"
+    "requestedAt",
+    "characterRuntimeMode"
   ],
   "properties": {
     "firstMessageId": {
@@ -32,6 +33,79 @@
     "requestedAt": {
       "type": "string",
       "format": "date-time"
+    },
+    "characterRuntimeMode": {
+      "type": "string",
+      "enum": [
+        "legacy",
+        "enforced"
+      ]
+    },
+    "characterBinding": {
+      "$ref": "#/$defs/characterBinding"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "characterRuntimeMode": {
+            "const": "enforced"
+          }
+        },
+        "required": [
+          "characterRuntimeMode"
+        ]
+      },
+      "then": {
+        "required": [
+          "characterBinding"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "characterBinding"
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "characterBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profileSchemaVersion",
+        "profileRevision",
+        "policyVersion",
+        "catalogVersion",
+        "characterPackId",
+        "characterPackVersion"
+      ],
+      "properties": {
+        "profileSchemaVersion": {
+          "const": "character-profile.v2"
+        },
+        "profileRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "policyVersion": {
+          "const": "character-policy.v2"
+        },
+        "catalogVersion": {
+          "const": "character-catalog.v2"
+        },
+        "characterPackId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{2,63}$"
+        },
+        "characterPackVersion": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]{2,79}$"
+        }
+      }
     }
   }
 }

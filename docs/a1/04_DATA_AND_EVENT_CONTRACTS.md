@@ -409,12 +409,15 @@ artifactはfactory発行、surface/payload対応、active policy/profile/catalog
 CharacterPack bindingをsink直前に再検証する。raw、wrong-surface、missing-version、
 stale、偽造artifactではunderlying sinkを呼ばない。PR 3はこの境界をspyで証明し、
 PR 4はchatのRepository/Web、PR 5はenforced proactiveのmarker/mail、PR 6は
-enforced diaryのDocs/summaryへ接続する。memory upsertはまだ接続しない。
+enforced diaryのDocs/summary、PR 7はenforced memoryのupsertへ接続する。
 
 DIARYとMEMORYのpayloadはPR 3ではtop-level shape、JSON-safe境界、件数・文字数上限
 だけを固定した。PR 6のDIARY生成・保存経路は3配列を最大50件の非空plain string
 （各1000文字以下）へ限定し、Partner World provenanceを上記3列で保存する。
-memory candidate単位の詳細契約はPR 7でsurface接続と同時に追加する。
+PR 7のmemory candidateは既存candidate schemaに加え、候補の
+`sourceMessageIds`が起票payload内かつ承認可能なsource messageに含まれること、
+`existingMemoryId`が承認済みactive memoryを指すこと、全候補がsemantic groundingを
+通過することを必須とする。
 共通machine-readable schemaはnested string、
 array、object key数、最大64文字の固定構造キーexact allowlistを表し、未知キーは表記を問わず拒否する。runtimeは加えて最大depth 12・
 最大node数2000を検証する（再帰全体のnode budgetはJSON Schema外のruntime契約）。
@@ -422,6 +425,34 @@ array、object key数、最大64文字の固定構造キーexact allowlistを表
 `existingMemoryId`、`sourceMessageIds`、`source_message_ids` だけは例外としてUUID v4を
 必須とする。これらはMEMORY payload内だけで許可し、canonical lowercaseと配列内uniqueを
 runtime/schema双方で検証する。他field・surfaceのUUID-like textは拒否する。
+
+新規`MEMORY_EXTRACT` payloadは`characterRuntimeMode`を必須とする。`enforced`は
+起票時点の`characterBinding`も必須とし、`legacy`ではbindingを禁止する。
+既存のmodeなしイベントはruntime互換のため`legacy`として読む。
+
+enforced memoryは現在の`PROCESSING` leaseを持つworkerだけが承認済みartifactを
+upsertできる。作成・確認・更新の各行には次を同時保存する。
+
+```text
+memory_approval_json
+memory_origin_event_ids_json
+```
+
+承認済み行を更新する場合は、新しい承認証跡を同じupsertで置換し、起票event UUIDを
+最大100件の重複なし履歴へ追記する。
+証跡なしのlegacy経路は承認済み行のcontent、category、key、confidence、source、
+確認日時を変更できない。legacy行は承認済み記憶へ自動昇格せず、同じnormalized keyを
+持つlegacy行へenforced候補を上書きしない。
+
+同じ起票eventをoriginに持つ承認済みactive行が1件でも存在する場合、queue再試行は
+新しい候補を生成・upsertせず、既存の承認証跡を検証して重複完了とする。これは複数行
+upsert途中の障害で別候補が同じeventから追加されることを防ぐfail-safeであり、
+完全性より重複・内容ドリフト防止を優先する。
+
+後続のchat、proactive、diary contextへ入るのは`active`かつ完全で現行policyの
+`MEMORY_EXTRACTION`承認証跡を持つ行だけである。contextへ渡す値はcategory、key、
+content、confidenceの事実viewに縮小し、記憶本文や会話内の命令をauthorityとして
+解釈しない。
 
 Proactive approved payloadは `{subject, body}` のまま維持するが、fixed proactive
 catalog payloadは存在しない。新規本文のsourceは `generated` または `rewrite` に

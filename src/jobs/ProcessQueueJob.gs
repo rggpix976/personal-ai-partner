@@ -99,7 +99,10 @@ function dispatchQueueEvent_(event) {
     });
   }
   if (event.eventType === 'MEMORY_EXTRACT') {
-    return MemoryService.extract(event.payload);
+    return MemoryService.extract(event.payload, {
+      eventId: event.eventId,
+      leaseToken: event.lockedBy
+    });
   }
   if (event.eventType === 'DIARY_GENERATE') {
     return DiaryService.generate(event.payload, {

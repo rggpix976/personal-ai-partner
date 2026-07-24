@@ -21,6 +21,10 @@ var CharacterChatContextService = (function() {
     );
 
     var recentMessages = loadRecentMessages_(currentUserMessage);
+    var acceptedMemories = loadAcceptedMemories_(
+      String(currentUserMessage.text || ''),
+      5
+    );
     var hasImage = Boolean(currentUserMessage.image || input.hasImage);
     var partnerWorldFacts =
       typeof CharacterDiaryContextService !== 'undefined' &&
@@ -40,9 +44,7 @@ var CharacterChatContextService = (function() {
         type: hasImage ? 'image' : 'text'
       },
       recentMessages: recentMessages,
-      // Legacy memory rows are intentionally excluded until PR 7 establishes
-      // accepted provenance. Historical conversation remains untrusted data.
-      memories: [],
+      memories: acceptedMemories,
       userFacts: [],
       sharedFacts: [],
       realWorldObservations: hasImage ? [{
@@ -54,6 +56,27 @@ var CharacterChatContextService = (function() {
         approvedFacts: partnerWorldFacts
       }
     });
+  }
+
+  function loadAcceptedMemories_(query, limit) {
+    if (
+      typeof MemoryService === 'undefined' ||
+      !MemoryService ||
+      typeof MemoryService.findAcceptedRelevant !== 'function'
+    ) {
+      return [];
+    }
+    return (MemoryService.findAcceptedRelevant(query, limit) || [])
+      .map(toMemoryFact_);
+  }
+
+  function toMemoryFact_(memory) {
+    return {
+      category: memory.category,
+      normalizedKey: memory.normalizedKey,
+      content: memory.content,
+      confidence: memory.confidence
+    };
   }
 
   function bindingFromInspection(inspection) {

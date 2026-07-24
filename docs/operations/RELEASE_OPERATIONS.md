@@ -25,7 +25,12 @@ OPS_QUEUE_DELAY_GRACE_MINUTES=20
 OPS_DEAD_LOOKBACK_HOURS=168
 OPS_ALERT_EMAIL_ENABLED=false
 OPS_ALERT_COOLDOWN_MINUTES=720
+DIARY_CHARACTER_ENFORCEMENT_ENABLED=false
+MEMORY_CHARACTER_ENFORCEMENT_ENABLED=false
 ```
+
+Do not enable the diary or memory character paths before the reviewed a7
+schema is migrated and the PR 9 staged-activation checks are ready.
 
 Enable email only as an approved production configuration change. Alerts go
 to the existing `OWNER_EMAIL`, are rate-limited, and contain the same sanitized

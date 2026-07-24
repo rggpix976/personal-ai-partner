@@ -22,6 +22,14 @@ var CharacterFixedPolicy = (function() {
     } catch (ignored) {
       return decision_('DENY', 'FORMAT_INVALID', null, false);
     }
+    if (
+      surface === 'MEMORY_EXTRACTION' &&
+      payload &&
+      Array.isArray(payload.candidates) &&
+      payload.candidates.length === 0
+    ) {
+      return decision_('ALLOW', null, null, false);
+    }
     if (!Array.isArray(fields) || fields.length === 0) {
       return decision_('DENY', 'FORMAT_INVALID', null, false);
     }
@@ -29,7 +37,14 @@ var CharacterFixedPolicy = (function() {
     var taskText = currentTaskText_(context);
     var attributedTask = isAttributedTask_(taskText);
     var profile = profile_(context);
-    var verification = null;
+    var verification = surface === 'MEMORY_EXTRACTION'
+      ? decision_(
+        'VERIFY',
+        'GROUNDING_USER_STATE_UNSUPPORTED',
+        'USER_STATE',
+        true
+      )
+      : null;
 
     for (var index = 0; index < fields.length; index += 1) {
       if (!fields[index] || typeof fields[index].value !== 'string') {

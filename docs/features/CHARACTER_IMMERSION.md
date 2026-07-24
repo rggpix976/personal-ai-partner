@@ -409,9 +409,10 @@ external life. In V2, diary may create structured Partner World events only
 when its policy allows. Chat and proactive output have `mayCreate=false` and
 may refer only to approved facts already present in typed context.
 
-Until the memory-provenance integration is complete, proactive context supplies
-an empty memory list. Existing legacy memory rows are not silently promoted to
-accepted memory merely because they can be retrieved.
+Chat, proactive, and diary contexts accept only provenance-checked memory rows
+created or updated by the enforced PR 7 path. Existing legacy rows are not
+silently promoted merely because they can be retrieved. Memory values remain
+untrusted quoted evidence and never gain instruction authority.
 
 ## 8. Classification taxonomy and precedence
 
@@ -679,7 +680,7 @@ speech-preset variants and no generic proactive catalog entry.
 | `CHAT_TEXT_SYNC` | Guard before assistant row, event completion, state update, and Web response | One rewrite, then exact `CHAT_RECOVERY` where applicable |
 | `CHAT_TEXT_QUEUED` | Guard each attempt; reject stale pack/profile/policy/catalog | One rewrite, then exact `CHAT_RECOVERY` |
 | `CHAT_IMAGE` | Guard reply and image summary before either write | One rewrite, then exact image uncertainty pair |
-| `PROACTIVE_AI` | Generate from CharacterPack + bounded approved recent conversation + empty memory until PR 7; guard subject/body before marker/save/send | One rewrite; otherwise no artifact and no send |
+| `PROACTIVE_AI` | Generate from CharacterPack + bounded approved recent conversation + provenance-accepted memory; guard subject/body before marker/save/send | One rewrite; otherwise no artifact and no send |
 | `PROACTIVE_RETRY` | Revalidate saved generated subject/body immediately before reuse | If no longer approved, quarantine and do not send; no rewrite/fixed replacement |
 | `DIARY` | Guard all content before Docs, summary, or Partner World write | Controlled retryable failure; no fabricated diary |
 | `MEMORY_EXTRACTION` | Validate response, candidate, grounding, provenance, and instruction-like text | Reject batch or candidate at the defined boundary |
@@ -893,9 +894,41 @@ The a6 schema appends these `daily_summaries` columns:
 production, deploy, change triggers, or activate the new path. Those operations
 remain part of PR 9 staged activation.
 
-Repository status: PR 4 chat, PR 5 proactive, and PR 6 diary integrations are
-implemented behind legacy-safe defaults. They have not been deployed or
-activated in production. PR 7 memory, PR 8 settings/disclosure, the a6 Apps
+### 18.2 PR 7 memory integration
+
+PR 7 snapshots `characterRuntimeMode` and the exact character binding in every
+new memory extraction event. Historical mode-less events continue as legacy.
+Enforced extraction accepts only user messages and approved completed partner
+messages as source evidence. Every candidate source UUID must stay inside that
+accepted subset of the queued source range, and every non-empty candidate set
+undergoes semantic grounding verification.
+
+Only an approved `MEMORY_EXTRACTION` artifact may reach the memory upsert sink,
+and only while the worker still owns the current queue lease. Each created or
+updated row stores its complete approval metadata and origin event UUID.
+Legacy rows are not promoted, cannot be overwritten by an enforced candidate
+with the same normalized key, and cannot enter character context merely because
+they are active.
+
+Chat, proactive, and diary use only active rows with complete current-policy
+memory approval provenance. They receive a reduced factual view and all
+generation prompts treat memory content as untrusted quoted evidence, never as
+instructions. Existing approved rows may change only through another approved
+memory artifact whose approval replaces the prior approval and whose origin UUID
+is appended to the bounded provenance history in the same upsert.
+
+If a retry finds any valid approved active row already owned by the same origin
+event, it performs no new generation or upsert and completes as a duplicate.
+This prevents a partially written multi-row batch from drifting on retry.
+
+The a7 schema appends `memory_approval_json` and
+`memory_origin_event_ids_json` to `long_term_memories`.
+`MEMORY_CHARACTER_ENFORCEMENT_ENABLED` defaults to `false`. PR 7 performs no
+production migration, deployment, configuration mutation, or trigger change.
+
+Repository status: PR 4 chat, PR 5 proactive, PR 6 diary, and PR 7 memory
+integrations are implemented behind legacy-safe defaults. They have not been
+deployed or activated in production. PR 8 settings/disclosure, the a7 Apps
 Script migration, staged activation, and manual acceptance remain pending.
 
 ## 19. Related sources

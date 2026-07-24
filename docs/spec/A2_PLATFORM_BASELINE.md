@@ -129,6 +129,8 @@
 | supersedes_memory_id | string | 任意 |  | 置換元 |
 | usage_count | int | 必須 |  | 会話利用回数 |
 | last_used_at | datetime | 任意 |  | 最終利用 |
+| memory_approval_json | json | 任意 |  | enforced記憶の承認証跡 |
+| memory_origin_event_ids_json | json | 任意 |  | 承認済み更新を起票した`MEMORY_EXTRACT`イベントUUID v4の追記履歴 |
 
 ### 3.6 `daily_summaries`
 

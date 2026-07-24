@@ -1206,7 +1206,7 @@ function runA2PlatformTests() {
   });
 
   test('character foundation defaults are legacy and structurally valid', function() {
-    assert(APP_CONSTANTS.SCHEMA_VERSION === '2026.07.a6', 'Approved diary provenance requires schema version a6.');
+    assert(APP_CONSTANTS.SCHEMA_VERSION === '2026.07.a7', 'Approved memory provenance requires schema version a7.');
     var entries = {};
     APP_CONSTANTS.CONFIG_DEFAULTS.forEach(function(entry) {
       entries[entry.key] = entry;
@@ -1266,6 +1266,30 @@ function runA2PlatformTests() {
         diaryHeaders
       ) === true,
       'Diary provenance header guard rejected the a6 schema.'
+    );
+    assert(
+      entries.MEMORY_CHARACTER_ENFORCEMENT_ENABLED.value === 'false' &&
+        entries.MEMORY_CHARACTER_ENFORCEMENT_ENABLED.type === 'bool',
+      'Memory character enforcement must default to disabled.'
+    );
+    var memoryHeaders =
+      APP_CONSTANTS.SHEET_SCHEMAS.long_term_memories.map(
+        function(column) {
+          return column.name;
+        }
+      );
+    assert(
+      memoryHeaders.slice(-2).join(',') === [
+        'memory_approval_json',
+        'memory_origin_event_ids_json'
+      ].join(','),
+      'Memory provenance columns must be appended in the a7 order.'
+    );
+    assert(
+      SheetRepository.__test.assertMemoryProvenanceHeaders(
+        memoryHeaders
+      ) === true,
+      'Memory provenance header guard rejected the a7 schema.'
     );
     assert(
       /^character-policy\.v\d+$/.test(APP_CONSTANTS.CHARACTER.POLICY_VERSION),

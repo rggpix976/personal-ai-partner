@@ -124,6 +124,7 @@ vm.createContext(context);
   'src/infrastructure/GeminiClient.gs',
   'src/infrastructure/CharacterChatGeminiAdapter.gs',
   'src/infrastructure/CharacterDiaryGeminiAdapter.gs',
+  'src/infrastructure/CharacterMemoryGeminiAdapter.gs',
   'src/infrastructure/CharacterProactiveGeminiAdapter.gs',
   'src/infrastructure/GmailNotifier.gs',
   'src/application/QueueService.gs',
@@ -132,6 +133,7 @@ vm.createContext(context);
   'src/application/CharacterContextService.gs',
   'src/application/CharacterChatContextService.gs',
   'src/application/CharacterDiaryContextService.gs',
+  'src/application/CharacterMemoryContextService.gs',
   'src/application/CharacterProactiveContextService.gs',
   'src/application/CharacterStatusNoticeService.gs',
   'src/application/CharacterModeClassifier.gs',
@@ -177,6 +179,7 @@ vm.createContext(context);
   'src/tests/A12CharacterProactiveGeminiAdapterTests.gs',
   'src/tests/A12CharacterProactiveIntegrationTests.gs',
   'src/tests/A13CharacterDiaryIntegrationTests.gs',
+  'src/tests/A14CharacterMemoryIntegrationTests.gs',
   'src/tests/RunAllTests.gs'
 ].forEach((file) => {
   vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });

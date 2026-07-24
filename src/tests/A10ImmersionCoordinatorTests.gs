@@ -817,7 +817,7 @@ function runA10ImmersionCoordinatorTests() {
       }
     }, {
       surface: 'MEMORY_EXTRACTION',
-      payload: { candidates: [{ content: '読書が好き' }] }
+      payload: { candidates: [] }
     }];
     cases.forEach(function(fixture) {
       withContext(fixture.surface, null, function(context) {

@@ -25,6 +25,13 @@ var CharacterProactiveContextService = (function() {
       'Proactive character context time is invalid.'
     );
 
+    var recentMessages = loadRecentMessages_();
+    var acceptedMemories = loadAcceptedMemories_(
+      recentMessages.map(function(message) {
+        return message.text;
+      }).join(' '),
+      5
+    );
     var partnerWorldFacts =
       typeof CharacterDiaryContextService !== 'undefined' &&
       CharacterDiaryContextService &&
@@ -42,10 +49,8 @@ var CharacterProactiveContextService = (function() {
       // queue metadata, and raw activity timestamps must not be promoted into
       // character evidence merely to give the generator a synthetic prompt.
       currentRequest: null,
-      recentMessages: loadRecentMessages_(),
-      // Legacy memories remain unavailable until the provenance integration
-      // explicitly accepts them.
-      memories: [],
+      recentMessages: recentMessages,
+      memories: acceptedMemories,
       userFacts: [],
       sharedFacts: [],
       realWorldObservations: [],
@@ -55,6 +60,25 @@ var CharacterProactiveContextService = (function() {
         approvedFacts: partnerWorldFacts
       }
     });
+  }
+
+  function loadAcceptedMemories_(query, limit) {
+    if (
+      typeof MemoryService === 'undefined' ||
+      !MemoryService ||
+      typeof MemoryService.findAcceptedRelevant !== 'function'
+    ) {
+      return [];
+    }
+    return (MemoryService.findAcceptedRelevant(query, limit) || [])
+      .map(function(memory) {
+        return {
+          category: memory.category,
+          normalizedKey: memory.normalizedKey,
+          content: memory.content,
+          confidence: memory.confidence
+        };
+      });
   }
 
   function bindingFromInspection(inspection) {

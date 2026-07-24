@@ -39,6 +39,12 @@ var CharacterDiaryContextService = (function() {
       input.diaryDate,
       input.partnerWorldFactLimit
     );
+    var acceptedMemories = loadAcceptedMemories_(
+      messages.map(function(message) {
+        return String(message.text || '');
+      }).join(' '),
+      5
+    );
 
     return CharacterContextService.buildActive({
       surface: 'diary',
@@ -50,9 +56,7 @@ var CharacterDiaryContextService = (function() {
           return message != null;
         })
         .slice(-MAX_MESSAGES),
-      // PR 7 owns provenance-accepted memory. Legacy memory never enters an
-      // enforced diary merely because it is retrievable.
-      memories: [],
+      memories: acceptedMemories,
       userFacts: [],
       sharedFacts: [],
       realWorldObservations: [],
@@ -62,6 +66,25 @@ var CharacterDiaryContextService = (function() {
         approvedFacts: approvedFacts
       }
     });
+  }
+
+  function loadAcceptedMemories_(query, limit) {
+    if (
+      typeof MemoryService === 'undefined' ||
+      !MemoryService ||
+      typeof MemoryService.findAcceptedRelevant !== 'function'
+    ) {
+      return [];
+    }
+    return (MemoryService.findAcceptedRelevant(query, limit) || [])
+      .map(function(memory) {
+        return {
+          category: memory.category,
+          normalizedKey: memory.normalizedKey,
+          content: memory.content,
+          confidence: memory.confidence
+        };
+      });
   }
 
   function bindingFromInspection(inspection) {

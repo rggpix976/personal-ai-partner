@@ -147,6 +147,74 @@ var GeminiClient = (function() {
       };
     }
 
+    if (schemaName === 'character-memory-candidates') {
+      return {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          candidates: {
+            type: 'array',
+            maxItems: 20,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                action: {
+                  type: 'string',
+                  enum: ['create', 'confirm', 'update', 'ignore']
+                },
+                category: {
+                  type: 'string',
+                  enum: APP_CONSTANTS.MEMORY_CATEGORIES.slice()
+                },
+                normalizedKey: {
+                  type: 'string',
+                  minLength: 1,
+                  maxLength: 200
+                },
+                content: {
+                  type: 'string',
+                  minLength: 1,
+                  maxLength: 1000
+                },
+                confidence: {
+                  type: 'number',
+                  minimum: 0,
+                  maximum: 1
+                },
+                sourceMessageIds: {
+                  type: 'array',
+                  minItems: 1,
+                  maxItems: 100,
+                  items: {
+                    type: 'string'
+                  }
+                },
+                reason: {
+                  type: 'string',
+                  minLength: 1,
+                  maxLength: 500
+                },
+                existingMemoryId: {
+                  type: 'string'
+                }
+              },
+              required: [
+                'action',
+                'category',
+                'normalizedKey',
+                'content',
+                'confidence',
+                'sourceMessageIds',
+                'reason'
+              ]
+            }
+          }
+        },
+        required: ['candidates']
+      };
+    }
+
     if (
       schemaName === 'diary-entry' ||
       schemaName === 'character-diary'
