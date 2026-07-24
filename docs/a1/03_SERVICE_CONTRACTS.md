@@ -350,6 +350,14 @@ CharacterConfigRepository.saveProfileAtomically(
   expectedRevision,
   updatedAt
 ) // dormant V1 compatibility
+CharacterConfigRepository.saveSettingsAtomically(
+  canonicalProfileJson,
+  expectedRevision,
+  proactiveFrequency,
+  quietStart,
+  quietEnd,
+  updatedAt
+)
 ```
 
 character設定を1回のsnapshotとして読み、V2 profileとV2 revisionをScriptLock、CAS、
@@ -357,6 +365,22 @@ character設定を1回のsnapshotとして読み、V2 profileとV2 revisionをSc
 bounding range内の非対象数式と `=` で始まるliteral textを保持し、lock競合は
 本文を含まないcharacter config conflictへ写像する。modeやlegacy設定は同時に変更しない。
 Spreadsheetの手動編集は公式な同時writerとして扱わない。
+
+`saveSettingsAtomically` はV2 profile/revisionに加えてproactive frequencyと
+quiet hoursを同じScriptLock、CAS、単一range write、flush、read-backで保存する。
+runtime/profile modeやCharacterPack authorityは変更しない。
+
+## 3.12.1 `CharacterSettingsService`
+
+```javascript
+CharacterSettingsService.getSnapshot()
+CharacterSettingsService.save(request)
+```
+
+Web UI向けにapproved editable fieldだけを読み書きする。保存requestはexact
+allowlistとし、追加field、free-form persona、prompt、fixed response、pack選択を
+受理しない。profile不整合時はcode-owned defaultを修復入力として表示できるが、
+revision競合を迂回せず、保存後のread-back snapshotだけを返す。
 
 ## 3.13 `CharacterModeClassifier` / `CharacterResponseCatalog`
 

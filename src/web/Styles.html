@@ -47,7 +47,8 @@
 
   button,
   textarea,
-  input {
+  input,
+  select {
     font: inherit;
   }
 
@@ -61,6 +62,7 @@
 
   .topbar,
   .status-panel,
+  .info-panel,
   .chat-panel,
   .composer-shell {
     width: min(880px, 100%);
@@ -72,6 +74,16 @@
     align-items: center;
     justify-content: space-between;
     gap: 16px;
+  }
+
+  .topbar-actions,
+  .panel-heading,
+  .settings-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
   }
 
   .eyebrow {
@@ -89,6 +101,7 @@
   }
 
   .status-panel,
+  .info-panel,
   .chat-panel,
   .composer-shell {
     background: var(--panel);
@@ -100,6 +113,94 @@
   .status-panel {
     border-radius: var(--radius-lg);
     padding: 14px 16px;
+  }
+
+  .info-panel {
+    border-radius: var(--radius-xl);
+    padding: 18px;
+  }
+
+  .panel-heading h2 {
+    margin: 0;
+  }
+
+  .info-panel > p {
+    line-height: 1.65;
+  }
+
+  .panel-note,
+  .settings-runtime {
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .onboarding-callout {
+    margin: 16px 0;
+    padding: 14px 16px;
+    border-radius: var(--radius-md);
+    background: var(--warn-bg);
+    color: var(--warn);
+  }
+
+  .onboarding-callout p {
+    margin: 6px 0 0;
+    line-height: 1.55;
+  }
+
+  .settings-form {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .settings-form > label,
+  .settings-form fieldset {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .settings-form label > span,
+  .settings-form legend {
+    font-weight: 600;
+  }
+
+  .settings-form input,
+  .settings-form select {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 11px 12px;
+    background: var(--panel-strong);
+    color: var(--ink);
+  }
+
+  .settings-form fieldset {
+    grid-column: 1 / -1;
+    margin: 0;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+  }
+
+  .time-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .settings-form .panel-note,
+  .settings-actions {
+    grid-column: 1 / -1;
+    margin: 0;
+  }
+
+  #settings-result[data-state="error"] {
+    color: var(--danger);
+  }
+
+  #settings-result[data-state="saved"] {
+    color: var(--ok);
   }
 
   .status-panel[data-state="failed"] {
@@ -299,7 +400,9 @@
   .attach-button:disabled,
   .ghost-button:disabled,
   .send-button:disabled,
-  .message-input:disabled {
+  .message-input:disabled,
+  .settings-form input:disabled,
+  .settings-form select:disabled {
     cursor: default;
     opacity: 0.6;
     transform: none;
@@ -368,6 +471,19 @@
 
     .chat-panel {
       min-height: 50vh;
+    }
+
+    .topbar {
+      align-items: flex-start;
+    }
+
+    .topbar-actions {
+      justify-content: flex-end;
+    }
+
+    .settings-form,
+    .time-fields {
+      grid-template-columns: 1fr;
     }
 
     .bubble {

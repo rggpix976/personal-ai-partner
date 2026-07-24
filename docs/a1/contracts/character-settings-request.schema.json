@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acepilot.local/schemas/character-settings-request.schema.json",
+  "title": "CharacterSettingsRequest",
+  "description": "Exact user-editable settings surface. CharacterPack and prompt authority are intentionally absent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "expectedRevision",
+    "partnerName",
+    "userAddress",
+    "replyLength",
+    "proactiveFrequency",
+    "quietStart",
+    "quietEnd"
+  ],
+  "properties": {
+    "expectedRevision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "partnerName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40
+    },
+    "userAddress": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40
+    },
+    "replyLength": {
+      "enum": [
+        "short",
+        "balanced",
+        "long"
+      ]
+    },
+    "proactiveFrequency": {
+      "enum": [
+        "off",
+        "low",
+        "normal",
+        "high"
+      ]
+    },
+    "quietStart": {
+      "type": "string",
+      "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+    },
+    "quietEnd": {
+      "type": "string",
+      "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+    }
+  }
+}

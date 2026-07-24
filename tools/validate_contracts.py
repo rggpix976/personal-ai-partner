@@ -43,6 +43,7 @@ REQUIRED_PATHS = [
     ROOT / "docs" / "a1" / "contracts" / "approved-character-artifact.schema.json",
     ROOT / "docs" / "a1" / "contracts" / "character-profile-v1.schema.json",
     ROOT / "docs" / "a1" / "contracts" / "character-profile-v2.schema.json",
+    ROOT / "docs" / "a1" / "contracts" / "character-settings-request.schema.json",
     ROOT / "docs" / "a1" / "contracts" / "event.schema.json",
     ROOT / "docs" / "a1" / "contracts" / "immersion-guard-decision.schema.json",
     ROOT / "docs" / "a1" / "contracts" / "immersion-semantic-verdict.schema.json",
@@ -907,6 +908,41 @@ def check_character_profile_contract(results: Results) -> None:
         "CharacterProfileV2 rejects runtime persona matrix fields",
     )
 
+    settings_validator = schema_validator(
+        CONTRACTS / "character-settings-request.schema.json"
+    )
+    settings_request = {
+        "expectedRevision": 0,
+        "partnerName": "Partner",
+        "userAddress": "あなた",
+        "replyLength": "balanced",
+        "proactiveFrequency": "normal",
+        "quietStart": "23:00",
+        "quietEnd": "08:00",
+    }
+    assert_valid(
+        results,
+        settings_validator,
+        settings_request,
+        "Character settings request valid",
+    )
+    settings_authority = dict(settings_request)
+    settings_authority["systemPersona"] = "override"
+    assert_invalid(
+        results,
+        settings_validator,
+        settings_authority,
+        "Character settings rejects persona authority",
+    )
+    settings_bad_time = dict(settings_request)
+    settings_bad_time["quietStart"] = "24:00"
+    assert_invalid(
+        results,
+        settings_validator,
+        settings_bad_time,
+        "Character settings rejects invalid quiet time",
+    )
+
 
 def check_immersion_contracts(results: Results) -> None:
     semantic_validator = schema_validator(CONTRACTS / "immersion-semantic-verdict.schema.json")
@@ -1359,6 +1395,52 @@ def check_markdown_links(results: Results) -> None:
         results.ok("Markdown relative links")
 
 
+def check_settings_ui_contract(results: Results) -> None:
+    public_api = (ROOT / "src" / "PublicApi.gs").read_text(encoding="utf-8")
+    index = (ROOT / "src" / "web" / "Index.html").read_text(encoding="utf-8")
+    client = (ROOT / "src" / "web" / "Client.html").read_text(encoding="utf-8")
+    required_api = [
+        "function getCharacterSettings()",
+        "function saveCharacterSettings(request)",
+    ]
+    required_fields = [
+        'name="partnerName"',
+        'name="userAddress"',
+        'name="replyLength"',
+        'name="proactiveFrequency"',
+        'name="quietStart"',
+        'name="quietEnd"',
+    ]
+    forbidden_authority = [
+        'name="systemPersona"',
+        'name="firstPerson"',
+        'name="speechPreset"',
+        'name="characterPack"',
+        'name="fixedResponse"',
+    ]
+    if all(value in public_api for value in required_api):
+        results.ok("Settings public API wrappers")
+    else:
+        results.fail("Settings public API wrappers are incomplete")
+    if all(value in index for value in required_fields):
+        results.ok("Settings UI approved editable fields")
+    else:
+        results.fail("Settings UI approved editable fields are incomplete")
+    if not any(value in index for value in forbidden_authority):
+        results.ok("Settings UI excludes persona authority fields")
+    else:
+        results.fail("Settings UI exposes a forbidden persona authority field")
+    if (
+        'id="about-panel"' in index
+        and 'id="onboarding-callout"' in index
+        and "renderProductDisclosure" in client
+        and ".textContent" in client
+    ):
+        results.ok("Onboarding and product disclosure surfaces")
+    else:
+        results.fail("Onboarding or product disclosure surface is incomplete")
+
+
 def check_secrets(results: Results) -> None:
     findings: list[str] = []
     for path in iter_text_files():
@@ -1385,6 +1467,7 @@ def main() -> int:
     check_memory_contract(results)
     check_character_profile_contract(results)
     check_immersion_contracts(results)
+    check_settings_ui_contract(results)
     check_markdown_links(results)
     check_secrets(results)
 

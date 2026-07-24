@@ -6,6 +6,14 @@ function getInitialState() {
   return WebController.getInitialState();
 }
 
+function getCharacterSettings() {
+  return WebController.getCharacterSettings();
+}
+
+function saveCharacterSettings(request) {
+  return WebController.saveCharacterSettings(request);
+}
+
 function loadMessages(beforeMessageId, limit) {
   return WebController.loadMessages(beforeMessageId, limit);
 }
