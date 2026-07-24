@@ -25,6 +25,16 @@ var CharacterProactiveContextService = (function() {
       'Proactive character context time is invalid.'
     );
 
+    var partnerWorldFacts =
+      typeof CharacterDiaryContextService !== 'undefined' &&
+      CharacterDiaryContextService &&
+      typeof CharacterDiaryContextService
+        .loadApprovedPartnerWorldFactsBefore === 'function'
+        ? CharacterDiaryContextService.loadApprovedPartnerWorldFactsBefore(
+          String(currentTime).slice(0, 10),
+          12
+        )
+        : [];
     return CharacterContextService.buildActive({
       surface: 'proactive',
       currentTime: currentTime,
@@ -42,7 +52,7 @@ var CharacterProactiveContextService = (function() {
       relationshipState: null,
       partnerWorld: {
         mayCreate: false,
-        approvedFacts: []
+        approvedFacts: partnerWorldFacts
       }
     });
   }

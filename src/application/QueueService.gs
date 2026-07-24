@@ -239,12 +239,12 @@ var QueueService = (function() {
       var nextEvent = normalizeEventForInsert_({
         eventType: 'DIARY_GENERATE',
         dedupeKey: manualDedupeKey,
-        payload: {
+        payload: mergePayload_(event.payload, {
           diaryDate: diaryDate,
           requestedAt: nowIso,
           manualRequestId: manualRequestId,
           originalEventId: event.eventId
-        },
+        }),
         status: 'PENDING',
         attemptCount: 0,
         nextAttemptAt: nowIso,
@@ -439,6 +439,30 @@ var QueueService = (function() {
         diaryDate: payload.diaryDate,
         requestedAt: payload.requestedAt
       };
+      var diaryRuntimeMode = payload.characterRuntimeMode == null
+        ? null
+        : String(payload.characterRuntimeMode);
+      ensure(
+        diaryRuntimeMode == null ||
+          diaryRuntimeMode === 'legacy' ||
+          diaryRuntimeMode === 'enforced',
+        'VALIDATION_REQUEST_INVALID',
+        'DIARY_GENERATE payload.characterRuntimeMode is invalid.'
+      );
+      if (diaryRuntimeMode != null) {
+        diaryPayload.characterRuntimeMode = diaryRuntimeMode;
+      }
+      if (diaryRuntimeMode === 'enforced') {
+        diaryPayload.characterBinding = normalizeCharacterBinding_(
+          payload.characterBinding
+        );
+      } else {
+        ensure(
+          payload.characterBinding == null,
+          'VALIDATION_REQUEST_INVALID',
+          'Legacy DIARY_GENERATE payload must not contain a character binding.'
+        );
+      }
       if (payload.manualRequestId != null || payload.originalEventId != null) {
         Validators.assertUuidV4(payload.manualRequestId, 'DIARY_GENERATE payload.manualRequestId');
         Validators.assertUuidV4(payload.originalEventId, 'DIARY_GENERATE payload.originalEventId');

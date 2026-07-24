@@ -18,7 +18,8 @@ function runAllSelfTests() {
     'runA11CharacterChatIntegrationTests',
     'runA12CharacterProactiveContextTests',
     'runA12CharacterProactiveGeminiAdapterTests',
-    'runA12CharacterProactiveIntegrationTests'
+    'runA12CharacterProactiveIntegrationTests',
+    'runA13CharacterDiaryIntegrationTests'
   ];
   var summary = {
     ok: true,

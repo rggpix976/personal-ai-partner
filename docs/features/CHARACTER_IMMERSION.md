@@ -860,10 +860,43 @@ attempts must remain zero for release.
 | PR 8 | Minimal settings UI plus onboarding/About/status disclosure | Only approved user fields are editable |
 | PR 9 | Staged activation, browser/manual acceptance, monitoring, rollback | All applicable `PI-*` gates pass |
 
-Repository status: PR 4 chat and PR 5 proactive integrations are implemented
-behind the existing `legacy` default. They have not been deployed or activated
-in production. PR 6 and later surface integrations, the a5 schema migration in
-Apps Script, staged activation, and manual acceptance remain pending.
+### 18.1 PR 6 diary integration
+
+PR 6 connects newly queued enforced diary work to the common character output
+coordinator and sink boundary. The queue payload snapshots
+`characterRuntimeMode` and the exact character binding. Historical payloads
+without this field continue as `legacy`; a repair event preserves the original
+mode and binding.
+
+An enforced diary requires a current `PROCESSING` queue lease. After approval,
+the exact structured diary payload, its approval metadata, and its origin event
+UUID are written to `daily_summaries` while the diary remains `PENDING`.
+Only then may the Google Docs sink run. Those three provenance fields are
+append-only and immutable. A transport retry revalidates the same persisted
+payload instead of generating replacement content. A lost lease, stale binding,
+partial provenance, changed payload, or unapproved artifact fails closed before
+a content sink.
+
+Partner World continuity is loaded only from a `DONE` diary row with complete,
+current-policy `DIARY` approval provenance and the active CharacterPack. Legacy
+summaries and partial or stale approval rows are not promoted. Approved Partner
+World facts may enter chat, proactive, and later diary contexts; they never
+become evidence about the user or the real world.
+
+The a6 schema appends these `daily_summaries` columns:
+
+- `diary_payload_json`
+- `diary_approval_json`
+- `diary_origin_event_id`
+
+`DIARY_CHARACTER_ENFORCEMENT_ENABLED` defaults to `false`. PR 6 does not migrate
+production, deploy, change triggers, or activate the new path. Those operations
+remain part of PR 9 staged activation.
+
+Repository status: PR 4 chat, PR 5 proactive, and PR 6 diary integrations are
+implemented behind legacy-safe defaults. They have not been deployed or
+activated in production. PR 7 memory, PR 8 settings/disclosure, the a6 Apps
+Script migration, staged activation, and manual acceptance remain pending.
 
 ## 19. Related sources
 

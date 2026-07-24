@@ -102,7 +102,10 @@ function dispatchQueueEvent_(event) {
     return MemoryService.extract(event.payload);
   }
   if (event.eventType === 'DIARY_GENERATE') {
-    return DiaryService.generate(event.payload);
+    return DiaryService.generate(event.payload, {
+      eventId: event.eventId,
+      leaseToken: event.lockedBy
+    });
   }
   if (event.eventType === 'PROACTIVE_SEND') {
     return dispatchProactiveSend_(event, nowIso);

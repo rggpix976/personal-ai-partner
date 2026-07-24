@@ -143,6 +143,9 @@
 | diary_doc_anchor | string | 任意 |  | 見出し識別子 |
 | created_at | datetime | 必須 |  | 作成日時 |
 | updated_at | datetime | 必須 |  | 更新日時 |
+| diary_payload_json | json | 任意 |  | enforced日記の承認済み構造化payload |
+| diary_approval_json | json | 任意 |  | enforced日記の承認証跡 |
+| diary_origin_event_id | string | 任意 |  | 起票元`DIARY_GENERATE`イベントのUUID v4 |
 
 ### 3.7 `usage_daily`
 

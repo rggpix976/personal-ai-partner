@@ -1206,7 +1206,7 @@ function runA2PlatformTests() {
   });
 
   test('character foundation defaults are legacy and structurally valid', function() {
-    assert(APP_CONSTANTS.SCHEMA_VERSION === '2026.07.a5', 'Origin-bound proactive persistence requires schema version a5.');
+    assert(APP_CONSTANTS.SCHEMA_VERSION === '2026.07.a6', 'Approved diary provenance requires schema version a6.');
     var entries = {};
     APP_CONSTANTS.CONFIG_DEFAULTS.forEach(function(entry) {
       entries[entry.key] = entry;
@@ -1243,6 +1243,30 @@ function runA2PlatformTests() {
       'V2 revision type is invalid.'
     );
     assert(entries.PROACTIVE_FREQUENCY.value === 'normal', 'Frequency must default to normal.');
+    assert(
+      entries.DIARY_CHARACTER_ENFORCEMENT_ENABLED.value === 'false' &&
+        entries.DIARY_CHARACTER_ENFORCEMENT_ENABLED.type === 'bool',
+      'Diary character enforcement must default to disabled.'
+    );
+    var diaryHeaders = APP_CONSTANTS.SHEET_SCHEMAS.daily_summaries.map(
+      function(column) {
+        return column.name;
+      }
+    );
+    assert(
+      diaryHeaders.slice(-3).join(',') === [
+        'diary_payload_json',
+        'diary_approval_json',
+        'diary_origin_event_id'
+      ].join(','),
+      'Diary provenance columns must be appended in the a6 order.'
+    );
+    assert(
+      SheetRepository.__test.assertDiaryProvenanceHeaders(
+        diaryHeaders
+      ) === true,
+      'Diary provenance header guard rejected the a6 schema.'
+    );
     assert(
       /^character-policy\.v\d+$/.test(APP_CONSTANTS.CHARACTER.POLICY_VERSION),
       'Policy version is invalid.'
