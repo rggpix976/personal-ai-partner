@@ -261,6 +261,16 @@
       return;
     }
 
+    if (result.status === 'routed' && result.notice) {
+      setStatus(
+        'succeeded',
+        result.notice.title || 'アプリからのお知らせ',
+        result.notice.message || ''
+      );
+      clearPoll();
+      return;
+    }
+
     if (result.status === 'failed') {
       var retryable = isRetryableFailure(result.error);
 
@@ -300,7 +310,10 @@
         .then(function(result) {
           handleChatResult(result, false);
 
-          if (result && result.status === 'completed') {
+          if (
+            result &&
+            (result.status === 'completed' || result.status === 'routed')
+          ) {
             return;
           }
 

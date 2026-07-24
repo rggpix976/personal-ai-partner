@@ -1258,6 +1258,18 @@ function runA10ImmersionGuardTests() {
     var context = makeContext();
     withGlobals({
       CharacterContextService: boundaryService(),
+      CharacterProfileService: {
+        requireActive: function() {
+          return {
+            profileSchemaVersion: context.runtime.profileSchemaVersion,
+            profileRevision: context.runtime.profileRevision,
+            policyVersion: context.runtime.policyVersion,
+            catalogVersion: context.runtime.catalogVersion,
+            characterPackId: context.runtime.characterPackId,
+            characterPackVersion: context.runtime.characterPackVersion
+          };
+        }
+      },
       CharacterResponseCatalog: { matches: function() { return false; } }
     }, function() {
       var decision = ImmersionGuard.evaluate(

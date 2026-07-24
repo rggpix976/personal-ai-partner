@@ -69,13 +69,23 @@ function processSingleQueueEvent_(event, correlationId) {
   try {
     var result = dispatchQueueEvent_(event);
     postDispatchSuccess_(event, result);
-    QueueService.markDone(event.eventId, result);
+    QueueService.markDone(event.eventId, result, event.lockedBy);
     AppLogger.writeDebugLog('INFO', 'processQueueJob', 'Queue event completed.', {
       eventType: event.eventType,
       status: 'DONE'
     }, correlationId, event.eventId);
   } catch (error) {
-    handleQueueFailure_(event, error, correlationId);
+    if (recordLeaseLost_(event, error, correlationId)) {
+      return;
+    }
+    try {
+      handleQueueFailure_(event, error, correlationId);
+    } catch (transitionError) {
+      if (recordLeaseLost_(event, transitionError, correlationId)) {
+        return;
+      }
+      throw transitionError;
+    }
   }
 }
 
@@ -83,7 +93,9 @@ function dispatchQueueEvent_(event) {
   var nowIso = toIsoStringInTokyo(new Date());
   if (event.eventType === 'CHAT_REPLY') {
     return ChatService.processQueuedReply(event.payload, {
-      now: nowIso
+      now: nowIso,
+      eventId: event.eventId,
+      leaseToken: event.lockedBy
     });
   }
   if (event.eventType === 'MEMORY_EXTRACT') {
@@ -151,7 +163,7 @@ function handleQueueFailure_(event, error, correlationId) {
   }
 
   if (!normalized.retryable) {
-    QueueService.markDead(event.eventId, normalized);
+    QueueService.markDead(event.eventId, normalized, event.lockedBy);
     recordDiaryTerminalFailure_(event, normalized, correlationId);
     return;
   }
@@ -168,15 +180,44 @@ function handleQueueFailure_(event, error, correlationId) {
   if (decision.action === 'DONE') {
     QueueService.markDone(event.eventId, {
       createdAt: toIsoStringInTokyo(new Date())
-    });
+    }, event.lockedBy);
     return;
   }
   if (decision.action === 'DEAD') {
-    QueueService.markDead(event.eventId, normalized);
+    QueueService.markDead(event.eventId, normalized, event.lockedBy);
     recordDiaryTerminalFailure_(event, normalized, correlationId);
     return;
   }
-  QueueService.markRetry(event.eventId, normalized, decision.nextAttemptAt);
+  QueueService.markRetry(
+    event.eventId,
+    normalized,
+    decision.nextAttemptAt,
+    event.lockedBy
+  );
+}
+
+function recordLeaseLost_(event, error, correlationId) {
+  var normalized = normalizeError(error);
+  if (
+    normalized.code !== 'QUEUE_LOCK_BUSY' ||
+    !normalized.details ||
+    normalized.details.reason !== 'QUEUE_LEASE_MISMATCH'
+  ) {
+    return false;
+  }
+  AppLogger.writeDebugLog(
+    'WARN',
+    'processQueueJob',
+    'Queue result was discarded because this worker no longer owns the event lease.',
+    {
+      eventType: event && event.eventType ? event.eventType : 'UNKNOWN',
+      code: normalized.code,
+      reason: normalized.details.reason
+    },
+    correlationId || normalized.correlationId,
+    event && event.eventId ? event.eventId : null
+  );
+  return true;
 }
 
 function recordDiaryTerminalFailure_(event, error, correlationId) {

@@ -766,6 +766,12 @@ function runA4ChatGeminiTests() {
       }
     };
     SheetRepository = {
+      getConversationByRequestId: function() {
+        return {
+          userMessage: null,
+          assistantMessage: null
+        };
+      },
       updateEvent: function(eventId, patch) {
         updatedEvent = {
           eventId: eventId,
@@ -809,6 +815,27 @@ function runA4ChatGeminiTests() {
     });
     assert(error.code === 'GEMINI_MODEL_UNAVAILABLE', '404 model errors should map to model unavailable.');
     assert(error.retryable === false, 'Model unavailable should be non-retryable.');
+  });
+
+  test('Gemini transport errors do not retain request URLs or API keys', function() {
+    var secret = 'AIza' + new Array(36).join('C');
+    var error = GeminiClient.__test.normalizeGeminiError(new Error(
+      'Exception: Request failed for https://example.invalid/generate?key=' +
+        secret
+    ));
+    assert(
+      error.code === 'GEMINI_TEMPORARY_FAILURE',
+      'Transport failures should remain retryable Gemini failures.'
+    );
+    assert(error.retryable === true, 'Transport failures should remain retryable.');
+    assert(
+      error.message === 'Gemini transport request failed.',
+      'Transport errors must use the fixed safe diagnostic message.'
+    );
+    assert(
+      error.message.indexOf(secret) === -1,
+      'Transport errors must not retain the API key.'
+    );
   });
 
   test('image summary truncates to 150 chars', function() {

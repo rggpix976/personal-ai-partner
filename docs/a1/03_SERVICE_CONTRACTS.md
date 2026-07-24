@@ -20,10 +20,27 @@ ChatService.send(request, context)
 - 検証
 - `requestId` 重複確認
 - user発言保存
-- `ContextService` 呼出し
-- `GeminiClient` 呼出し
-- assistant発言保存
+- `legacy` runtimeでは従来の `ContextService` / `GeminiClient` 経路をそのまま使用
+- `enforced` runtimeでは `CharacterChatContextService`、
+  `CharacterOutputCoordinator`、`CharacterChatGeminiAdapter`、
+  `CharacterSinkAdapter` の順で承認済み出力だけを処理
+- `CHAT_TEXT_SYNC`、`CHAT_TEXT_QUEUED`、`CHAT_IMAGE` のsurface binding検証
+- 承認済みassistant発言と画像summaryだけをapproval metadata付きで保存
+- `PRODUCT_INFO` / `ADMIN_OOC` はassistant行を作らず `routed` 結果として中立UIへ返す
 - 一時障害時の `CHAT_REPLY` 起票
+
+`enforced` のV2 profile、revision、policy、catalog、CharacterPack bindingが不正、
+欠落、またはqueue待機中に変化した場合はlegacyへfallbackせずfail closedする。
+既存の未印付きqueue eventはhistorical legacyとしてのみ扱い、異なるruntimeへ
+昇格・降格しない。既存会話行は生成contextに含めても常にuntrusted evidenceであり、
+legacy promptやmemoryをauthorityへ昇格しない。
+legacy履歴の `system/proactive` 行はpartner側のuntrusted evidenceとして扱い、
+それ以外のoperational `system` 行はcharacter会話contextへ含めない。
+
+queue workerからの `processQueuedReply` は内部optionとして `eventId` と
+`leaseToken` を組で受け取る。生成前に一度、さらにassistant行または画像summaryを
+書くscript lock内で直前にもう一度、対象 `CHAT_REPLY` が `PROCESSING` かつ同じ
+leaseを保持していることを検証する。再claim済みの旧workerは会話行を変更しない。
 
 ## 3.2 `ContextService`
 
@@ -133,6 +150,19 @@ QueueService.requeueDeadAsNewEvent(eventId, manualRequestId, now)
 QueueService.assessDeadEventRecovery(eventId)
 ```
 
+`claimBatch` はclaimごとにopaqueな
+`queue-lease:v1:{uuid-v4}` tokenを発行し、返却eventの `lockedBy` と保存行へ同じ値を
+記録する。公開signatureは維持し、workerは内部引数としてこのleaseを
+`markDone` / `markRetry` / `markDead` へ渡す。新形式eventの完了・再試行・終端失敗は、
+保存行の現在の `lockedBy` とleaseが完全一致する場合だけ許可する。stale回収または
+再claim後の旧worker結果は `QUEUE_LOCK_BUSY`、
+`details.reason=QUEUE_LEASE_MISMATCH` として行を変更せず破棄する。PR 4以前に
+PROCESSINGとなった旧形式 `lockedBy` 行だけは移行互換として従来遷移を許可する。
+
+`markRetry` / `markDead` とChatService内のqueue起票更新は、`lastError` を保存する
+前に共通のpersistence sanitizerへ通す。providerのrequest URL、API key、
+Authorization tokenなどの秘密値をevent行へ保存しない。
+
 `requeueDeadAsNewEvent` は既存 `DEAD` 行を変更しない。新しい `event_id` と新しい手動再試行用 `dedupe_key` を生成して新規イベントを登録する。同じ `manualRequestId` の再呼び出しでは既存の手動再試行イベントを返し、二重起票しない。
 
 `assessDeadEventRecovery` は本文、payload、各種IDを返さず、イベント種別、状態、安全な復旧アクション、理由コードだけを返す。自発送信イベントは再送せず、新しい適格性評価を待つ。
@@ -179,8 +209,9 @@ SheetRepository.upsertMemory(memory)
 
 ## 3.10 `CharacterProfileService` / `CharacterPackService`
 
-PR 3のactive targetはV2 profileと1個のcode-owned CharacterPackである。どちらも
-まだ既存の生成経路からは呼び出さない。
+PR 3のactive targetはV2 profileと1個のcode-owned CharacterPackである。PR 4では
+`enforced` chat経路だけがこれらをactive authorityとして読み、`legacy`経路、
+proactive、diary、memoryはまだ従来動作を維持する。
 
 ```javascript
 CharacterProfileService.validateV2(candidate)

@@ -91,6 +91,44 @@ function normalizeError(error, fallbackCode, fallbackMessage, details) {
   return createAppError(code, message, details, { cause: error });
 }
 
+function toPersistedError(error) {
+  var normalized = normalizeError(error);
+  var code = /^[A-Z0-9_]+$/.test(String(normalized.code || ''))
+    ? String(normalized.code)
+    : 'UNKNOWN';
+  var message = String(normalized.message || code);
+  try {
+    if (
+      typeof AppLogger !== 'undefined' &&
+      AppLogger &&
+      typeof AppLogger.mask === 'function'
+    ) {
+      message = String(AppLogger.mask(message));
+    }
+  } catch (ignoredMaskingError) {}
+
+  // Keep the persistence boundary safe even if logger masking is unavailable
+  // or a provider embeds its request URL in a transport exception.
+  message = message
+    .replace(
+      /([?&](?:key|api[_-]?key|token|access[_-]?token|secret)=)[^&#\s"']+/gi,
+      '$1[REDACTED_SECRET]'
+    )
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, '[REDACTED_API_KEY]')
+    .replace(
+      /(Authorization["']?\s*[:=]\s*["']?Bearer\s+)[^"',\s]+/gi,
+      '$1[REDACTED]'
+    );
+  message = message.trim();
+  if (!message) {
+    message = code;
+  }
+  return {
+    code: code,
+    message: message.slice(0, 1000)
+  };
+}
+
 function ensure(condition, code, message, details) {
   if (!condition) {
     throw createAppError(code, message, details);

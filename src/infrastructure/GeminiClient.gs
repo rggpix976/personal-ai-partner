@@ -16,10 +16,7 @@ var GeminiClient = (function() {
       responseJsonSchema: responseJsonSchema
     });
     try {
-      response.data = JsonUtil.parse(response.text, {
-        code: 'GEMINI_BAD_RESPONSE',
-        message: 'Gemini structured response is not valid JSON.'
-      });
+      response.data = parseStructuredData_(response.text);
       response.schemaName = schemaName || null;
       return response;
     } catch (error) {
@@ -76,6 +73,57 @@ var GeminiClient = (function() {
   }
 
   function getStructuredResponseSchema_(schemaName) {
+    if (schemaName === 'character-chat-image') {
+      return {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          replyText: { type: 'string' },
+          imageSummary: { type: 'string' }
+        },
+        required: [
+          'replyText',
+          'imageSummary'
+        ]
+      };
+    }
+
+    if (schemaName === 'immersion-semantic-verdict') {
+      return {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          verdict: {
+            type: 'string',
+            enum: ['allow', 'deny']
+          },
+          category: {
+            anyOf: [
+              {
+                type: 'string',
+                enum: APP_CONSTANTS.CHARACTER.GUARD_CATEGORIES.slice()
+              },
+              {
+                type: 'null'
+              }
+            ]
+          },
+          evidenceKeys: {
+            type: 'array',
+            maxItems: 50,
+            items: {
+              type: 'string'
+            }
+          }
+        },
+        required: [
+          'verdict',
+          'category',
+          'evidenceKeys'
+        ]
+      };
+    }
+
     if (schemaName === 'diary-entry') {
       return {
         type: 'object',
@@ -109,6 +157,19 @@ var GeminiClient = (function() {
     }
 
     return null;
+  }
+
+  function parseStructuredData_(text) {
+    try {
+      return JSON.parse(String(text || ''));
+    } catch (ignored) {
+      // Structured responses may contain generated character text. Never
+      // retain the raw response as an error sample or cause.
+      throw createAppError(
+        'GEMINI_BAD_RESPONSE',
+        'Gemini structured response is not valid JSON.'
+      );
+    }
   }
 
   function cloneContents_(contents) {
@@ -259,11 +320,16 @@ var GeminiClient = (function() {
       message.indexOf('Timed out') !== -1 ||
       message.indexOf('Service invoked too many times') !== -1
     ) {
-      return createAppError('GEMINI_TEMPORARY_FAILURE', message, null, {
+      return createAppError('GEMINI_TEMPORARY_FAILURE', 'Gemini transport request failed.', null, {
         cause: error
       });
     }
-    return normalizeError(error, 'GEMINI_TEMPORARY_FAILURE', message);
+    return createAppError(
+      'GEMINI_TEMPORARY_FAILURE',
+      'Gemini transport request failed.',
+      null,
+      { cause: error }
+    );
   }
 
   function safeParseJson_(text) {
@@ -298,7 +364,9 @@ var GeminiClient = (function() {
       mapHttpError: mapHttpError_,
       extractTextFromCandidate: extractTextFromCandidate_,
       buildRequestBody: buildRequestBody_,
-      getStructuredResponseSchema: getStructuredResponseSchema_
+      getStructuredResponseSchema: getStructuredResponseSchema_,
+      parseStructuredData: parseStructuredData_,
+      normalizeGeminiError: normalizeGeminiError_
     }
   };
 })();

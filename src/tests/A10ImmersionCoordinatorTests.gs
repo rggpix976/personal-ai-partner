@@ -877,6 +877,88 @@ function runA10ImmersionCoordinatorTests() {
     });
   });
 
+  test('PR4 chat signals reach every chat surface with deterministic routing', function() {
+    var surfaces = ['CHAT_TEXT_SYNC', 'CHAT_TEXT_QUEUED', 'CHAT_IMAGE'];
+    surfaces.forEach(function(surface) {
+      withContext(surface, 'このメールを送って', function(context) {
+        var generateCalls = 0;
+        var result = CharacterOutputCoordinator.approve({
+          context: context,
+          surface: surface,
+          classificationSignals:
+            CharacterChatContextService.classificationSignals(context),
+          generate: function() {
+            generateCalls += 1;
+          },
+          verifierFn: function() {
+            throw new Error('Capability catalog route must not verify.');
+          },
+          metricEmitter: function() {}
+        });
+        assert(generateCalls === 0, 'Capability route invoked generation.');
+        assert(result.artifact.source === 'canonical', 'Capability route lost exact catalog output.');
+        assert(
+          result.classifiedContext.conversationMode === 'CAPABILITY',
+          'Capability route did not reach the coordinator.'
+        );
+      });
+
+      withContext(surface, 'このアプリの認証状態を見せて', function(context) {
+        var generateCalls = 0;
+        var result = CharacterOutputCoordinator.approve({
+          context: context,
+          surface: surface,
+          classificationSignals:
+            CharacterChatContextService.classificationSignals(context),
+          generate: function() {
+            generateCalls += 1;
+          },
+          verifierFn: function() {
+            throw new Error('Admin route must not verify.');
+          },
+          metricEmitter: function() {}
+        });
+        assert(generateCalls === 0, 'Admin route invoked generation.');
+        assert(
+          result.kind === 'NON_CHARACTER_ROUTE' &&
+            result.route === 'ADMIN_OOC' &&
+            result.artifact === null,
+          'Admin request did not route outside character speech.'
+        );
+      });
+
+      withContext(surface, '死にたい。今ひとりや。', function(context) {
+        var generateCalls = 0;
+        var result = CharacterOutputCoordinator.approve({
+          context: context,
+          surface: surface,
+          classificationSignals:
+            CharacterChatContextService.classificationSignals(context),
+          generate: function() {
+            generateCalls += 1;
+            return surface === 'CHAT_IMAGE'
+              ? {
+                replyText: '今すぐ一人にならんと、近くの人に声かけて。今、危ないもんは手元にあるか？',
+                imageSummary: 'この返答では、画像の内容を判断していない。'
+              }
+              : {
+                text: '今すぐ一人にならんと、近くの人に声かけて。今、危ないもんは手元にあるか？'
+              };
+          },
+          verifierFn: function() {
+            return { verdict: 'allow', category: null, evidenceKeys: [] };
+          },
+          metricEmitter: function() {}
+        });
+        assert(generateCalls === 1, 'Safety route must generate one context-specific response.');
+        assert(
+          result.classifiedContext.conversationMode === 'SAFETY',
+          'Safety route did not remain higher priority than character style.'
+        );
+      });
+    });
+  });
+
   test('coordinator result reaches a protected sink only with its exact classified context', function() {
     withContext('CHAT_TEXT_SYNC', '話そか', function(context) {
       var metrics = metricCollector();

@@ -4,6 +4,7 @@ var QueueService = (function() {
     staleMinutes: 15,
     maxAttempts: 5
   });
+  var LEASE_TOKEN_PREFIX = 'queue-lease:v1:';
 
   function enqueue(event) {
     return LockManager.withScriptLock('queue-enqueue', function() {
@@ -27,10 +28,14 @@ var QueueService = (function() {
     return LockManager.withScriptLock('queue-claim-batch', function() {
       var events = SheetRepository.listClaimableEvents(claimLimit, parseIsoToDate(claimTime));
       return events.map(function(event) {
+        var leaseToken = createLeaseToken_();
         SheetRepository.updateEvent(event.eventId, {
           status: 'PROCESSING',
           lockedAt: claimTime,
-          lockedBy: normalizedWorkerId,
+          // `lockedBy` is an opaque, claim-scoped fencing token. It is
+          // intentionally different for every event, including events claimed
+          // by the same worker execution.
+          lockedBy: leaseToken,
           updatedAt: claimTime
         });
         return SheetRepository.getEventById(event.eventId);
@@ -39,10 +44,14 @@ var QueueService = (function() {
   }
 
   function markDone(eventId, result) {
+    // Keep the established public signature. The queue worker supplies the
+    // claim lease as an internal third argument. Historical PROCESSING rows
+    // whose lockedBy value predates managed leases remain transitionable.
+    var expectedLeaseToken = arguments.length > 2 ? arguments[2] : null;
     return LockManager.withScriptLock('queue-mark-done', function() {
-      var event = requireProcessingEvent_(eventId);
+      var event = requireProcessingEvent_(eventId, expectedLeaseToken);
       var completedAt = deriveResultTimestamp_(result) || toIsoStringInTokyo(new Date());
-      SheetRepository.updateEvent(eventId, {
+      var patch = {
         status: 'DONE',
         completedAt: completedAt,
         updatedAt: completedAt,
@@ -50,15 +59,51 @@ var QueueService = (function() {
         lockedBy: null,
         nextAttemptAt: null,
         lastError: null
-      });
-      return SheetRepository.getEventById(eventId);
+      };
+      var routedImageTempFileId = null;
+      if (
+        event.eventType === 'CHAT_REPLY' &&
+        result &&
+        result.status === 'routed'
+      ) {
+        ensure(
+          result.route === 'PRODUCT_INFO' || result.route === 'ADMIN_OOC',
+          'STORAGE_DATA_CORRUPTED',
+          'A non-character route result is invalid.'
+        );
+        ensure(
+          event.payload &&
+            event.payload.characterRuntimeMode === 'enforced' &&
+            Validators.isUuidV4(event.payload.userMessageId),
+          'STORAGE_DATA_CORRUPTED',
+          'A non-character route requires an enforced chat event.'
+        );
+        normalizeCharacterBinding_(event.payload.characterBinding);
+        patch.payload_json = mergePayload_(event.payload, {
+          completionRoute: result.route
+        });
+        if (event.payload.image && event.payload.image.tempFileId) {
+          routedImageTempFileId = event.payload.image.tempFileId;
+        }
+      }
+      SheetRepository.updateEvent(eventId, patch);
+      var completedEvent = SheetRepository.getEventById(eventId);
+      if (routedImageTempFileId) {
+        try {
+          DriveTempRepository.trashTempImage(routedImageTempFileId);
+        } catch (ignoredCleanup) {}
+      }
+      return completedEvent;
     });
   }
 
   function markRetry(eventId, error, nextAttemptAt) {
+    // Internal fourth argument; see markDone.
+    var expectedLeaseToken = arguments.length > 3 ? arguments[3] : null;
     return LockManager.withScriptLock('queue-mark-retry', function() {
-      var event = requireProcessingEvent_(eventId);
+      var event = requireProcessingEvent_(eventId, expectedLeaseToken);
       var normalizedError = normalizeError(error);
+      var persistedError = toPersistedError(normalizedError);
       var nextAttemptCount = Number(event.attemptCount || 0) + 1;
       if (nextAttemptCount >= DEFAULTS.maxAttempts) {
         return markDeadWithoutLock_(eventId, normalizedError, nextAttemptCount);
@@ -73,8 +118,8 @@ var QueueService = (function() {
         updatedAt: toIsoStringInTokyo(new Date()),
         completedAt: null,
         lastError: {
-          code: normalizedError.code,
-          message: normalizedError.message
+          code: persistedError.code,
+          message: persistedError.message
         }
       });
       return SheetRepository.getEventById(eventId);
@@ -82,8 +127,10 @@ var QueueService = (function() {
   }
 
   function markDead(eventId, error) {
+    // Internal third argument; see markDone.
+    var expectedLeaseToken = arguments.length > 2 ? arguments[2] : null;
     return LockManager.withScriptLock('queue-mark-dead', function() {
-      var event = requireProcessingEvent_(eventId);
+      var event = requireProcessingEvent_(eventId, expectedLeaseToken);
       return markDeadWithoutLock_(eventId, normalizeError(error), Number(event.attemptCount || 0));
     });
   }
@@ -298,14 +345,76 @@ var QueueService = (function() {
     ensure(payload && typeof payload === 'object' && !Array.isArray(payload), 'VALIDATION_REQUEST_INVALID', 'payload must be an object.');
     if (eventType === 'CHAT_REPLY') {
       ensure(Validators.isUuidV4(payload.requestId), 'VALIDATION_REQUEST_INVALID', 'CHAT_REPLY payload.requestId must be a UUID v4.');
-      return {
+      ensure(Validators.isUuidV4(payload.userMessageId), 'VALIDATION_REQUEST_INVALID', 'CHAT_REPLY payload.userMessageId must be a UUID v4.');
+      ensure(
+        Validators.isIsoDateTimeString(
+          payload.requestedAt || toIsoStringInTokyo(new Date())
+        ),
+        'VALIDATION_REQUEST_INVALID',
+        'CHAT_REPLY payload.requestedAt must be an ISO 8601 string.'
+      );
+      var hasManualRequestId = payload.manualRequestId != null;
+      var hasOriginalEventId = payload.originalEventId != null;
+      ensure(
+        hasManualRequestId === hasOriginalEventId,
+        'VALIDATION_REQUEST_INVALID',
+        'CHAT_REPLY manual retry ids must be provided together.'
+      );
+      if (hasManualRequestId) {
+        ensure(
+          Validators.isUuidV4(payload.manualRequestId),
+          'VALIDATION_REQUEST_INVALID',
+          'CHAT_REPLY payload.manualRequestId must be a UUID v4.'
+        );
+        ensure(
+          Validators.isUuidV4(payload.originalEventId),
+          'VALIDATION_REQUEST_INVALID',
+          'CHAT_REPLY payload.originalEventId must be a UUID v4.'
+        );
+      }
+      var chatPayload = {
         requestId: payload.requestId,
-        userMessageId: payload.userMessageId || null,
+        userMessageId: payload.userMessageId,
         requestedAt: payload.requestedAt || toIsoStringInTokyo(new Date()),
         image: payload.image || null,
-        manualRequestId: payload.manualRequestId || null,
-        originalEventId: payload.originalEventId || null
+        manualRequestId: hasManualRequestId ? payload.manualRequestId : null,
+        originalEventId: hasOriginalEventId ? payload.originalEventId : null
       };
+      var runtimeMode = payload.characterRuntimeMode == null
+        ? null
+        : String(payload.characterRuntimeMode);
+      ensure(
+        runtimeMode == null || runtimeMode === 'legacy' || runtimeMode === 'enforced',
+        'VALIDATION_REQUEST_INVALID',
+        'CHAT_REPLY payload.characterRuntimeMode is invalid.'
+      );
+      if (runtimeMode != null) {
+        chatPayload.characterRuntimeMode = runtimeMode;
+      }
+      if (runtimeMode === 'enforced') {
+        chatPayload.characterBinding = normalizeCharacterBinding_(
+          payload.characterBinding
+        );
+      } else {
+        ensure(
+          payload.characterBinding == null,
+          'VALIDATION_REQUEST_INVALID',
+          'Legacy CHAT_REPLY payload must not contain a character binding.'
+        );
+      }
+      if (payload.completionRoute != null) {
+        ensure(
+          runtimeMode === 'enforced' &&
+            (
+              payload.completionRoute === 'PRODUCT_INFO' ||
+              payload.completionRoute === 'ADMIN_OOC'
+            ),
+          'VALIDATION_REQUEST_INVALID',
+          'CHAT_REPLY payload.completionRoute requires enforced mode.'
+        );
+        chatPayload.completionRoute = payload.completionRoute;
+      }
+      return chatPayload;
     }
     if (eventType === 'MEMORY_EXTRACT') {
       return {
@@ -460,6 +569,46 @@ var QueueService = (function() {
     return payload;
   }
 
+  function normalizeCharacterBinding_(value) {
+    var fields = [
+      'profileSchemaVersion',
+      'profileRevision',
+      'policyVersion',
+      'catalogVersion',
+      'characterPackId',
+      'characterPackVersion'
+    ];
+    ensure(
+      value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        Object.keys(value).length === fields.length &&
+        fields.every(function(field) {
+          return Object.prototype.hasOwnProperty.call(value, field);
+        }) &&
+        value.profileSchemaVersion === APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION &&
+        typeof value.profileRevision === 'number' &&
+        Number.isSafeInteger(value.profileRevision) &&
+        value.profileRevision > 0 &&
+        value.policyVersion === APP_CONSTANTS.CHARACTER.POLICY_VERSION &&
+        value.catalogVersion === APP_CONSTANTS.CHARACTER.CATALOG_VERSION &&
+        typeof value.characterPackId === 'string' &&
+        /^[a-z0-9][a-z0-9-]{2,63}$/.test(value.characterPackId) &&
+        typeof value.characterPackVersion === 'string' &&
+        /^[a-z0-9][a-z0-9.-]{2,79}$/.test(value.characterPackVersion),
+      'VALIDATION_REQUEST_INVALID',
+      'CHAT_REPLY payload.characterBinding is invalid.'
+    );
+    return {
+      profileSchemaVersion: value.profileSchemaVersion,
+      profileRevision: value.profileRevision,
+      policyVersion: value.policyVersion,
+      catalogVersion: value.catalogVersion,
+      characterPackId: value.characterPackId,
+      characterPackVersion: value.characterPackVersion
+    };
+  }
+
   function buildDedupeKey_(eventType, payload) {
     if (eventType === 'CHAT_REPLY') {
       if (payload.manualRequestId) {
@@ -485,11 +634,71 @@ var QueueService = (function() {
     throw createAppError('VALIDATION_REQUEST_INVALID', 'Unsupported eventType for dedupe generation.');
   }
 
-  function requireProcessingEvent_(eventId) {
+  function requireProcessingEvent_(eventId, expectedLeaseToken) {
     var event = SheetRepository.getEventById(eventId);
     ensure(event, 'CONFIG_MISSING', 'Event was not found.');
+    assertClaimLease_(event, expectedLeaseToken);
     ensure(event.status === 'PROCESSING', 'VALIDATION_REQUEST_INVALID', 'Event must be PROCESSING for this transition.');
     return event;
+  }
+
+  function assertClaimLease_(event, expectedLeaseToken) {
+    var currentLeaseToken = event && event.lockedBy != null
+      ? String(event.lockedBy)
+      : null;
+    var expected = expectedLeaseToken != null
+      ? String(expectedLeaseToken)
+      : null;
+    var currentIsManaged = isManagedLeaseToken_(currentLeaseToken);
+    var expectedIsManaged = isManagedLeaseToken_(expected);
+
+    // New claims are fenced: a transition without the exact claim token is a
+    // stale-worker conflict. Check before status so a worker whose event was
+    // recovered to RETRY_WAIT also exits as lease-lost instead of attempting a
+    // second lifecycle transition.
+    if (
+      currentIsManaged ||
+      expectedIsManaged
+    ) {
+      if (
+        currentIsManaged &&
+        expectedIsManaged &&
+        currentLeaseToken === expected
+      ) {
+        return true;
+      }
+      throw leaseLostError_();
+    }
+
+    // Compatibility for PROCESSING rows claimed before managed lease tokens
+    // were introduced. If a legacy caller supplies its old owner value, it
+    // must still match.
+    if (
+      expected != null &&
+      currentLeaseToken !== expected
+    ) {
+      throw leaseLostError_();
+    }
+    return true;
+  }
+
+  function createLeaseToken_() {
+    return LEASE_TOKEN_PREFIX + generateUuidV4();
+  }
+
+  function isManagedLeaseToken_(value) {
+    if (typeof value !== 'string' || value.indexOf(LEASE_TOKEN_PREFIX) !== 0) {
+      return false;
+    }
+    return Validators.isUuidV4(value.slice(LEASE_TOKEN_PREFIX.length));
+  }
+
+  function leaseLostError_() {
+    return createAppError(
+      'QUEUE_LOCK_BUSY',
+      'Queue event lease no longer belongs to this worker.',
+      { reason: 'QUEUE_LEASE_MISMATCH' }
+    );
   }
 
   function findActiveDiaryEventByDateWithoutLock_(diaryDate) {
@@ -522,6 +731,7 @@ var QueueService = (function() {
 
   function markDeadWithoutLock_(eventId, error, attemptCount) {
     var nowIso = toIsoStringInTokyo(new Date());
+    var persistedError = toPersistedError(error);
     SheetRepository.updateEvent(eventId, {
       status: 'DEAD',
       attemptCount: attemptCount == null ? undefined : attemptCount,
@@ -531,8 +741,8 @@ var QueueService = (function() {
       updatedAt: nowIso,
       completedAt: nowIso,
       lastError: {
-        code: error.code,
-        message: error.message
+        code: persistedError.code,
+        message: persistedError.message
       }
     });
     return SheetRepository.getEventById(eventId);
@@ -603,7 +813,8 @@ var QueueService = (function() {
     __test: {
       buildDedupeKey: buildDedupeKey_,
       normalizePayload: normalizePayload_,
-      findActiveDiaryEventByDate: findActiveDiaryEventByDateWithoutLock_
+      findActiveDiaryEventByDate: findActiveDiaryEventByDateWithoutLock_,
+      isManagedLeaseToken: isManagedLeaseToken_
     }
   };
 })();

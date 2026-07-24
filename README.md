@@ -18,10 +18,11 @@ and initiate proactive conversations.
 - Staged production validation completed on 2026-07-20
 - Time-driven jobs: exactly one `processQueueJob` trigger and one
   `schedulerJob` trigger
-- The repository includes a dormant V2 profile target, one code-owned
-  CharacterPack, typed context, classifier, reviewed exceptional catalog,
-  guard contracts, and authenticated approval artifacts; production surface
-  integration and deployment are not yet implemented
+- The repository includes the V2 profile target, one code-owned CharacterPack,
+  typed context, classifier, reviewed exceptional catalog, guard contracts,
+  authenticated approval artifacts, and the PR 4 sync/queued/image chat
+  integration. The runtime still defaults to `legacy`; V2 activation and
+  production deployment are not yet performed
 - `character-profile.v1` remains dormant compatibility data and is not
   automatically converted to V2
 
@@ -35,6 +36,8 @@ documented in
 - Apps Script setup, validation, repositories, logging, locking, and retries
 - Owner-only Apps Script HTML Service Web App
 - Gemini chat generation and image understanding
+- Dormant enforced-character chat generation, exact exceptional replies,
+  neutral product/status routing, and approval metadata persistence
 - Long-term memory extraction and retrieval
 - AI self-diary generation
 - Persistent queue processing and scheduled jobs
@@ -107,8 +110,8 @@ Start with these documents:
 - [`docs/features/CHARACTER_IMMERSION.md`](docs/features/CHARACTER_IMMERSION.md):
   single-CharacterPack deployment model, minimal V2 profile, immersion,
   exceptional responses, product/UI separation, proactive target, and
-  acceptance specification; surface integration and runtime enforcement remain
-  pending
+  acceptance specification; chat integration is implemented but activation and
+  the proactive/diary/memory/settings surface integrations remain pending
 - [`docs/qa/A7_MANUAL_GAS_TEST_PLAN.md`](docs/qa/A7_MANUAL_GAS_TEST_PLAN.md):
   manual Apps Script validation
 - [`docs/qa/A7_SECURITY_REVIEW.md`](docs/qa/A7_SECURITY_REVIEW.md):
