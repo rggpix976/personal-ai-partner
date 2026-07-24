@@ -96,7 +96,7 @@
 | attempt_count | int | 必須 |  | 試行回数 |
 | next_attempt_at | datetime | 任意 | INDEX | 次回実行可能時刻 |
 | locked_at | datetime | 任意 |  | ロック日時 |
-| locked_by | string | 任意 |  | 実行UUID |
+| locked_by | string | 任意 |  | claim単位のopaque lease token（旧行は実行UUID） |
 | created_at | datetime | 必須 |  | 作成日時 |
 | updated_at | datetime | 必須 |  | 更新日時 |
 | completed_at | datetime | 任意 |  | 完了日時 |

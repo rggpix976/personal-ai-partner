@@ -82,6 +82,19 @@ function runA10ImmersionArtifactTests() {
         return true;
       }
     };
+    state.profileService = {
+      requireActive: function() {
+        var pack = CharacterPackService.getActive();
+        return {
+          profileSchemaVersion: APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION,
+          profileRevision: state.activeRevision,
+          policyVersion: APP_CONSTANTS.CHARACTER.POLICY_VERSION,
+          catalogVersion: APP_CONSTANTS.CHARACTER.CATALOG_VERSION,
+          characterPackId: pack.packId,
+          characterPackVersion: pack.packVersion
+        };
+      }
+    };
     return state;
   }
 
@@ -579,6 +592,7 @@ function runA10ImmersionArtifactTests() {
     var authenticated = makeAuthenticatedGuard();
     withGlobals({
       CharacterContextService: boundary.service,
+      CharacterProfileService: boundary.profileService,
       ImmersionGuard: authenticated.service
     }, function() {
       var decision = authenticated.allow(
@@ -674,6 +688,7 @@ function runA10ImmersionArtifactTests() {
 
     withGlobals({
       CharacterContextService: boundary.service,
+      CharacterProfileService: boundary.profileService,
       ImmersionGuard: authenticated.service
     }, function() {
       var artifact = ApprovedCharacterArtifactService.issue(
@@ -833,6 +848,7 @@ function runA10ImmersionArtifactTests() {
 
     withGlobals({
       CharacterContextService: boundary.service,
+      CharacterProfileService: boundary.profileService,
       ImmersionGuard: authenticated.service
     }, function() {
       var ambiguous = issue('same safe payload');

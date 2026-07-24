@@ -2,8 +2,9 @@
 
 ## 1. Status and scope
 
-Status: **Partially implemented — dormant profile and PR 3 protection core; not
-deployed or connected to production surfaces**.
+Status: **Partially implemented — PR 4 chat integration is implemented in the
+repository behind the `legacy` default; it is not deployed or activated in
+production**.
 
 This document defines the target behavior for preserving one configured
 partner's personality and the user's sense of immersion. It covers text and
@@ -18,13 +19,20 @@ replaces that active target with `character-profile.v2` and a code-owned
 `CharacterPack`. V1 remains dormant compatibility configuration; it is never
 activated as V2 and is never automatically converted.
 
-PR 3 adds a dormant common classifier, fixed policy, CharacterPack-owned
+PR 3 added a dormant common classifier, fixed policy, CharacterPack-owned
 catalog, semantic-verifier contract, authenticated approval artifacts,
 protected sink adapter, aggregate metric allowlists, and one-rewrite
-coordinator. PR 3 does not connect `ChatService`, queued chat, image chat,
+coordinator. PR 3 did not connect `ChatService`, queued chat, image chat,
 proactive delivery, diary, memory, Web responses, repositories, or mail. It
-does not change CONFIG rows, stored data, triggers, deployment, or production
+did not change CONFIG rows, stored data, triggers, deployment, or production
 behavior.
+
+PR 4 connects sync text chat, queued text chat, and image chat to that core in
+`enforced` mode. It adds neutral `PRODUCT_INFO` / `ADMIN_OOC` status routing,
+version-bound queue events, approval metadata for persisted chat output, and
+legacy-history isolation. The runtime default remains `legacy`; this repository
+change does not itself migrate production data, change CONFIG, install
+triggers, or deploy the Web App.
 
 ### 1.1 Current and target behavior
 
@@ -448,8 +456,8 @@ created.
 }
 ```
 
-The onboarding/About/status UI then presents reviewed technical copy. The
-partner never says product disclosure text.
+The onboarding/About/status UI then presents the exact reviewed technical copy
+in section 14. The partner never says product disclosure text.
 
 ## 9. Common output pipeline
 
@@ -697,14 +705,29 @@ Onboarding/About/status UI discloses, in neutral product voice:
 - current configuration or operational errors
 - the boundary between product controls and partner speech
 
+The PR 4 reviewed chat/status notices are exact:
+
+| Route/state | Title | Message |
+|---|---|---|
+| `PRODUCT_INFO` | `このアプリについて` | `このアプリは、会話の返信を生成するためにAIを使用しています。送信した会話や画像は返信生成のために設定済みのAIサービスへ送られ、会話履歴はこのアプリの保存先に記録されます。これは推し本人の発言ではなく、アプリからの案内です。` |
+| `ADMIN_OOC` | `アプリの状態について` | `設定や動作状態に関する情報は、推しの発言ではなくアプリの管理情報として扱います。詳しい状態はApps Scriptの実行履歴・トリガー・設定で確認してください。` |
+| Invalid or incomplete character configuration | `設定の確認が必要です` | `推しとの会話設定が未完了、または整合していません。設定を確認してから、もう一度お試しください。` |
+
+The route notices are returned as `status:"routed"` with no assistant message,
+character artifact, or assistant row. The configuration notice is neutral
+error/status UI, not a partner utterance. None of these strings is rewritten
+by a model.
+
 That disclosure is not inserted into partner bubbles, proactive mail body,
 diary narrative, or memory.
 
 ## 15. Legacy compatibility, activation, and rollback
 
-Legacy production behavior remains unchanged until its surface integration PR.
-The active V2 path requires an explicitly valid V2 profile, positive revision,
-active CharacterPack metadata, and enforced runtime mode.
+Legacy production behavior remains unchanged because PR 4 has not been
+deployed or activated and the repository still defaults to `legacy`. The PR 4
+chat surfaces use the active V2 path only after an explicitly valid V2 profile,
+positive revision, active CharacterPack metadata, schema migration, and
+enforced runtime mode are all present.
 
 V1 and V2 are not a tagged runtime choice. V1 is dormant historical
 configuration only. No automatic conversion, fallback, partial merge, or
@@ -712,9 +735,14 @@ configuration only. No automatic conversion, fallback, partial merge, or
 mode, character output fails closed and neutral status UI explains that
 settings need attention.
 
-Rollback restores the complete legacy path. It does not reinterpret V2,
-rewrite stored messages, delete an approved diary, or promote legacy memories.
-Deploying PR 3 with legacy defaults changes no production behavior.
+Rollback restores the complete legacy path by setting
+`CHARACTER_RUNTIME_MODE=legacy` on the PR 4-compatible build, or by deploying a
+rollback build that retains unknown trailing sheet columns. It does not
+reinterpret V2, rewrite stored messages, delete an approved diary, or promote
+legacy memories. An unchanged pre-PR 4 build must not be deployed against an
+a3 sheet. Merging PR 4 with legacy defaults changes no production behavior;
+deployment, schema migration, and enforced activation remain separate
+controlled steps.
 
 ## 16. Logging and metrics
 
@@ -796,6 +824,11 @@ attempts must remain zero for release.
 | PR 7 | Memory provenance, grounding, and instruction validation | Only accepted memory can reach later context |
 | PR 8 | Minimal settings UI plus onboarding/About/status disclosure | Only approved user fields are editable |
 | PR 9 | Staged activation, browser/manual acceptance, monitoring, rollback | All applicable `PI-*` gates pass |
+
+Repository status: PR 4 chat integration is implemented behind the existing
+`legacy` default. It has not been deployed or activated in production. PR 5
+and later surface integrations, schema migration in Apps Script, staged
+activation, and manual acceptance remain pending.
 
 ## 19. Related sources
 

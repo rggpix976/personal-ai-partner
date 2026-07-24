@@ -17,6 +17,7 @@
     "status": {
       "enum": [
         "completed",
+        "routed",
         "queued",
         "failed"
       ]
@@ -62,6 +63,26 @@
         }
       ]
     },
+    "route": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/nonCharacterRoute"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "notice": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/noticeDto"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -96,8 +117,59 @@
           "assistantMessage": {
             "$ref": "#/$defs/messageDto"
           },
+          "route": {
+            "type": "null"
+          },
+          "notice": {
+            "type": "null"
+          },
           "error": {
             "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "routed"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "userMessage",
+          "assistantMessage",
+          "retryAfterSeconds",
+          "error",
+          "route",
+          "notice"
+        ],
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "userMessage": {
+            "$ref": "#/$defs/messageDto"
+          },
+          "assistantMessage": {
+            "type": "null"
+          },
+          "retryAfterSeconds": {
+            "type": "null"
+          },
+          "error": {
+            "type": "null"
+          },
+          "route": {
+            "$ref": "#/$defs/nonCharacterRoute"
+          },
+          "notice": {
+            "$ref": "#/$defs/noticeDto"
           }
         }
       }
@@ -132,6 +204,12 @@
           "assistantMessage": {
             "type": "null"
           },
+          "route": {
+            "type": "null"
+          },
+          "notice": {
+            "type": "null"
+          },
           "error": {
             "type": "null"
           }
@@ -156,6 +234,12 @@
         "properties": {
           "ok": {
             "const": false
+          },
+          "route": {
+            "type": "null"
+          },
+          "notice": {
+            "type": "null"
           },
           "error": {
             "$ref": "#/$defs/errorDto"
@@ -183,16 +267,99 @@
         }
       }
     },
+    "nonCharacterRoute": {
+      "enum": [
+        "PRODUCT_INFO",
+        "ADMIN_OOC"
+      ]
+    },
+    "noticeDto": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "message"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      }
+    },
+    "characterApprovalMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "surface",
+        "source",
+        "policyVersion",
+        "profileSchemaVersion",
+        "profileRevision",
+        "catalogVersion",
+        "characterPackId",
+        "characterPackVersion"
+      ],
+      "properties": {
+        "surface": {
+          "$ref": "immersion-guard-decision.schema.json#/$defs/surface"
+        },
+        "source": {
+          "enum": [
+            "generated",
+            "rewrite",
+            "canonical",
+            "fallback",
+            "legacy_revalidated"
+          ]
+        },
+        "policyVersion": {
+          "const": "character-policy.v2"
+        },
+        "profileSchemaVersion": {
+          "const": "character-profile.v2"
+        },
+        "profileRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "catalogVersion": {
+          "const": "character-catalog.v2"
+        },
+        "characterPackId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{2,63}$"
+        },
+        "characterPackVersion": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]{2,79}$"
+        }
+      }
+    },
     "messageDto": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "messageId",
+        "requestId",
         "createdAt",
         "role",
         "messageType",
         "text",
-        "status"
+        "image",
+        "status",
+        "replyToMessageId",
+        "model",
+        "inputTokens",
+        "outputTokens",
+        "error",
+        "characterApproval"
       ],
       "properties": {
         "messageId": {
@@ -266,10 +433,47 @@
             "failed"
           ]
         },
+        "replyToMessageId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inputTokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "outputTokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
         "error": {
           "oneOf": [
             {
               "$ref": "#/$defs/errorDto"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "characterApproval": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/characterApprovalMetadata"
             },
             {
               "type": "null"

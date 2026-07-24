@@ -69,8 +69,33 @@ function sendChat(request)
 | status | 必須 |
 |---|---|
 | `completed` | `userMessage`, `assistantMessage` |
+| `routed` | `userMessage`, `route`, `notice`; `assistantMessage=null`, `retryAfterSeconds=null`, `error=null` |
 | `queued` | `userMessage`, `retryAfterSeconds` |
 | `failed` | `error` |
+
+`PRODUCT_INFO` / `ADMIN_OOC` は正常な非キャラクター処理であり、`failed` ではなく
+次の `routed` 結果を返す。
+
+```javascript
+{
+  ok: true,
+  status: "routed",
+  requestId: string,
+  userMessage: MessageDto,
+  assistantMessage: null,
+  retryAfterSeconds: null,
+  error: null,
+  route: "PRODUCT_INFO" | "ADMIN_OOC",
+  notice: {
+    title: string,
+    message: string
+  },
+  warnings: string[]
+}
+```
+
+`notice` はreview済みの中立なアプリ文言であり、推しの吹き出し、assistant行、
+character artifactを作らない。生成modelによる言い換えも行わない。
 
 ### `getRequestStatus(requestId)`
 
@@ -140,12 +165,43 @@ function getHealthStatus()
     summary: string
   } | null,
   status: "accepted" | "completed" | "failed",
+  replyToMessageId: string | null,
+  model: string | null,
+  inputTokens: number | null,
+  outputTokens: number | null,
   error: {
     code: string,
     message: string
+  } | null,
+  characterApproval: {
+    surface:
+      | "CHAT_TEXT_SYNC"
+      | "CHAT_TEXT_QUEUED"
+      | "CHAT_IMAGE"
+      | "PROACTIVE_AI"
+      | "PROACTIVE_RETRY"
+      | "DIARY"
+      | "MEMORY_EXTRACTION",
+    source:
+      | "generated"
+      | "rewrite"
+      | "canonical"
+      | "fallback"
+      | "legacy_revalidated",
+    policyVersion: "character-policy.v2",
+    profileSchemaVersion: "character-profile.v2",
+    profileRevision: number,
+    catalogVersion: "character-catalog.v2",
+    characterPackId: string,
+    characterPackVersion: string
   } | null
 }
 ```
+
+`characterApproval` は承認済みcharacter出力または承認済み画像summaryにだけ付与する。
+既存legacy行、user text行、system行、非キャラクターrouteは `null` とし、過去行を
+承認済みへ自動昇格しない。値は保存済みartifactの完全なversion bindingであり、
+一部だけを返してはならない。
 
 ## 2.3 公開APIの禁止事項
 

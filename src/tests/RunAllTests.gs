@@ -13,7 +13,9 @@ function runAllSelfTests() {
     'runA10ImmersionPolicyCorpusTests',
     'runA10ImmersionGuardTests',
     'runA10ImmersionArtifactTests',
-    'runA10ImmersionCoordinatorTests'
+    'runA10ImmersionCoordinatorTests',
+    'runA11CharacterChatGeminiAdapterTests',
+    'runA11CharacterChatIntegrationTests'
   ];
   var summary = {
     ok: true,

@@ -67,13 +67,16 @@ var SheetRepository = (function() {
     });
     var headers = getHeaders(sheetName);
     var sheet = getSheet(sheetName);
+    var rawRow = sheet.getRange(rowIndex, 1, 1, headers.length).getValues()[0];
     var current = fromSheetRow(
       sheetName,
       headers,
-      sheet.getRange(rowIndex, 1, 1, headers.length).getValues()[0]
+      rawRow
     );
     var next = mergeObjects(current, patch);
-    sheet.getRange(rowIndex, 1, 1, headers.length).setValues([toSheetRow(sheetName, headers, next)]);
+    sheet.getRange(rowIndex, 1, 1, headers.length).setValues([
+      toSheetRow(sheetName, headers, next, rawRow)
+    ]);
     return next;
   }
 
@@ -91,9 +94,14 @@ var SheetRepository = (function() {
     return objectRow;
   }
 
-  function toSheetRow(sheetName, headers, objectRow) {
+  function toSheetRow(sheetName, headers, objectRow, existingRawRow) {
     var schema = getSheetSchema(sheetName);
     return headers.map(function(header, index) {
+      if (!schema[index]) {
+        return existingRawRow && index < existingRawRow.length
+          ? existingRawRow[index]
+          : '';
+      }
       return formatCellValue(schema[index].type, objectRow[header]);
     });
   }
@@ -195,6 +203,158 @@ var SheetRepository = (function() {
     return normalized;
   }
 
+  function assertCharacterApprovalHeaders_(headers) {
+    var expected = APP_CONSTANTS.CHARACTER.APPROVAL_COLUMNS;
+    var conversationHeaders = APP_CONSTANTS.SHEET_SCHEMAS[
+      APP_CONSTANTS.SHEETS.CONVERSATION_LOGS
+    ]
+      .map(function(column) {
+        return column.name;
+      });
+    var offset = conversationHeaders.indexOf(expected[0]);
+    if (
+      offset < 0 ||
+      !Array.isArray(headers) ||
+      headers.length < offset + expected.length
+    ) {
+      throw characterApprovalError_(
+        'STORAGE_DATA_CORRUPTED',
+        'CHARACTER_APPROVAL_COLUMNS_MISSING'
+      );
+    }
+    for (var i = 0; i < expected.length; i += 1) {
+      if (headers[offset + i] !== expected[i]) {
+        throw characterApprovalError_(
+          'STORAGE_DATA_CORRUPTED',
+          'CHARACTER_APPROVAL_COLUMNS_INVALID'
+        );
+      }
+    }
+    return true;
+  }
+
+  function assertCharacterApprovalColumns() {
+    return assertCharacterApprovalHeaders_(
+      getHeaders(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS)
+    );
+  }
+
+  function normalizeCharacterApproval_(value, errorCode) {
+    if (value == null) {
+      return null;
+    }
+    var fields = APP_CONSTANTS.CHARACTER.APPROVAL_FIELDS;
+    if (!isPlainObject_(value)) {
+      throw characterApprovalError_(errorCode, 'CHARACTER_APPROVAL_INVALID');
+    }
+    var keys = Object.keys(value);
+    if (
+      keys.length !== fields.length ||
+      !fields.every(function(field) {
+        return Object.prototype.hasOwnProperty.call(value, field);
+      })
+    ) {
+      throw characterApprovalError_(errorCode, 'CHARACTER_APPROVAL_FIELDS_INVALID');
+    }
+    if (
+      APP_CONSTANTS.CHARACTER.OUTPUT_SURFACES.indexOf(value.surface) === -1 ||
+      APP_CONSTANTS.CHARACTER.ARTIFACT_SOURCES.indexOf(value.source) === -1
+    ) {
+      throw characterApprovalError_(errorCode, 'CHARACTER_APPROVAL_ENUM_INVALID');
+    }
+    if (
+      value.policyVersion !== APP_CONSTANTS.CHARACTER.POLICY_VERSION ||
+      value.profileSchemaVersion !== APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION ||
+      value.catalogVersion !== APP_CONSTANTS.CHARACTER.CATALOG_VERSION ||
+      typeof value.profileRevision !== 'number' ||
+      !Number.isSafeInteger(value.profileRevision) ||
+      value.profileRevision <= 0 ||
+      typeof value.characterPackId !== 'string' ||
+      !/^[a-z0-9][a-z0-9-]{2,63}$/.test(value.characterPackId) ||
+      typeof value.characterPackVersion !== 'string' ||
+      !/^[a-z0-9][a-z0-9.-]{2,79}$/.test(value.characterPackVersion)
+    ) {
+      throw characterApprovalError_(errorCode, 'CHARACTER_APPROVAL_TYPE_INVALID');
+    }
+    return {
+      surface: value.surface,
+      source: value.source,
+      policyVersion: value.policyVersion,
+      profileSchemaVersion: value.profileSchemaVersion,
+      profileRevision: value.profileRevision,
+      catalogVersion: value.catalogVersion,
+      characterPackId: value.characterPackId,
+      characterPackVersion: value.characterPackVersion
+    };
+  }
+
+  function characterApprovalsEqual_(left, right) {
+    if (left == null || right == null) {
+      return left == null && right == null;
+    }
+    return APP_CONSTANTS.CHARACTER.APPROVAL_FIELDS.every(function(field) {
+      return left[field] === right[field];
+    });
+  }
+
+  function characterApprovalToRow_(value, errorCode) {
+    var approval = normalizeCharacterApproval_(value, errorCode);
+    return {
+      approval_surface: approval ? approval.surface : null,
+      approval_source: approval ? approval.source : null,
+      approval_policy_version: approval ? approval.policyVersion : null,
+      approval_profile_schema_version: approval ? approval.profileSchemaVersion : null,
+      approval_profile_revision: approval ? approval.profileRevision : null,
+      approval_catalog_version: approval ? approval.catalogVersion : null,
+      approval_character_pack_id: approval ? approval.characterPackId : null,
+      approval_character_pack_version: approval ? approval.characterPackVersion : null
+    };
+  }
+
+  function characterApprovalFromRow_(row) {
+    var columns = APP_CONSTANTS.CHARACTER.APPROVAL_COLUMNS;
+    var populatedCount = columns.filter(function(column) {
+      return row[column] != null && row[column] !== '';
+    }).length;
+    if (populatedCount === 0) {
+      return null;
+    }
+    if (populatedCount !== columns.length) {
+      throw characterApprovalError_(
+        'STORAGE_DATA_CORRUPTED',
+        'CHARACTER_APPROVAL_PARTIAL'
+      );
+    }
+    return normalizeCharacterApproval_({
+      surface: row.approval_surface,
+      source: row.approval_source,
+      policyVersion: row.approval_policy_version,
+      profileSchemaVersion: row.approval_profile_schema_version,
+      profileRevision: row.approval_profile_revision,
+      catalogVersion: row.approval_catalog_version,
+      characterPackId: row.approval_character_pack_id,
+      characterPackVersion: row.approval_character_pack_version
+    }, 'STORAGE_DATA_CORRUPTED');
+  }
+
+  function isPlainObject_(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return false;
+    }
+    var prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  }
+
+  function characterApprovalError_(code, reason) {
+    return createAppError(
+      code,
+      code === 'STORAGE_DATA_CORRUPTED'
+        ? 'Stored character approval metadata is invalid.'
+        : 'Character approval metadata is invalid.',
+      { reason: reason }
+    );
+  }
+
   function toMessageDto(row) {
     return {
       messageId: row.message_id,
@@ -209,6 +369,7 @@ var SheetRepository = (function() {
         summary: row.image_summary || ''
       } : null,
       status: row.status,
+      replyToMessageId: row.reply_to_message_id || null,
       model: row.model || null,
       inputTokens: row.input_tokens == null
         ? null
@@ -219,7 +380,8 @@ var SheetRepository = (function() {
       error: row.error_code ? {
         code: row.error_code,
         message: row.error_code
-      } : null
+      } : null,
+      characterApproval: characterApprovalFromRow_(row)
     };
   }
 
@@ -228,13 +390,32 @@ var SheetRepository = (function() {
     Validators.assertEnum(message.role, APP_CONSTANTS.MESSAGE_ROLES, 'message.role');
     Validators.assertEnum(message.messageType, APP_CONSTANTS.MESSAGE_TYPES, 'message.messageType');
     Validators.assertEnum(message.status, APP_CONSTANTS.MESSAGE_STATUSES, 'message.status');
+    var approvalRow = characterApprovalToRow_(
+      message.characterApproval,
+      'VALIDATION_REQUEST_INVALID'
+    );
+    if (message.characterApproval != null) {
+      assertCharacterApprovalColumns();
+    }
     if (message.requestId && (message.role === 'user' || message.role === 'assistant')) {
       var existingMessage = findExistingConversationMessage(message.requestId, message.role);
       if (existingMessage) {
+        if (
+          message.characterApproval != null &&
+          !characterApprovalsEqual_(
+            existingMessage.characterApproval,
+            message.characterApproval
+          )
+        ) {
+          throw characterApprovalError_(
+            'STORAGE_DATA_CORRUPTED',
+            'CHARACTER_APPROVAL_DEDUPE_MISMATCH'
+          );
+        }
         return existingMessage;
       }
     }
-    var row = {
+    var row = mergeObjects({
       conversation_id: message.conversationId || APP_CONSTANTS.DEFAULT_CONVERSATION_ID,
       message_id: message.messageId,
       request_id: message.requestId || null,
@@ -251,7 +432,7 @@ var SheetRepository = (function() {
       input_tokens: message.inputTokens == null ? null : message.inputTokens,
       output_tokens: message.outputTokens == null ? null : message.outputTokens,
       error_code: message.error ? message.error.code : null
-    };
+    }, approvalRow);
     appendRow(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS, row);
     return toMessageDto(row);
   }
@@ -262,6 +443,22 @@ var SheetRepository = (function() {
     Object.keys(patch || {}).forEach(function(key) {
       normalized[key] = patch[key];
     });
+    var touchesApprovedContent =
+      Object.prototype.hasOwnProperty.call(normalized, 'text') ||
+      Object.prototype.hasOwnProperty.call(normalized, 'image') ||
+      Object.prototype.hasOwnProperty.call(normalized, 'characterApproval');
+    if (touchesApprovedContent) {
+      validateCharacterApprovalMutation_(
+        messageId,
+        normalized,
+        Object.prototype.hasOwnProperty.call(normalized, 'characterApproval')
+          ? normalizeCharacterApproval_(
+            normalized.characterApproval,
+            'VALIDATION_REQUEST_INVALID'
+          )
+          : null
+      );
+    }
     if (Object.prototype.hasOwnProperty.call(normalized, 'requestId')) {
       normalized.request_id = normalized.requestId;
       delete normalized.requestId;
@@ -299,8 +496,124 @@ var SheetRepository = (function() {
       normalized.image_summary = normalized.image ? normalized.image.summary : null;
       delete normalized.image;
     }
+    if (Object.prototype.hasOwnProperty.call(normalized, 'characterApproval')) {
+      var approvalRow = characterApprovalToRow_(
+        normalized.characterApproval,
+        'VALIDATION_REQUEST_INVALID'
+      );
+      if (normalized.characterApproval != null) {
+        assertCharacterApprovalColumns();
+      }
+      normalized = mergeObjects(normalized, approvalRow);
+      delete normalized.characterApproval;
+    }
     var row = updateRowByKey(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS, 'message_id', messageId, normalized);
     return toMessageDto(row);
+  }
+
+  function validateCharacterApprovalMutation_(messageId, patch, desiredApproval) {
+    var rows = getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS);
+    var currentRow = null;
+    rows.forEach(function(row) {
+      if (row.message_id === messageId) {
+        currentRow = row;
+      }
+    });
+    ensure(
+      currentRow,
+      'CONFIG_MISSING',
+      'Target conversation message was not found.'
+    );
+    var currentApproval = characterApprovalFromRow_(currentRow);
+    var assistantExists = rows.some(function(row) {
+      return (
+        row.request_id === currentRow.request_id &&
+        row.role === 'assistant'
+      );
+    });
+    if (currentApproval == null) {
+      if (desiredApproval == null) {
+        return true;
+      }
+      ensure(
+        !assistantExists &&
+          currentRow.role === 'user' &&
+          currentRow.message_type === 'image' &&
+          desiredApproval.surface === 'CHAT_IMAGE' &&
+          Object.prototype.hasOwnProperty.call(patch, 'image') &&
+          patch.image &&
+          patch.image.name === currentRow.image_name &&
+          patch.image.mimeType === currentRow.image_mime &&
+          (
+            !Object.prototype.hasOwnProperty.call(patch, 'text') ||
+            String(patch.text || '') === String(currentRow.text || '')
+          ),
+        'STORAGE_DATA_CORRUPTED',
+        'Only an orphaned user image may receive new approval metadata.'
+      );
+      return true;
+    }
+    ensure(
+      desiredApproval != null,
+      'STORAGE_DATA_CORRUPTED',
+      'Approved character content cannot be changed without approval metadata.'
+    );
+
+    if (assistantExists) {
+      ensure(
+        characterApprovalsEqual_(currentApproval, desiredApproval) &&
+          approvedContentUnchanged_(currentRow, patch),
+        'STORAGE_DATA_CORRUPTED',
+        'Completed approved character content is immutable.'
+      );
+      return true;
+    }
+
+    ensure(
+      currentRow.role === 'user' &&
+        currentRow.message_type === 'image' &&
+        currentApproval.surface === 'CHAT_IMAGE' &&
+        desiredApproval.surface === 'CHAT_IMAGE' &&
+        characterApprovalBindingsEqual_(currentApproval, desiredApproval),
+      'STORAGE_DATA_CORRUPTED',
+      'Only a matching orphaned image approval may be replaced.'
+    );
+    return true;
+  }
+
+  function approvedContentUnchanged_(currentRow, patch) {
+    if (
+      Object.prototype.hasOwnProperty.call(patch, 'text') &&
+      String(patch.text || '') !== String(currentRow.text || '')
+    ) {
+      return false;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'image')) {
+      var image = patch.image;
+      if (
+        !image ||
+        image.name !== currentRow.image_name ||
+        image.mimeType !== currentRow.image_mime ||
+        String(image.summary || '') !== String(currentRow.image_summary || '')
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function characterApprovalBindingsEqual_(left, right) {
+    return [
+      'surface',
+      'policyVersion',
+      'profileSchemaVersion',
+      'profileRevision',
+      'catalogVersion',
+      'characterPackId',
+      'characterPackVersion'
+    ].every(function(field) {
+      return left[field] === right[field];
+    });
   }
 
   function listRecentMessages(limit) {
@@ -837,6 +1150,7 @@ var SheetRepository = (function() {
     getHeaders: getHeaders,
     getRows: getRows,
     flush: flush,
+    assertCharacterApprovalColumns: assertCharacterApprovalColumns,
     appendConversation: appendConversation,
     updateConversationMessage: updateConversationMessage,
     listRecentMessages: listRecentMessages,
@@ -872,7 +1186,13 @@ var SheetRepository = (function() {
     deleteDebugLogsOlderThan: deleteDebugLogsOlderThan,
     __test: {
       selectClaimableEvents: selectClaimableEvents_,
-      selectRecentDiarySummariesBefore: selectRecentDiarySummariesBefore_
+      selectRecentDiarySummariesBefore: selectRecentDiarySummariesBefore_,
+      assertCharacterApprovalHeaders: assertCharacterApprovalHeaders_,
+      normalizeCharacterApproval: normalizeCharacterApproval_,
+      characterApprovalToRow: characterApprovalToRow_,
+      characterApprovalFromRow: characterApprovalFromRow_,
+      characterApprovalsEqual: characterApprovalsEqual_,
+      toMessageDto: toMessageDto
     }
   };
 })();
