@@ -962,3 +962,5 @@ remain PR 9 work.
 - [A1 Data and Event Contracts](../a1/04_DATA_AND_EVENT_CONTRACTS.md)
 - [A1 Error Contract](../a1/05_ERROR_CONTRACT.md)
 - [A2 Platform Baseline](../spec/A2_PLATFORM_BASELINE.md)
+- [PR 9 staged activation](../operations/PR9_STAGED_ACTIVATION.md)
+- [PR 9 sanitized evidence template](../qa/PR9_EVIDENCE_TEMPLATE.md)

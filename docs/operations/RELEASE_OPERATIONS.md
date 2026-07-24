@@ -1,5 +1,11 @@
 # Release operations
 
+For the PR 4–8 CharacterPack production cutover, use the stricter
+[PR 9 staged activation runbook](PR9_STAGED_ACTIVATION.md) and its sanitized
+[evidence template](../qa/PR9_EVIDENCE_TEMPLATE.md). That runbook controls the
+order of trigger freeze, a7 migration, dormant settings, surface canaries,
+external proactive delivery, rollback, and final monitoring.
+
 This runbook covers release-hardening operations that are separate from diary
 quality work and persona development. Production configuration, trigger,
 deployment, and data changes require explicit approval and a recorded result.
