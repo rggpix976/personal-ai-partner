@@ -214,8 +214,11 @@ runA10ImmersionCoordinatorTests()
 5. Set the required Script Properties.
 6. Run `setup()` and `validatePostSetupProperties()`.
 7. Create an immutable Apps Script version.
-8. Update the existing Web App deployment to that version.
-9. Set and validate `WEB_APP_URL` when required.
+8. Update the single existing owner-only Web App deployment to that version,
+   or create one when no Web App deployment exists. Do not use a library
+   deployment or construct an `/exec` URL from a library deployment ID.
+9. Set `WEB_APP_URL` to the exact URL shown for the Web App deployment and
+   validate it.
 10. Run `installTriggers()`.
 11. Confirm exactly one `processQueueJob` trigger and one `schedulerJob`
     trigger.

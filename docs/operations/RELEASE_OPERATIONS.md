@@ -93,10 +93,15 @@ change their attempt count. Then run `processQueueJob()` normally.
 2. Push the reviewed `src/` tree to Apps Script.
 3. Run non-destructive validation and all self-tests against current HEAD.
 4. Create a new immutable Apps Script version.
-5. Point the existing Web App deployment to that exact version.
-6. Verify the deployment list and record only the version number and outcome;
+5. Point the single existing owner-only Web App deployment to that exact
+   version. If no Web App deployment exists, create an owner-only Web App
+   deployment for that version. Never use a library deployment or construct an
+   `/exec` URL from a library deployment ID. If multiple Web App deployments
+   exist, stop without choosing one.
+6. Set `WEB_APP_URL` to the exact URL shown for that Web App deployment.
+7. Verify the deployment list and record only the version number and outcome;
    do not record deployment IDs or URLs in public artifacts.
-7. Confirm exactly one `processQueueJob` trigger and one `schedulerJob`
+8. Confirm exactly one `processQueueJob` trigger and one `schedulerJob`
    trigger.
 
 Do not deploy an older intermediate version merely to align numbering. The new
