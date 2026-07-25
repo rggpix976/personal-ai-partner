@@ -1,5 +1,11 @@
 # Release operations
 
+PR 4〜PR 8のCharacterPackを本番へ切り替える場合は、
+[PR 9 段階的本番有効化手順](PR9_STAGED_ACTIVATION.md)と
+[PR 9 本番確認・証跡テンプレート](../qa/PR9_EVIDENCE_TEMPLATE.md)
+を使用します。この手順が、トリガー停止、a7移行、未有効状態での設定、
+各機能の段階的テスト、自発発言の外部送信、ロールバック、最終監視の順序を管理します。
+
 This runbook covers release-hardening operations that are separate from diary
 quality work and persona development. Production configuration, trigger,
 deployment, and data changes require explicit approval and a recorded result.
@@ -87,10 +93,15 @@ change their attempt count. Then run `processQueueJob()` normally.
 2. Push the reviewed `src/` tree to Apps Script.
 3. Run non-destructive validation and all self-tests against current HEAD.
 4. Create a new immutable Apps Script version.
-5. Point the existing Web App deployment to that exact version.
-6. Verify the deployment list and record only the version number and outcome;
+5. Point the single existing owner-only Web App deployment to that exact
+   version. If no Web App deployment exists, create an owner-only Web App
+   deployment for that version. Never use a library deployment or construct an
+   `/exec` URL from a library deployment ID. If multiple Web App deployments
+   exist, stop without choosing one.
+6. Set `WEB_APP_URL` to the exact URL shown for that Web App deployment.
+7. Verify the deployment list and record only the version number and outcome;
    do not record deployment IDs or URLs in public artifacts.
-7. Confirm exactly one `processQueueJob` trigger and one `schedulerJob`
+8. Confirm exactly one `processQueueJob` trigger and one `schedulerJob`
    trigger.
 
 Do not deploy an older intermediate version merely to align numbering. The new
