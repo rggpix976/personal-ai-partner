@@ -47,14 +47,94 @@ function runA6QueueSchedulerTests() {
     }
   }
 
+  function withFixedNow(isoValue, callback) {
+    var RealDate = Date;
+    var fixedTime = new RealDate(isoValue).getTime();
+
+    function FixedDate() {
+      if (!(this instanceof FixedDate)) {
+        return RealDate.apply(null, arguments);
+      }
+      if (arguments.length === 0) {
+        return new RealDate(fixedTime);
+      }
+      if (arguments.length === 1) {
+        return new RealDate(arguments[0]);
+      }
+      if (arguments.length === 2) {
+        return new RealDate(arguments[0], arguments[1]);
+      }
+      if (arguments.length === 3) {
+        return new RealDate(
+          arguments[0],
+          arguments[1],
+          arguments[2]
+        );
+      }
+      if (arguments.length === 4) {
+        return new RealDate(
+          arguments[0],
+          arguments[1],
+          arguments[2],
+          arguments[3]
+        );
+      }
+      if (arguments.length === 5) {
+        return new RealDate(
+          arguments[0],
+          arguments[1],
+          arguments[2],
+          arguments[3],
+          arguments[4]
+        );
+      }
+      if (arguments.length === 6) {
+        return new RealDate(
+          arguments[0],
+          arguments[1],
+          arguments[2],
+          arguments[3],
+          arguments[4],
+          arguments[5]
+        );
+      }
+      return new RealDate(
+        arguments[0],
+        arguments[1],
+        arguments[2],
+        arguments[3],
+        arguments[4],
+        arguments[5],
+        arguments[6]
+      );
+    }
+
+    FixedDate.prototype = RealDate.prototype;
+    FixedDate.now = function() {
+      return fixedTime;
+    };
+    FixedDate.parse = RealDate.parse;
+    FixedDate.UTC = RealDate.UTC;
+    withOverrides({ Date: FixedDate }, callback);
+  }
+
   function buildLegacyProactiveConfig(subject, body) {
     var values = {
       QUIET_START: '23:00',
       QUIET_END: '08:00',
       SILENCE_MINUTES: 240,
+      PROACTIVE_FREQUENCY: 'normal',
       PROACTIVE_COOLDOWN_MINUTES: 240,
       PROACTIVE_MAX_PER_DAY: 2,
       PROACTIVE_RECHECK_MINUTES: 60,
+      PROACTIVE_POLICY_MODE: 'probability',
+      PROACTIVE_SILENCE_CEILING_MINUTES: 720,
+      PROACTIVE_PROBABILITY_CURVE: 1.3,
+      PROACTIVE_DAY_START: '10:00',
+      PROACTIVE_EVENING_START: '18:00',
+      PROACTIVE_MORNING_WEIGHT: 0.7,
+      PROACTIVE_DAY_WEIGHT: 1,
+      PROACTIVE_EVENING_WEIGHT: 1.2,
       PROACTIVE_AI_GENERATION_ENABLED: false,
       PROACTIVE_SUBJECT_TEMPLATE: subject,
       PROACTIVE_BODY_TEMPLATE: body
@@ -81,6 +161,11 @@ function runA6QueueSchedulerTests() {
       elapsedMinutes: 300,
       timeWeight: 1,
       reason: 'local_silence_threshold',
+      policyBinding: {
+        environment: 'prod',
+        frequency: 'normal',
+        mode: 'probability'
+      },
       characterRuntimeMode: 'legacy'
     };
   }
@@ -1545,7 +1630,9 @@ function runA6QueueSchedulerTests() {
         }
       }
     }, function() {
-      schedulerJob();
+      withFixedNow('2026-07-07T09:00:00+09:00', function() {
+        schedulerJob();
+      });
       assert(queued.indexOf('PROACTIVE_SEND:2026-07-07:1:495720') !== -1, 'Proactive event should be queued.');
       assert(
         proactiveEvent != null &&
@@ -1952,8 +2039,20 @@ function runA6QueueSchedulerTests() {
             QUIET_START: { value: '23:00' },
             QUIET_END: { value: '08:00' },
             SILENCE_MINUTES: { value: 240 },
+            PROACTIVE_FREQUENCY: { value: 'normal' },
             PROACTIVE_COOLDOWN_MINUTES: { value: 240 },
-            PROACTIVE_MAX_PER_DAY: { value: 2 }
+            PROACTIVE_MAX_PER_DAY: { value: 2 },
+            PROACTIVE_RECHECK_MINUTES: { value: 60 },
+            PROACTIVE_POLICY_MODE: { value: 'probability' },
+            PROACTIVE_SILENCE_CEILING_MINUTES: {
+              value: 720
+            },
+            PROACTIVE_PROBABILITY_CURVE: { value: 1.3 },
+            PROACTIVE_DAY_START: { value: '10:00' },
+            PROACTIVE_EVENING_START: { value: '18:00' },
+            PROACTIVE_MORNING_WEIGHT: { value: 0.7 },
+            PROACTIVE_DAY_WEIGHT: { value: 1.0 },
+            PROACTIVE_EVENING_WEIGHT: { value: 1.2 }
           };
           return values[key];
         }
@@ -2072,7 +2171,8 @@ function runA6QueueSchedulerTests() {
     var updateCalls = [];
     var usageCalls = 0;
 
-    withOverrides({
+    withFixedNow('2026-07-08T10:05:00+09:00', function() {
+      withOverrides({
       ConfigRepository: buildLegacyProactiveConfig(
         'Hello',
         'Fresh proactive mail'
@@ -2086,6 +2186,9 @@ function runA6QueueSchedulerTests() {
         getScriptProperties: function() {
           return {
             getProperty: function(key) {
+              if (key === APP_CONSTANTS.PROPERTY_KEYS.APP_ENV) {
+                return 'prod';
+              }
               if (key === APP_CONSTANTS.PROPERTY_KEYS.OWNER_EMAIL) {
                 return 'owner@example.com';
               }
@@ -2153,28 +2256,29 @@ function runA6QueueSchedulerTests() {
           };
         }
       }
-    }, function() {
-      var prepared = ProactiveMessageService.prepareDispatch(
-        buildLegacyProactivePayload(
-          '2026-07-08',
-          '2026-07-08T08:00:00+09:00'
-        ),
-        '2026-07-08T08:05:00+09:00'
-      );
-      var result = ProactiveMessageService.send(
-        prepared.message
-      );
+      }, function() {
+        var prepared = ProactiveMessageService.prepareDispatch(
+          buildLegacyProactivePayload(
+            '2026-07-08',
+            '2026-07-08T08:00:00+09:00'
+          ),
+          '2026-07-08T08:05:00+09:00'
+        );
+        var result = ProactiveMessageService.send(
+          prepared.message
+        );
 
-      assert(result.sent === true, 'Send should succeed.');
-      assert(appendCalls === 1, 'One marker should be appended.');
-      assert(
-        updateCalls.some(function(patch) {
-          return patch.status === 'completed';
-        }),
-        'Successful send should mark the marker completed.'
-      );
-      assert(storedMarker.status === 'completed', 'The marker should be completed.');
-      assert(usageCalls === 1, 'Mail usage should be recorded once.');
+        assert(result.sent === true, 'Send should succeed.');
+        assert(appendCalls === 1, 'One marker should be appended.');
+        assert(
+          updateCalls.some(function(patch) {
+            return patch.status === 'completed';
+          }),
+          'Successful send should mark the marker completed.'
+        );
+        assert(storedMarker.status === 'completed', 'The marker should be completed.');
+        assert(usageCalls === 1, 'Mail usage should be recorded once.');
+      });
     });
   });
 
@@ -2185,7 +2289,8 @@ function runA6QueueSchedulerTests() {
     var sentBodies = [];
     var latestStatePatch = null;
 
-    withOverrides({
+    withFixedNow('2026-07-08T10:05:00+09:00', function() {
+      withOverrides({
       ConfigRepository: buildLegacyProactiveConfig(
         'Hello',
         'Stored proactive mail'
@@ -2199,6 +2304,9 @@ function runA6QueueSchedulerTests() {
         getScriptProperties: function() {
           return {
             getProperty: function(key) {
+              if (key === APP_CONSTANTS.PROPERTY_KEYS.APP_ENV) {
+                return 'prod';
+              }
               if (key === APP_CONSTANTS.PROPERTY_KEYS.OWNER_EMAIL) {
                 return 'owner@example.com';
               }
@@ -2270,59 +2378,60 @@ function runA6QueueSchedulerTests() {
           };
         }
       }
-    }, function() {
-      var payload = buildLegacyProactivePayload(
-        '2026-07-08',
-        '2026-07-08T08:00:00+09:00'
-      );
-      var firstError = null;
-      try {
-        var firstPrepared =
+      }, function() {
+        var payload = buildLegacyProactivePayload(
+          '2026-07-08',
+          '2026-07-08T08:00:00+09:00'
+        );
+        var firstError = null;
+        try {
+          var firstPrepared =
+            ProactiveMessageService.prepareDispatch(
+              payload,
+              '2026-07-08T08:05:00+09:00'
+            );
+          ProactiveMessageService.send(
+            firstPrepared.message
+          );
+        } catch (error) {
+          firstError = error;
+        }
+
+        assert(
+          firstError && firstError.code === 'MAIL_QUOTA_EXHAUSTED',
+          'The first failure should be surfaced.'
+        );
+        assert(storedMarker.status === 'failed', 'The marker should be failed.');
+
+        var retryPrepared =
           ProactiveMessageService.prepareDispatch(
             payload,
-            '2026-07-08T08:05:00+09:00'
+            '2026-07-08T10:05:00+09:00'
           );
-        ProactiveMessageService.send(
-          firstPrepared.message
+        var result = ProactiveMessageService.send(
+          retryPrepared.message
         );
-      } catch (error) {
-        firstError = error;
-      }
 
-      assert(
-        firstError && firstError.code === 'MAIL_QUOTA_EXHAUSTED',
-        'The first failure should be surfaced.'
-      );
-      assert(storedMarker.status === 'failed', 'The marker should be failed.');
-
-      var retryPrepared =
-        ProactiveMessageService.prepareDispatch(
-          payload,
-          '2026-07-08T10:05:00+09:00'
+        assert(result.sent === true, 'The failed marker should be retried.');
+        assert(result.duplicate === false, 'A failed marker is not completed.');
+        assert(sendCalls === 2, 'Mail should be attempted twice.');
+        assert(appendCalls === 1, 'Retry must reuse the original marker.');
+        assert(
+          sentBodies[1] === 'Stored proactive mail',
+          'Retry must reuse the stored body.'
         );
-      var result = ProactiveMessageService.send(
-        retryPrepared.message
-      );
-
-      assert(result.sent === true, 'The failed marker should be retried.');
-      assert(result.duplicate === false, 'A failed marker is not completed.');
-      assert(sendCalls === 2, 'Mail should be attempted twice.');
-      assert(appendCalls === 1, 'Retry must reuse the original marker.');
-      assert(
-        sentBodies[1] === 'Stored proactive mail',
-        'Retry must reuse the stored body.'
-      );
-      assert(
-        storedMarker.createdAt === '2026-07-08T10:05:00+09:00',
-        'Retry must update the marker to the actual attempt time.'
-      );
-      assert(storedMarker.status === 'completed', 'Retry should complete the marker.');
-      assert(
-        latestStatePatch &&
-          latestStatePatch.last_proactive_at ===
-            '2026-07-08T10:05:00+09:00',
-        'Cooldown state must use the successful retry time.'
-      );
+        assert(
+          storedMarker.createdAt === '2026-07-08T10:05:00+09:00',
+          'Retry must update the marker to the actual attempt time.'
+        );
+        assert(storedMarker.status === 'completed', 'Retry should complete the marker.');
+        assert(
+          latestStatePatch &&
+            latestStatePatch.last_proactive_at ===
+              '2026-07-08T10:05:00+09:00',
+          'Cooldown state must use the successful retry time.'
+        );
+      });
     });
   });
 
@@ -2422,6 +2531,10 @@ function runA6QueueSchedulerTests() {
     var sendCalls = 0;
 
     withOverrides({
+      ConfigRepository: buildLegacyProactiveConfig(
+        'Hello',
+        'Concurrent proactive mail'
+      ),
       LockManager: {
         withScriptLock: function(_, callback) {
           return callback();
@@ -2430,8 +2543,10 @@ function runA6QueueSchedulerTests() {
       PropertiesService: {
         getScriptProperties: function() {
           return {
-            getProperty: function() {
-              return 'owner@example.com';
+            getProperty: function(key) {
+              return key === APP_CONSTANTS.PROPERTY_KEYS.APP_ENV
+                ? 'prod'
+                : 'owner@example.com';
             }
           };
         }
@@ -2474,6 +2589,856 @@ function runA6QueueSchedulerTests() {
       assert(sendCalls === 0, 'Gmail must not be called by the second claimant.');
     });
   });
+
+  test(
+    'runOperationalHealthCheck is read-only and never calls the notifying path',
+    function() {
+      var inspectCalls = 0;
+      var runCalls = 0;
+      withOverrides({
+        OperationalHealthService: {
+          inspect: function(_, triggerHealth) {
+            inspectCalls += 1;
+            return {
+              status: 'OK',
+              triggers: triggerHealth
+            };
+          },
+          run: function() {
+            runCalls += 1;
+            throw new Error(
+              'The notifying health path must not run.'
+            );
+          }
+        },
+        ScriptApp: {
+          getProjectTriggers: function() {
+            return [];
+          }
+        }
+      }, function() {
+        var result = runOperationalHealthCheck();
+        assert(result.status === 'OK', 'Read-only health output was not returned.');
+      });
+      assert(
+        inspectCalls === 1 && runCalls === 0,
+        'The public health check was not read-only.'
+      );
+    }
+  );
+
+  test(
+    'PR9 operator logs preserve returns and expose only allowlisted evidence',
+    function() {
+      var logs = [];
+      var secretUrl =
+        'https://example.invalid/private/deployment';
+      var secretId =
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      var secretEmail = 'owner@example.invalid';
+      var secretBody = 'private conversation body';
+      var currentTriggers = [];
+      var healthResult = {
+        status: 'OK',
+        checkedAt: '2026-07-14T12:00:00+09:00',
+        url: secretUrl,
+        queue: {
+          total: 7,
+          byStatus: {
+            PENDING: 1,
+            PROCESSING: 0,
+            RETRY_WAIT: 0,
+            DONE: 5,
+            DEAD: 1
+          },
+          byEventType: {
+            CHAT_REPLY: {
+              PENDING: 1,
+              PROCESSING: 0,
+              RETRY_WAIT: 0,
+              DONE: 2,
+              DEAD: 0
+            },
+            MEMORY_EXTRACT: {
+              PENDING: 0,
+              PROCESSING: 0,
+              RETRY_WAIT: 0,
+              DONE: 1,
+              DEAD: 0
+            },
+            DIARY_GENERATE: {
+              PENDING: 0,
+              PROCESSING: 0,
+              RETRY_WAIT: 0,
+              DONE: 1,
+              DEAD: 0
+            },
+            PROACTIVE_SEND: {
+              PENDING: 0,
+              PROCESSING: 0,
+              RETRY_WAIT: 0,
+              DONE: 1,
+              DEAD: 0
+            },
+            WEEKLY_BACKUP: {
+              PENDING: 0,
+              PROCESSING: 0,
+              RETRY_WAIT: 0,
+              DONE: 0,
+              DEAD: 1
+            },
+            PRIVATE_EVENT: {
+              PENDING: 99,
+              body: secretBody
+            }
+          },
+          recentDead: {
+            total: 1,
+            resolvedTotal: 2,
+            byEventType: {
+              CHAT_REPLY: 0,
+              MEMORY_EXTRACT: 0,
+              DIARY_GENERATE: 0,
+              PROACTIVE_SEND: 0,
+              WEEKLY_BACKUP: 1,
+              PRIVATE_EVENT: 99
+            },
+            byErrorCode: {
+              PRIVATE_BODY: secretBody
+            }
+          },
+          staleProcessing: {
+            total: 0
+          },
+          overdue: {
+            pending: 1,
+            retryWait: 0
+          },
+          payload: {
+            eventId: secretId,
+            body: secretBody
+          }
+        },
+        triggers: {
+          required: {
+            processQueueJob: { count: 0 },
+            schedulerJob: { count: 0 }
+          },
+          missingCount: 2,
+          duplicateCount: 0,
+          unexpectedCount: 0,
+          ownerEmail: secretEmail
+        }
+      };
+      var policyResult = {
+        valid: true,
+        environment: 'test',
+        frequency: 'high',
+        enabled: true,
+        policyMode: 'probability',
+        silenceFloorMinutes: 5,
+        silenceCeilingMinutes: 10,
+        recheckMinutes: 5,
+        currentTimeWeight: 1.2,
+        quietHoursActive: false,
+        timeBands: {
+          morningStart: '00:00',
+          dayStart: '10:00',
+          eveningStart: '18:00',
+          quietStart: '23:00',
+          quietEnd: '08:00',
+          morningWeight: 0.7,
+          dayWeight: 1,
+          eveningWeight: 1.2,
+          probabilityCurve: 1.3,
+          url: secretUrl
+        },
+        guardrails: {
+          quietStart: '23:00',
+          quietEnd: '08:00',
+          quietHoursEnabled: true,
+          cooldownMinutes: 240,
+          maxPerDay: 2,
+          message: secretBody
+        },
+        automaticTriggersAllowed: false,
+        manualTestAllowed: true,
+        issues: [
+          'PROACTIVE_TEST_POLICY_NOT_READY',
+          secretUrl
+        ],
+        expectedTimingProfiles: {
+          privateId: secretId
+        }
+      };
+      var persistenceSafetyResult = {
+        valid: true,
+        windowSource:
+          'ALL_ENFORCED_EVENTS',
+        checked: {
+          chatMessages: 9,
+          imageSummaries: 1,
+          proactiveMarkers: 1,
+          sentProactiveMarkers: 1,
+          diaries: 1,
+          memories: 1,
+          total: 13,
+          body: secretBody
+        },
+        unsafePersistedOrSent: {
+          chatMessages: 0,
+          imageSummaries: 0,
+          proactiveMarkers: 0,
+          sentProactiveMarkers: 0,
+          diaries: 0,
+          memories: 0,
+          total: 0,
+          eventId: secretId
+        },
+        metrics: {
+          immersion_unsafe_persisted_or_sent_total: 0,
+          privateMetric: secretBody
+        },
+        issues: [],
+        url: secretUrl
+      };
+      var proactiveReadyCalls = 0;
+      var results = {};
+
+      function buildTrigger(handler) {
+        return {
+          getHandlerFunction: function() {
+            return handler;
+          },
+          getEventType: function() {
+            return 'CLOCK';
+          },
+          getTriggerSource: function() {
+            return 'CLOCK';
+          },
+          url: secretUrl,
+          eventId: secretId
+        };
+      }
+
+      withOverrides({
+        console: {
+          log: function(line) {
+            logs.push(String(line));
+          }
+        },
+        OperationalHealthService: {
+          inspect: function() {
+            return healthResult;
+          }
+        },
+        DiaryService: {
+          getLifecycleState: function() {
+            return {
+              status: 'DONE',
+              anchorCount: 1,
+              diaryText: secretBody,
+              anchorId: secretId
+            };
+          }
+        },
+        ProactiveMessageService: {
+          inspectPolicy: function() {
+            return policyResult;
+          },
+          assertManualTestReady: function() {
+            proactiveReadyCalls += 1;
+            return policyResult;
+          },
+          assertAutomaticTriggerReady: function() {
+            proactiveReadyCalls += 1;
+            return policyResult;
+          }
+        },
+        ImmersionSafetyAuditService: {
+          inspect: function() {
+            return persistenceSafetyResult;
+          }
+        },
+        ScriptApp: {
+          getProjectTriggers: function() {
+            return currentTriggers;
+          },
+          newTrigger: function() {
+            throw new Error(
+              'Existing test triggers should be reused.'
+            );
+          }
+        },
+        enqueueDiaryIfDue_: function() {
+          return {
+            enqueued: false,
+            reason: 'DIARY_NOT_REQUIRED',
+            diaryStatus: 'NONE',
+            eventId: secretId,
+            payload: { body: secretBody }
+          };
+        },
+        enqueueMemoryExtractionIfDue_: function() {
+          return {
+            enqueued: false,
+            reason: 'INSUFFICIENT_NEW_MESSAGES',
+            messageCount: 0,
+            eventId: secretId
+          };
+        },
+        enqueueProactiveIfEligible_: function() {
+          return {
+            eligible: false,
+            reason: 'PROBABILITY_MISS',
+            eventId: secretId,
+            email: secretEmail,
+            body: secretBody
+          };
+        }
+      }, function() {
+        results.health = runOperationalHealthCheck();
+        results.policy = inspectProactivePolicy();
+        results.persistenceSafety =
+          inspectPr9PersistenceSafety();
+        results.diaryInspection =
+          inspectPreviousDiaryReleaseTest();
+        results.diary = runDiaryReleaseTest();
+        results.memory = runMemoryReleaseTest();
+        results.proactive = runProactiveReleaseTest();
+
+        currentTriggers = [
+          buildTrigger('processQueueJob'),
+          buildTrigger('schedulerJob')
+        ];
+        results.triggers = listProjectTriggers();
+        results.installed = installTriggers();
+      });
+
+      assert(
+        results.health === healthResult &&
+          results.policy === policyResult &&
+          results.persistenceSafety ===
+            persistenceSafetyResult,
+        'Logging changed an inspection return object.'
+      );
+      assert(
+        results.diaryInspection.status === 'DONE' &&
+          results.diaryInspection.anchorCount === 1 &&
+          results.diary.reason === 'DIARY_NOT_REQUIRED' &&
+          results.memory.reason ===
+            'INSUFFICIENT_NEW_MESSAGES' &&
+          results.proactive.reason === 'PROBABILITY_MISS',
+        'Logging changed a release-test return contract.'
+      );
+      assert(
+        results.triggers.length === 2 &&
+          results.installed.length === 2 &&
+          proactiveReadyCalls === 2,
+        'Trigger inspection or readiness return behavior changed.'
+      );
+      assert(
+        logs.length === 9,
+        'Every PR9 public operator must emit exactly one result line.'
+      );
+
+      var combined = logs.join('\n');
+      [
+        secretUrl,
+        secretId,
+        secretEmail,
+        secretBody,
+        '"checkedAt"',
+        '"payload"',
+        '"body"',
+        '"url"',
+        '"ownerEmail"',
+        '"expectedTimingProfiles"'
+      ].forEach(function(forbidden) {
+        assert(
+          combined.indexOf(forbidden) === -1,
+          'PR9 logs exposed forbidden data: ' + forbidden
+        );
+      });
+
+      function readLog(functionName) {
+        var prefix =
+          'PR9_TEST_RESULT ' + functionName + ' ';
+        var matches = logs.filter(function(line) {
+          return line.indexOf(prefix) === 0;
+        });
+        assert(
+          matches.length === 1,
+          functionName + ' did not emit one canonical log.'
+        );
+        return JSON.parse(matches[0].slice(prefix.length));
+      }
+
+      var healthLog = readLog(
+        'runOperationalHealthCheck'
+      );
+      assert(
+        healthLog.status === 'OK' &&
+          healthLog.queue.total === 7 &&
+          healthLog.queue.byStatus.DONE === 5 &&
+          healthLog.queue.byEventType.CHAT_REPLY.PENDING === 1 &&
+          healthLog.queue.byEventType.DIARY_GENERATE.DONE === 1 &&
+          healthLog.queue.byEventType.PRIVATE_EVENT === undefined &&
+          healthLog.queue.recentDead.total === 1 &&
+          healthLog.queue.recentDead.byEventType.WEEKLY_BACKUP === 1 &&
+          healthLog.queue.recentDead.byEventType.PRIVATE_EVENT === undefined &&
+          healthLog.triggers.missingCount === 2,
+        'Operational health log omitted allowlisted counts.'
+      );
+
+      var policyLog = readLog('inspectProactivePolicy');
+      assert(
+        policyLog.environment === 'test' &&
+          policyLog.frequency === 'high' &&
+          policyLog.silenceFloorMinutes === 5 &&
+          policyLog.silenceCeilingMinutes === 10 &&
+          policyLog.currentTimeWeight === 1.2 &&
+          policyLog.timeBands.eveningWeight === 1.2 &&
+          policyLog.timeBands.probabilityCurve === 1.3 &&
+          policyLog.guardrails.cooldownMinutes === 240 &&
+          policyLog.issues.length === 1,
+        'Proactive policy log omitted or leaked policy evidence.'
+      );
+
+      var persistenceSafetyLog = readLog(
+        'inspectPr9PersistenceSafety'
+      );
+      assert(
+        persistenceSafetyLog.valid === true &&
+          persistenceSafetyLog.windowSource ===
+            'ALL_ENFORCED_EVENTS' &&
+          persistenceSafetyLog.checked.total === 13 &&
+          persistenceSafetyLog.checked.chatMessages === 9 &&
+          persistenceSafetyLog.unsafePersistedOrSent.total === 0 &&
+          persistenceSafetyLog.metrics
+            .immersion_unsafe_persisted_or_sent_total === 0 &&
+          persistenceSafetyLog.url === undefined,
+        'Persistence safety log omitted or leaked audit evidence.'
+      );
+
+      [
+        'runDiaryReleaseTest',
+        'runMemoryReleaseTest',
+        'runProactiveReleaseTest'
+      ].forEach(function(functionName) {
+        var releaseLog = readLog(functionName);
+        assert(
+          JSON.stringify(Object.keys(releaseLog).sort()) ===
+            JSON.stringify([
+              'duplicate',
+              'enqueued',
+              'errorCode',
+              'eventType',
+              'processed',
+              'reason',
+              'status'
+            ]),
+          functionName + ' log fields are not exact.'
+        );
+      });
+
+      var diaryLog = readLog(
+        'inspectPreviousDiaryReleaseTest'
+      );
+      assert(
+        diaryLog.status === 'DONE' &&
+          diaryLog.anchorCount === 1,
+        'Diary inspection log omitted lifecycle evidence.'
+      );
+
+      [
+        'listProjectTriggers',
+        'installTriggers'
+      ].forEach(function(functionName) {
+        var triggerLog = readLog(functionName);
+        assert(
+          triggerLog.length === 2 &&
+            triggerLog[0].handlerFunction ===
+              'processQueueJob' &&
+            triggerLog[1].handlerFunction ===
+              'schedulerJob',
+          functionName + ' log omitted safe trigger evidence.'
+        );
+      });
+    }
+  );
+
+  test(
+    'installTriggers checks production proactive readiness before trigger mutation',
+    function() {
+      var triggerReads = 0;
+      var triggerWrites = 0;
+      withOverrides({
+        ProactiveMessageService: {
+          assertAutomaticTriggerReady: function() {
+            throw createAppError(
+              'CONFIG_MISSING',
+              'not ready'
+            );
+          }
+        },
+        ScriptApp: {
+          getProjectTriggers: function() {
+            triggerReads += 1;
+            return [];
+          },
+          newTrigger: function() {
+            triggerWrites += 1;
+          }
+        }
+      }, function() {
+        expectCode(function() {
+          installTriggers();
+        }, 'CONFIG_MISSING');
+      });
+      assert(
+        triggerReads === 0 && triggerWrites === 0,
+        'A rejected production policy mutated trigger state.'
+      );
+    }
+  );
+
+  test(
+    'QueueService.claimEventById claims only the exact requested event',
+    function() {
+      var targetEventId =
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      var unrelatedEventId =
+        'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+      var updated = null;
+      var event = {
+        eventId: targetEventId,
+        eventType: 'DIARY_GENERATE',
+        status: 'PENDING',
+        nextAttemptAt: null,
+        lockedBy: null
+      };
+      withOverrides({
+        LockManager: {
+          withScriptLock: function(_, callback) {
+            return callback();
+          }
+        },
+        SheetRepository: {
+          listClaimableEvents: function() {
+            throw new Error(
+              'Exact claim must not scan the queue.'
+            );
+          },
+          listClaimableEventsByType: function() {
+            throw new Error(
+              'Exact claim must not scan same-type backlog.'
+            );
+          },
+          updateEvent: function(eventId, patch) {
+            assert(
+              eventId === targetEventId,
+              'An unrelated event was updated.'
+            );
+            updated = {
+              eventId: eventId,
+              patch: patch
+            };
+            event.status = patch.status;
+            event.lockedBy = patch.lockedBy;
+          },
+          getEventById: function(eventId) {
+            assert(
+              eventId !== unrelatedEventId,
+              'The unrelated event was read.'
+            );
+            return eventId === targetEventId ? event : null;
+          }
+        }
+      }, function() {
+        var claimed = QueueService.claimEventById(
+          'DIARY_GENERATE',
+          targetEventId,
+          'release-test-worker',
+          new Date('2026-07-14T12:00:00+09:00')
+        );
+        assert(
+          claimed &&
+            claimed.eventId === targetEventId &&
+            claimed.status === 'PROCESSING' &&
+            updated.eventId === targetEventId,
+          'The exact event was not claimed.'
+        );
+      });
+    }
+  );
+
+  test(
+    'runDiaryReleaseTest processes only its newly enqueued event and reports DONE',
+    function() {
+      var newEventId =
+        'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+      var claimedEventId = null;
+      var settled = {
+        eventId: newEventId,
+        eventType: 'DIARY_GENERATE',
+        status: 'PENDING',
+        lockedBy: 'queue-lease:v1:test'
+      };
+      var result = null;
+
+      withOverrides({
+        ScriptApp: {
+          getProjectTriggers: function() {
+            return [];
+          }
+        },
+        enqueueDiaryIfDue_: function() {
+          return {
+            enqueued: true,
+            duplicate: false,
+            eventId: newEventId
+          };
+        },
+        QueueService: {
+          claimEventById: function(
+            eventType,
+            eventId
+          ) {
+            claimedEventId = eventId;
+            assert(
+              eventType === 'DIARY_GENERATE',
+              'The wrong event type was claimed.'
+            );
+            settled.status = 'PROCESSING';
+            return settled;
+          }
+        },
+        processSingleQueueEvent_: function(event) {
+          assert(
+            event.eventId === newEventId,
+            'An event other than the new enqueue was processed.'
+          );
+          settled.status = 'DONE';
+          settled.lastError = null;
+        },
+        SheetRepository: {
+          getEventById: function(eventId) {
+            assert(
+              eventId === newEventId,
+              'Settlement read targeted another event.'
+            );
+            return settled;
+          }
+        }
+      }, function() {
+        result = runDiaryReleaseTest();
+      });
+
+      assert(
+        claimedEventId === newEventId &&
+          result.enqueued === true &&
+          result.processed === true &&
+          result.status === 'DONE' &&
+          result.reason === 'PROCESSED' &&
+          result.errorCode == null,
+        'The exact diary release event did not settle as DONE.'
+      );
+    }
+  );
+
+  test(
+    'runMemoryReleaseTest returns the sanitized final failure state',
+    function() {
+      var newEventId =
+        'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+      var settled = {
+        eventId: newEventId,
+        eventType: 'MEMORY_EXTRACT',
+        status: 'PENDING',
+        lockedBy: 'queue-lease:v1:test',
+        lastError: null
+      };
+      var result = null;
+
+      withOverrides({
+        ScriptApp: {
+          getProjectTriggers: function() {
+            return [];
+          }
+        },
+        enqueueMemoryExtractionIfDue_: function() {
+          return {
+            enqueued: true,
+            duplicate: false,
+            eventId: newEventId
+          };
+        },
+        QueueService: {
+          claimEventById: function(
+            eventType,
+            eventId
+          ) {
+            assert(
+              eventType === 'MEMORY_EXTRACT' &&
+                eventId === newEventId,
+              'Memory release test claimed another event.'
+            );
+            settled.status = 'PROCESSING';
+            return settled;
+          }
+        },
+        processSingleQueueEvent_: function() {
+          settled.status = 'RETRY_WAIT';
+          settled.lastError = {
+            code: 'GEMINI_TEMPORARY_FAILURE'
+          };
+        },
+        SheetRepository: {
+          getEventById: function() {
+            return settled;
+          }
+        }
+      }, function() {
+        result = runMemoryReleaseTest();
+      });
+
+      assert(
+        result.enqueued === true &&
+          result.processed === false &&
+          result.status === 'RETRY_WAIT' &&
+          result.reason === 'PROCESSING_INCOMPLETE' &&
+          result.errorCode === 'GEMINI_TEMPORARY_FAILURE',
+        'The failed release event was reported as successful.'
+      );
+    }
+  );
+
+  test(
+    'active triggers block release operators before enqueue or claim',
+    function() {
+      var enqueueCalls = 0;
+      var claimCalls = 0;
+
+      withOverrides({
+        ScriptApp: {
+          getProjectTriggers: function() {
+            return [{}];
+          }
+        },
+        enqueueDiaryIfDue_: function() {
+          enqueueCalls += 1;
+          return null;
+        },
+        QueueService: {
+          claimEventById: function() {
+            claimCalls += 1;
+          }
+        }
+      }, function() {
+        expectCode(function() {
+          runDiaryReleaseTest();
+        }, 'CONFIG_MISSING');
+      });
+
+      assert(
+        enqueueCalls === 0 && claimCalls === 0,
+        'An active-trigger release test reached enqueue or claim.'
+      );
+    }
+  );
+
+  test(
+    'runProactiveReleaseTest requires manual probability readiness before enqueue',
+    function() {
+      var readinessCalls = 0;
+      var enqueueCalls = 0;
+      var claimCalls = 0;
+
+      withOverrides({
+        ScriptApp: {
+          getProjectTriggers: function() {
+            return [];
+          }
+        },
+        ProactiveMessageService: {
+          assertManualTestReady: function() {
+            readinessCalls += 1;
+            throw createAppError(
+              'CONFIG_MISSING',
+              'manual policy not ready'
+            );
+          }
+        },
+        enqueueProactiveIfEligible_: function() {
+          enqueueCalls += 1;
+          return null;
+        },
+        QueueService: {
+          claimEventById: function() {
+            claimCalls += 1;
+          }
+        }
+      }, function() {
+        expectCode(function() {
+          runProactiveReleaseTest();
+        }, 'CONFIG_MISSING');
+      });
+
+      assert(
+        readinessCalls === 1 &&
+          enqueueCalls === 0 &&
+          claimCalls === 0,
+        'Proactive release testing bypassed readiness.'
+      );
+    }
+  );
+
+  test(
+    'unexpected project triggers make operational health critical',
+    function() {
+      withOverrides({
+        SheetRepository: {
+          listEvents: function() {
+            return [];
+          }
+        },
+        ConfigRepository: {
+          getByKey: function() {
+            return null;
+          }
+        }
+      }, function() {
+        var report = OperationalHealthService.inspect(
+          '2026-07-14T12:00:00+09:00',
+          {
+            required: {
+              processQueueJob: { count: 1 },
+              schedulerJob: { count: 1 }
+            },
+            unexpectedCount: 1
+          }
+        );
+        assert(
+          report.status === 'CRITICAL',
+          'Unexpected triggers must fail operational health.'
+        );
+        var details =
+          OperationalHealthService.__test.buildSanitizedDetails(
+            report
+          );
+        var body =
+          OperationalHealthService.__test.buildAlertBody(report);
+        assert(
+          details.triggerUnexpectedCount === 1 &&
+            body.indexOf(
+              'Unexpected project triggers: 1'
+            ) !== -1,
+          'Unexpected trigger count was omitted from sanitized health evidence.'
+        );
+      });
+    }
+  );
 
   return results;
 }

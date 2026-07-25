@@ -11,6 +11,7 @@ specified separately in section 14.1 and is not yet deployed or activated.
 Production configuration as of 2026-07-20:
 
 ```text
+APP_ENV=prod
 PROACTIVE_POLICY_MODE=probability
 PROACTIVE_AI_GENERATION_ENABLED=true
 SILENCE_MINUTES=240
@@ -26,6 +27,28 @@ path and its rollback controls. Historical behavior and rollout evidence below
 remain factual; code/tests/docs in PR 5 do not migrate the sheet, change
 production CONFIG, install triggers, or deploy the Web App.
 
+### 1.1 Approved forward operating modes
+
+Historical rollout evidence in this document does not define the current
+rollback procedure. The approved operating modes for the staged CharacterPack
+release are:
+
+- automatic operation: `APP_ENV=prod`,
+  `PROACTIVE_POLICY_MODE=probability`, approved production timing and time
+  weights, and the two reviewed time-driven triggers
+- accelerated human test: `APP_ENV=test`,
+  `PROACTIVE_POLICY_MODE=probability`, every project trigger stopped, and only
+  the exact-event operator `runProactiveReleaseTest()`
+- proactive stop: the user setting `PROACTIVE_FREQUENCY=off`; also stop the
+  time-driven triggers when investigating a delivery, queue, or data-integrity
+  incident
+
+`threshold` remains a runtime-compatible and historically tested mode, but it
+is not approved for automatic operation, accelerated release testing, or
+rollback. `installTriggers()` must reject it. Switching from probability to
+threshold can increase sends after the silence floor, so it is not a safe
+containment action.
+
 ## 2. Goals
 
 The current feature allows the configured partner to initiate a natural
@@ -35,6 +58,9 @@ The implementation must:
 
 - preserve quiet hours, `quiet_until`, user-activity, minimum-silence,
   cooldown, daily-cap, next-check, and mail-quota gates
+- apply `off/low/normal/high` to concrete test and production silence floors
+- keep accelerated timing manual-only and prevent test-to-production queue
+  leakage
 - make the probability decision only when enqueueing
 - derive repeatable samples without `Math.random()`
 - avoid probability rerolls during queue processing or retry
@@ -71,13 +97,32 @@ schedulerJob
 
 Eligibility and delivery are intentionally separate. The scheduler persists a
 decision, while the queue worker rechecks safety and performs the external side
-effect.
+effect. This automatic flow is approved only for the production probability
+profile.
+
+The accelerated release-test flow is separate:
+
+```text
+runProactiveReleaseTest
+  -> QueueService.enqueue(PROACTIVE_SEND)
+  -> QueueService.claimEventById(the event created by this call)
+  -> ProactiveMessageService.prepareDispatch()
+  -> ProactiveMessageService.send()
+```
+
+Every project trigger must be stopped. The operator requires
+`APP_ENV=test` and `PROACTIVE_POLICY_MODE=probability`; ordinary scheduler and
+queue-worker entry points must not consume the accelerated profile.
 
 ## 5. Enqueue phase
 
 `schedulerJob` calls `ProactiveMessageService.evaluateLocalConditions(now)`.
 The service evaluates the enqueue hard gates, computes the target date and next
-daily sequence, and derives the current decision slot.
+daily sequence, and derives the current decision slot. It first resolves
+`APP_ENV`, `PROACTIVE_FREQUENCY`, and the policy mode. `off` exits before user
+state or mail quota is read. `APP_ENV=test` exits from the ordinary scheduler
+path and can be used only with probability mode by the trigger-free
+release-test operator.
 
 In threshold mode, a candidate that passes the hard gates is eligible. In
 probability mode, the service computes one deterministic sample and compares it
@@ -88,8 +133,9 @@ payload does not contain a subject or message body. `QueueService.enqueue()`
 normalizes the payload and suppresses another active event with the same queue
 deduplication key.
 
-Probability, sample, decision slot, and `requestedAt` are persisted in the
-queue event. Later workers consume those values without recalculating them.
+Probability, sample, decision slot, `requestedAt`, and a policy binding
+(`environment`, `frequency`, and `mode`) are persisted in the queue event.
+Later workers consume those values without recalculating them.
 
 ## 6. Dispatch phase
 
@@ -100,10 +146,13 @@ queue event. Later workers consume those values without recalculating them.
 made. Dispatch is cancelled with `USER_ACTIVITY_AFTER_ENQUEUE` when
 `last_user_message_at` is later than `requestedAt`.
 
-Dispatch does not rerun the threshold or probability policy. It checks the
-target date, later user activity, applicable hard gates, and the delivery
-marker. Only after those checks pass does it reuse a saved body, call Gemini,
-or render the configured template.
+Dispatch does not reroll the threshold or probability decision. Before any
+marker, generation, or mail access, it rejects `off`, an environment/frequency/
+mode binding change, and a test profile used by the ordinary queue worker. It
+then checks the current minimum-silence floor, target date, later user
+activity, applicable hard gates, and the delivery marker. Only after those
+checks pass does it reuse a saved body, call Gemini, or render the configured
+template.
 
 `MAIL_QUOTA_EXHAUSTED` is surfaced to the queue retry policy. Other ineligible
 conditions complete the queue event as a safe skip without sending mail.
@@ -115,7 +164,7 @@ conditions complete the queue event as a safe skip without sending mail.
 | Quiet hours | yes | yes | `QUIET_START`, `QUIET_END` |
 | Temporary quiet period | yes | yes | `user_state.quiet_until` |
 | At least one user message | yes | yes | `user_state.last_user_message_at` |
-| Minimum silence | yes | no | `SILENCE_MINUTES` |
+| Minimum silence | yes | yes | `APP_ENV`, `PROACTIVE_FREQUENCY`, `SILENCE_MINUTES` |
 | User activity after enqueue | n/a | yes | `requestedAt`, `last_user_message_at` |
 | Proactive cooldown | yes | yes | `PROACTIVE_COOLDOWN_MINUTES` |
 | Daily send cap | yes | yes | `PROACTIVE_MAX_PER_DAY` |
@@ -123,9 +172,13 @@ conditions complete the queue event as a safe skip without sending mail.
 | Mail quota | yes | yes | `GmailNotifier.getRemainingQuota()` |
 | Target-date expiry | n/a | yes | payload `targetDate` |
 | Existing delivery marker | n/a | yes | `conversation_logs` |
+| Frequency `off` | yes | yes | `PROACTIVE_FREQUENCY` |
+| Policy binding unchanged | n/a | yes | payload `policyBinding` |
+| Accelerated profile is manual-only | yes | yes | `APP_ENV=test` |
 
-No proactive event is eligible before the first recorded user message. Silence
-and next-check eligibility are enqueue decisions; dispatch replaces them with
+No proactive event is eligible before the first recorded user message.
+Dispatch repeats minimum-silence using the current frequency so a newly
+selected lower frequency cannot leak an earlier queued send. It also applies
 the stricter check for user activity after `requestedAt`.
 
 ## 8. Threshold mode
@@ -139,9 +192,21 @@ probability sample affecting the result. The payload still carries the common
 decision fields with `probability=1` and `sample=0` so the queue contract stays
 uniform.
 
-Threshold is the repository fallback when `PROACTIVE_POLICY_MODE` is missing.
-An unrecognized non-empty mode is not treated as threshold; evaluation returns
-a configuration failure.
+The repository default is `probability`. A missing or unrecognized mode is not
+treated as threshold; evaluation returns a configuration failure.
+
+Threshold mode is retained only for runtime compatibility, historical
+evidence, and isolated automated tests. It is not an approved production or
+release-test operating mode:
+
+- `installTriggers()` rejects it
+- the accelerated release-test operator rejects it
+- operators must not switch to it during an incident
+
+To stop proactive delivery, select `off`. For suspected queue, duplicate-send,
+or data-integrity problems, stop both time-driven triggers as well. Threshold
+mode is not a rollback because every otherwise eligible candidate is accepted
+after the silence floor instead of being probability-gated.
 
 ## 9. Probability mode and formula
 
@@ -152,8 +217,8 @@ PROACTIVE_POLICY_MODE=probability
 Let:
 
 - `elapsed` be minutes since the last user message
-- `floor` be `SILENCE_MINUTES`
-- `ceiling` be `PROACTIVE_SILENCE_CEILING_MINUTES`
+- `floor` be the environment/frequency silence floor
+- `ceiling` be the environment/frequency probability ceiling
 - `curve` be `PROACTIVE_PROBABILITY_CURVE`
 - `weight` be the configured weight for the current time period
 
@@ -188,12 +253,51 @@ Time periods use `Asia/Tokyo`:
 | Evening | `18:00` onward | `1.2` |
 
 `PROACTIVE_DAY_START` must be earlier than `PROACTIVE_EVENING_START`, and all
-weights must be non-negative.
+weights must be non-negative. Quiet hours remain a hard gate and the user may
+change their start and end in the Web App settings. With the default
+23:00–08:00 interval, the effective higher-probability evening window is
+18:00–23:00; the 1.2 weight never permits a quiet-hours send. If the user
+changes quiet hours, the current configured interval remains authoritative.
+
+### 9.1 Frequency and environment timing
+
+| Environment | Frequency | Probability starts | Probability reaches 1.0 at unit weight | Decision slot |
+|---|---|---:|---:|---:|
+| `test` | `low` | 60 min | 120 min | 5 min |
+| `test` | `normal` | 15 min | 30 min | 5 min |
+| `test` | `high` | 5 min | 10 min | 5 min |
+| `prod` | `low` | 480 min (8 h) | 720 min (12 h) | 60 min |
+| `prod` | `normal` | 240 min (4 h) | 720 min (12 h) | 60 min |
+| `prod` | `high` | 120 min (2 h) | 720 min (12 h) | 60 min |
+
+These start times are not guaranteed delivery times. Probability is exactly
+zero at the boundary and rises after it. Cooldown, daily cap, quota, user
+activity, and quiet hours always take precedence.
+
+The accelerated `test` profile is available only in probability mode through
+`runProactiveReleaseTest()` while every project trigger is stopped. The operator
+processes only the exact event it creates in that execution. It uses code-owned
+timing:
+
+- `low`: floor 60 minutes, ceiling 120 minutes
+- `normal`: floor 15 minutes, ceiling 30 minutes
+- `high`: floor 5 minutes, ceiling 10 minutes
+- every frequency: five-minute decision slots
+
+Production uses:
+
+- `low`: floor 480 minutes, ceiling 720 minutes
+- `normal`: floor 240 minutes, ceiling 720 minutes
+- `high`: floor 120 minutes, ceiling 720 minutes
+- every frequency: sixty-minute decision slots
+
+`installTriggers()` refuses to mutate trigger state unless `APP_ENV=prod`,
+probability mode, production timing, and approved time weights are restored.
 
 ## 10. Deterministic sampling
 
-The decision slot is calculated from Unix epoch milliseconds and
-`PROACTIVE_RECHECK_MINUTES`:
+The decision slot is calculated from Unix epoch milliseconds and the resolved
+environment interval (five minutes in `test`, sixty minutes in `prod`):
 
 ```text
 decisionSlot = floor(epochMillis / (recheckMinutes * 60 * 1000))
@@ -237,6 +341,7 @@ Required payload fields:
 | `sample` | Persisted sample in `[0, 1)` |
 | `elapsedMinutes` | Silence duration used for the decision |
 | `timeWeight` | Time-period weight used for the decision |
+| `policyBinding` | Exact enqueue environment, frequency, and policy mode |
 | `reason` | Optional managed code: `deterministic_probability_hit` or `local_silence_threshold` |
 | `characterRuntimeMode` | Required for every new event: `legacy` or `enforced` |
 | `characterBinding` | Required only for `enforced`; exact six-field profile/policy/catalog/pack binding |
@@ -522,9 +627,17 @@ PROACTIVE_WEB_POLL_SECONDS
 
 | Key | Production value |
 |---|---:|
+| `APP_ENV` (Script Property) | `prod` |
 | `PROACTIVE_POLICY_MODE` | `probability` |
 | `PROACTIVE_AI_GENERATION_ENABLED` | `true` |
 | `SILENCE_MINUTES` | `240` |
+| `PROACTIVE_SILENCE_CEILING_MINUTES` | `720` |
+| `PROACTIVE_RECHECK_MINUTES` | `60` |
+| `PROACTIVE_DAY_START` | `10:00` |
+| `PROACTIVE_EVENING_START` | `18:00` |
+| `PROACTIVE_MORNING_WEIGHT` | `0.7` |
+| `PROACTIVE_DAY_WEIGHT` | `1.0` |
+| `PROACTIVE_EVENING_WEIGHT` | `1.2` |
 
 ### 17.2 Current repository defaults and legacy-supported controls
 
@@ -533,11 +646,11 @@ PROACTIVE_WEB_POLL_SECONDS
 | `SILENCE_MINUTES` | `240` | int | Minimum silence before eligibility |
 | `PROACTIVE_COOLDOWN_MINUTES` | `240` | int | Minimum time between deliveries |
 | `PROACTIVE_MAX_PER_DAY` | `2` | int | Daily delivery cap |
-| `QUIET_START` | `23:00` | time | Quiet-hours start |
-| `QUIET_END` | `08:00` | time | Quiet-hours end |
-| `PROACTIVE_RECHECK_MINUTES` | `60` | int | Decision-slot duration |
-| `PROACTIVE_POLICY_MODE` | `threshold` | string | `threshold` or `probability` |
-| `PROACTIVE_SILENCE_CEILING_MINUTES` | `720` | int | Silence duration at probability ceiling |
+| `QUIET_START` | `23:00` | time | User-configurable quiet-hours start; hard gate |
+| `QUIET_END` | `08:00` | time | User-configurable quiet-hours end; hard gate |
+| `PROACTIVE_RECHECK_MINUTES` | `60` | int | Production decision-slot duration; test is fixed at 5 |
+| `PROACTIVE_POLICY_MODE` | `probability` | string | Approved automatic and release-test mode. `threshold` is compatibility-only |
+| `PROACTIVE_SILENCE_CEILING_MINUTES` | `720` | int | Production silence duration at probability ceiling |
 | `PROACTIVE_PROBABILITY_CURVE` | `1.3` | float | Probability curve exponent |
 | `PROACTIVE_DAY_START` | `10:00` | time | Day period start |
 | `PROACTIVE_EVENING_START` | `18:00` | time | Evening period start |
@@ -562,12 +675,20 @@ a proactive prompt or body-template editor. PR 5 keeps runtime mode at
 `legacy` by default; activating `enforced` requires the separately reviewed
 schema migration and production rollout.
 
+`APP_ENV` is the timing-profile selector. Production floors are derived from
+`SILENCE_MINUTES=240`: low is 2x (480), normal is 1x (240), and high is 0.5x
+(120). The accelerated test floors and ceilings are code-owned release-test
+values and do not weaken cooldown, daily-cap, quota, or quiet-hour controls.
+
 ## 18. Production rollout evidence
 
 The rollout used independent activation of eligibility policy and message
 generation.
 
 ### Stage 0: new code, threshold policy, AI disabled
+
+This is historical rollout evidence only. It is not the current automatic,
+release-test, or rollback policy.
 
 - Existing behavior and safe missing-config fallbacks were exercised.
 - No scheduler or queue-worker failures, timeouts, terminal queue events,
@@ -636,34 +757,40 @@ job overlap, lock scope, trigger intervals, and safe-skip observability.
 
 ## 20. Rollback
 
-AI-generation or message-quality incident:
+To stop new proactive decisions immediately, use the Web App setting
+「自発的に話しかける頻度」→「話しかけない」. This persists:
 
 ```text
-PROACTIVE_AI_GENERATION_ENABLED=false
+PROACTIVE_FREQUENCY=off
 ```
 
-Probability or delivery-frequency incident:
+Dispatch rechecks the current frequency, so an already queued event is safely
+skipped instead of being sent after `off`.
 
-```text
-PROACTIVE_POLICY_MODE=threshold
-```
+For a suspected duplicate-send, queue, or data-integrity incident:
 
-These configuration changes apply to later scheduler runs without a deployment
-or trigger replacement. The two flags are independent: AI can be disabled
-while probability remains active, or the policy can return to threshold while
-the selected generation mode remains independently configurable.
+1. Set the proactive frequency to `off`.
+2. Stop both time-driven triggers.
+3. Preserve configuration, queue rows, delivery markers, usage, and execution
+   evidence.
+4. Investigate before changing data or redeploying.
+
+Do not set `PROACTIVE_POLICY_MODE=threshold` as rollback. It removes the
+probability miss gate and can increase eligibility after the silence floor.
+Automatic triggers cannot be installed until `APP_ENV=prod`, probability mode,
+approved production timing, and approved weights are restored.
+
+For a legacy-path AI-generation or message-quality incident,
+`PROACTIVE_AI_GENERATION_ENABLED=false` disables Gemini body generation and
+uses the configured legacy template. That flag does not stop eligibility or
+mail by itself; combine it with `PROACTIVE_FREQUENCY=off` when delivery must
+stop. The enforced CharacterPack path never substitutes a fixed/configured
+template when generation or approval fails.
 
 After V2 activation, rollback changes `CHARACTER_RUNTIME_MODE` back to
 `legacy` while preserving the append-only a5 sheet columns. The existing
-generation/policy flags then retain their verified legacy meanings. They do
-not permit configured template text as fallback inside an enforced event.
-
-For suspected queue loss, duplicate delivery, or data-integrity failure:
-
-1. Stop the two time-driven triggers.
-2. Preserve current configuration, queue rows, conversation markers, usage,
-   and execution evidence.
-3. Investigate before changing data or redeploying.
+generation flag then retains its verified legacy meaning. It does not permit
+configured template text as fallback inside an enforced event.
 
 ## 21. Source of truth
 

@@ -220,6 +220,19 @@ function runA15CharacterSettingsUiTests() {
       thrown && thrown.code === 'VALIDATION_REQUEST_INVALID',
       'Invalid quiet time passed.'
     );
+
+    thrown = null;
+    var equalQuietHours = JSON.parse(JSON.stringify(base));
+    equalQuietHours.quietEnd = equalQuietHours.quietStart;
+    try {
+      CharacterSettingsService.save(equalQuietHours);
+    } catch (error) {
+      thrown = error;
+    }
+    assert(
+      thrown && thrown.code === 'VALIDATION_REQUEST_INVALID',
+      'Equal quiet-hour endpoints passed.'
+    );
   });
 
   return results;

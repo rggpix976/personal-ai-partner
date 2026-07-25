@@ -12,6 +12,7 @@ and initiate proactive conversations.
 - Issue #18 probabilistic, AI-generated proactive conversations: deployed and
   enabled
 - Current production configuration:
+  - `APP_ENV=prod`
   - `PROACTIVE_POLICY_MODE=probability`
   - `PROACTIVE_AI_GENERATION_ENABLED=true`
   - `SILENCE_MINUTES=240`
@@ -148,11 +149,13 @@ WEB_APP_URL
 `APP_ENV` must be one of the values accepted by
 `Validators.validateScriptProperties`.
 
-The repository schema is `2026.07.a5`. It adds the internal
-`proactive_subject` and `proactive_origin_event_id` tail columns, in that order,
-after the eight character-approval columns. They let an enforced delivery
-retry revalidate the exact saved subject/body pair without transferring marker
-ownership to another queue event.
+The repository schema is `2026.07.a7`. Schema `a5` adds the internal
+`proactive_subject` and `proactive_origin_event_id` tail columns. Schema `a6`
+then appends diary payload, approval, and origin columns to `daily_summaries`;
+schema `a7` appends approval and origin-history columns to
+`long_term_memories`. These append-only provenance columns let enforced
+delivery, diary, and memory retries revalidate the exact approved artifacts
+without transferring ownership to another queue event.
 Run and verify `migrateSchema()` as a separately approved deployment step
 before activating enforced proactive output; this repository change does not
 run that migration automatically.
@@ -184,6 +187,7 @@ listProjectTriggers()
 processQueueJob()
 schedulerJob()
 runOperationalHealthCheck()
+inspectPr9PersistenceSafety()
 assessDeadQueueEvent(eventId)
 requeueDeadChatReply(eventId, manualRequestId)
 ```
@@ -202,6 +206,7 @@ runA10ImmersionPolicyCorpusTests()
 runA10ImmersionGuardTests()
 runA10ImmersionArtifactTests()
 runA10ImmersionCoordinatorTests()
+runA16ImmersionSafetyAuditTests()
 ```
 
 ## Setup and deployment outline
@@ -248,6 +253,9 @@ MailApp, Drive, Docs, Web App, and time-driven trigger validation.
 `runOperationalHealthCheck()` provides the same read-only report on demand.
 Reports contain aggregate counts and controlled error codes only; they exclude
 message content, event payloads, IDs, URLs, and email addresses.
+`inspectPr9PersistenceSafety()` separately performs a read-only
+approval/provenance audit across persisted `enforced` event graphs and returns
+only fixed tokens, booleans, and counts.
 
 Operational alert email is disabled by default. Enable it only as a separate
 production configuration change:
@@ -265,7 +273,10 @@ See [Release operations](docs/operations/RELEASE_OPERATIONS.md) for the
 deployment, recovery, backup/restore, and rollback checklist.
 CharacterPackの本番切替は
 [PR 9 段階的本番有効化手順](docs/operations/PR9_STAGED_ACTIVATION.md)
-に従い、リンク先の証跡テンプレートには機密情報を除いた集計結果だけを記録します。
+に従います。利用者本人が画面を見ながら行う部分は
+[PR 9 人間受入テスト手順](docs/qa/PR9_HUMAN_ACCEPTANCE_TEST_GUIDE_JA.md)
+だけを上から順に使用し、証跡テンプレートには機密情報を除いた集計結果だけを
+記録します。
 
 ## Proactive operation and rollback
 
@@ -274,24 +285,43 @@ message bodies. Existing hard gates remain authoritative: quiet hours,
 `quiet_until`, prior user activity, minimum silence, cooldown, daily cap,
 next-check time, and mail quota.
 
+The user setting `low / normal / high` starts probability evaluation after
+8 / 4 / 2 hours in `APP_ENV=prod`. The trigger-free human-test profile uses
+60 / 15 / 5 minutes in `APP_ENV=test`. Evening probability is weighted higher
+from 18:00, while the default 23:00–08:00 quiet interval still blocks sending.
+The user can change quiet hours, and the saved interval remains a hard gate.
+The start and end must be different so the safety interval cannot be disabled.
+Accelerated testing requires `APP_ENV=test`, probability mode, every trigger
+stopped, and only the exact-event operator `runProactiveReleaseTest()`.
+`installTriggers()` accepts only the approved `APP_ENV=prod` probability
+profile.
+
 The repository defaults are intentionally conservative:
 
 ```text
-PROACTIVE_POLICY_MODE=threshold
+PROACTIVE_POLICY_MODE=probability
 PROACTIVE_AI_GENERATION_ENABLED=false
 ```
 
-The same settings provide immediate rollback without a deployment:
+To stop proactive delivery without a deployment, select
+「自発的に話しかける頻度」→「話しかけない」 in the Web App. This saves:
 
 ```text
-PROACTIVE_POLICY_MODE=threshold
-PROACTIVE_AI_GENERATION_ENABLED=false
+PROACTIVE_FREQUENCY=off
 ```
 
-The first setting restores threshold-only enqueue decisions. The second
-disables Gemini proactive body generation and uses the configured template.
+Dispatch rechecks this value, so already queued proactive events are skipped.
+For a suspected duplicate-send, queue, or data-integrity incident, also stop
+both time-driven triggers and preserve evidence before making other changes.
 
-That template behavior is the current production/legacy rollback contract.
+Do not switch `PROACTIVE_POLICY_MODE` to `threshold` as rollback. Threshold
+removes probability misses and can increase eligibility after the silence
+floor; automatic triggers are not approved in that mode.
+
+`PROACTIVE_AI_GENERATION_ENABLED=false` remains a legacy-path
+message-generation containment control, but it does not stop proactive
+eligibility or mail by itself. The configured template behavior is limited to
+the current production/legacy contract.
 The repository now also contains the dormant PR 5 enforced CharacterPack
 path: each new proactive subject/body pair is generated, guarded, and
 rewritten at most once. If no approved artifact is produced, nothing is sent

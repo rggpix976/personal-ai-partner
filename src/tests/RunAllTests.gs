@@ -21,7 +21,8 @@ function runAllSelfTests() {
     'runA12CharacterProactiveIntegrationTests',
     'runA13CharacterDiaryIntegrationTests',
     'runA14CharacterMemoryIntegrationTests',
-    'runA15CharacterSettingsUiTests'
+    'runA15CharacterSettingsUiTests',
+    'runA16ImmersionSafetyAuditTests'
   ];
   var summary = {
     ok: true,

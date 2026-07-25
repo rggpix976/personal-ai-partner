@@ -156,6 +156,9 @@ part of the personality profile:
 - quiet-hours start and end
 - temporary notification pause
 
+Quiet-hours start and end are user-editable but must be different; saving an
+empty/disabled interval is rejected.
+
 The user cannot edit first person, dialect, temperament, canon, fixed
 responses, raw prompts, safety rules, fallback text, or the CharacterPack ID.
 
@@ -185,15 +188,24 @@ relationship stage, or wording.
 | Value | Eligibility effect |
 |---|---|
 | `off` | Never enqueue a new proactive event |
-| `low` | Lower configured eligibility probability |
-| `normal` | Baseline configured probability |
-| `high` | Higher configured probability within existing caps |
+| `low` | Test: start after 60 minutes. Production: start after 480 minutes (8 hours) |
+| `normal` | Test: start after 15 minutes. Production: start after 240 minutes (4 hours) |
+| `high` | Test: start after 5 minutes. Production: start after 120 minutes (2 hours) |
 
 Quiet hours, temporary pause, user activity, cooldown, daily cap, mail quota,
 and target-date expiry remain authoritative for every value.
 
-PR 5 does not change the existing eligibility calculation. The concrete
-`off/low/normal/high` backend mapping and settings UI remain PR 8 scope.
+The selected time is the start of deterministic probability evaluation, not a
+guaranteed send time. Probability is zero at the exact floor and rises with
+additional silence. `APP_ENV=test` uses five-minute decision slots and reaches
+the probability ceiling at 120/30/10 minutes for low/normal/high. `APP_ENV=prod`
+uses sixty-minute decision slots and a common 720-minute ceiling.
+
+The approved time weights are `0.7` before 10:00, `1.0` from 10:00 until
+18:00, and `1.2` from 18:00 onward. The default quiet interval 23:00–08:00
+still blocks delivery, so the effective higher-probability evening window is
+18:00–23:00. Accelerated test timing is manual-only and cannot be used to
+install automatic triggers.
 
 ## 5. Canonical V2 persistence contract
 
@@ -812,8 +824,19 @@ Forbidden labels include message/diary/memory text, hashes, prompts, provider
 responses, per-event or operational IDs, URLs, email addresses, profile
 revisions, names, and free-form reasons. The fixed allowlisted
 `characterPackId` and `characterPackVersion` dimensions are the only ID-like
-exception. `immersion_unsafe_persisted_or_sent_total` and unauthorized sink
-attempts must remain zero for release.
+exception.
+
+`immersion_unsafe_persisted_or_sent_total` is derived by the read-only
+`inspectPr9PersistenceSafety()` operator. It audits the complete graph of
+persisted `enforced` events and their chat, image-summary, proactive-delivery,
+diary, and memory approval/provenance records. It is not inferred from the
+absence of a runtime log line. The operator returns only fixed tokens,
+booleans, and counts; it does not return content, identifiers, URLs, email
+addresses, timestamps, names, or profile revisions. This structural audit does
+not replace human review of the meaning and tone of generated content.
+
+`immersion_unsafe_persisted_or_sent_total` and unauthorized sink attempts must
+remain zero for release.
 
 ## 17. Acceptance criteria
 

@@ -27,6 +27,16 @@ function assertAlphabeticTopLevelLoadOrder() {
 
 assertAlphabeticTopLevelLoadOrder();
 
+const appsScriptConsole = {
+  log: (...args) => {
+    if (String(args[0] || '').startsWith('PR9_TEST_RESULT ')) return;
+    console.log(...args);
+  },
+  warn: (...args) => console.warn(...args),
+  error: (...args) => console.error(...args),
+  info: (...args) => console.info(...args)
+};
+
 function formatDate(value, timeZone, format) {
   const date = value instanceof Date ? value : new Date(value);
   const parts = Object.fromEntries(
@@ -81,7 +91,7 @@ function formatDate(value, timeZone, format) {
 }
 
 const context = {
-  console,
+  console: appsScriptConsole,
   LockService: {
     getScriptLock: () => ({
       tryLock: () => true,
@@ -92,8 +102,8 @@ const context = {
     getScriptProperties: () => ({
       getProperty: (key) => key === 'OWNER_EMAIL'
         ? ['owner', 'example.com'].join('@')
-        : null,
-      getProperties: () => ({}),
+        : (key === 'APP_ENV' ? 'prod' : null),
+      getProperties: () => ({ APP_ENV: 'prod' }),
       setProperty: () => {}
     })
   },
@@ -147,6 +157,7 @@ vm.createContext(context);
   'src/application/ApprovedCharacterArtifactService.gs',
   'src/application/CharacterSinkAdapter.gs',
   'src/application/CharacterOutputCoordinator.gs',
+  'src/application/ImmersionSafetyAuditService.gs',
   'src/application/OperationalHealthService.gs',
   'src/application/MaintenanceService.gs',
   'src/application/MemoryService.gs',
@@ -182,6 +193,7 @@ vm.createContext(context);
   'src/tests/A13CharacterDiaryIntegrationTests.gs',
   'src/tests/A14CharacterMemoryIntegrationTests.gs',
   'src/tests/A15CharacterSettingsUiTests.gs',
+  'src/tests/A16ImmersionSafetyAuditTests.gs',
   'src/tests/RunAllTests.gs'
 ].forEach((file) => {
   vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });

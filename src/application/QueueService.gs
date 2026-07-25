@@ -21,12 +21,87 @@ var QueueService = (function() {
   }
 
   function claimBatch(limit, workerId, now) {
+    return claimBatchInternal_(null, limit, workerId, now);
+  }
+
+  function claimBatchByType(eventType, limit, workerId, now) {
+    Validators.assertEnum(
+      eventType,
+      APP_CONSTANTS.EVENT_TYPES,
+      'eventType'
+    );
+    return claimBatchInternal_(eventType, limit, workerId, now);
+  }
+
+  function claimEventById(eventType, eventId, workerId, now) {
+    Validators.assertEnum(
+      eventType,
+      APP_CONSTANTS.EVENT_TYPES,
+      'eventType'
+    );
+    Validators.assertUuidV4(eventId, 'eventId');
+    var normalizedWorkerId = String(workerId || '').trim();
+    ensure(
+      normalizedWorkerId !== '',
+      'VALIDATION_REQUEST_INVALID',
+      'workerId is required.'
+    );
+    var claimTime = normalizeNow_(now);
+    return LockManager.withScriptLock(
+      'queue-claim-event',
+      function() {
+        var event = SheetRepository.getEventById(eventId);
+        ensure(
+          event && event.eventType === eventType,
+          'STORAGE_DATA_CORRUPTED',
+          'The requested release-test queue event is missing or has the wrong type.'
+        );
+        if (!isClaimableAt_(event, claimTime)) {
+          return null;
+        }
+        var leaseToken = createLeaseToken_();
+        SheetRepository.updateEvent(event.eventId, {
+          status: 'PROCESSING',
+          lockedAt: claimTime,
+          lockedBy: leaseToken,
+          updatedAt: claimTime
+        });
+        return SheetRepository.getEventById(event.eventId);
+      }
+    );
+  }
+
+  function isClaimableAt_(event, claimTime) {
+    var nowTime = getIsoTimeMillis(claimTime);
+    if (event.status === 'PENDING') {
+      return !event.nextAttemptAt ||
+        getIsoTimeMillis(event.nextAttemptAt) <= nowTime;
+    }
+    if (event.status === 'RETRY_WAIT') {
+      return Boolean(
+        event.nextAttemptAt &&
+          getIsoTimeMillis(event.nextAttemptAt) <= nowTime
+      );
+    }
+    return false;
+  }
+
+  function claimBatchInternal_(eventType, limit, workerId, now) {
     var claimLimit = Math.max(1, Number(limit || getConfigInt_('QUEUE_BATCH_SIZE', DEFAULTS.batchSize)));
     var normalizedWorkerId = String(workerId || '').trim();
     ensure(normalizedWorkerId !== '', 'VALIDATION_REQUEST_INVALID', 'workerId is required.');
     var claimTime = normalizeNow_(now);
     return LockManager.withScriptLock('queue-claim-batch', function() {
-      var events = SheetRepository.listClaimableEvents(claimLimit, parseIsoToDate(claimTime));
+      var events = eventType == null
+        ? SheetRepository.listClaimableEvents(
+          claimLimit,
+          parseIsoToDate(claimTime)
+        )
+        : SheetRepository.listClaimableEventsByType(
+          eventType,
+          claimLimit,
+          parseIsoToDate(claimTime)
+        );
       return events.map(function(event) {
         var leaseToken = createLeaseToken_();
         SheetRepository.updateEvent(event.eventId, {
@@ -550,6 +625,11 @@ var QueueService = (function() {
         'PROACTIVE_SEND payload.timeWeight is required.'
       );
       ensure(
+        hasOwn.call(payload, 'policyBinding'),
+        'VALIDATION_REQUEST_INVALID',
+        'PROACTIVE_SEND payload.policyBinding is required.'
+      );
+      ensure(
         proactiveRuntimeMode === 'legacy' ||
           proactiveRuntimeMode === 'enforced',
         'VALIDATION_REQUEST_INVALID',
@@ -572,6 +652,8 @@ var QueueService = (function() {
       var proactiveReason = payload.reason == null
         ? null
         : String(payload.reason);
+      var proactivePolicyBinding =
+        normalizeProactivePolicyBinding_(payload.policyBinding);
       var expectedMessageDedupeKey =
         'PROACTIVE_MESSAGE:' +
         payload.targetDate +
@@ -632,7 +714,8 @@ var QueueService = (function() {
         elapsedMinutes: elapsedMinutes,
         timeWeight: timeWeight,
         reason: proactiveReason,
-        characterRuntimeMode: proactiveRuntimeMode
+        characterRuntimeMode: proactiveRuntimeMode,
+        policyBinding: proactivePolicyBinding
       };
       if (proactiveRuntimeMode === 'enforced') {
         proactivePayload.characterBinding = normalizeCharacterBinding_(
@@ -694,6 +777,41 @@ var QueueService = (function() {
       catalogVersion: value.catalogVersion,
       characterPackId: value.characterPackId,
       characterPackVersion: value.characterPackVersion
+    };
+  }
+
+  function normalizeProactivePolicyBinding_(value) {
+    ensure(
+      value &&
+        typeof value === 'object' &&
+        !Array.isArray(value),
+      'VALIDATION_REQUEST_INVALID',
+      'PROACTIVE_SEND payload.policyBinding is invalid.'
+    );
+    var keys = Object.keys(value).sort();
+    ensure(
+      JSON.stringify(keys) ===
+        JSON.stringify(['environment', 'frequency', 'mode']),
+      'VALIDATION_REQUEST_INVALID',
+      'PROACTIVE_SEND payload.policyBinding fields are invalid.'
+    );
+    var environment = String(value.environment || '');
+    var frequency = String(value.frequency || '');
+    var mode = String(value.mode || '');
+    ensure(
+      APP_CONSTANTS.APP_ENVS.indexOf(environment) !== -1 &&
+        APP_CONSTANTS.CHARACTER.PROACTIVE_FREQUENCIES.indexOf(
+          frequency
+        ) !== -1 &&
+        frequency !== 'off' &&
+        (mode === 'probability' || mode === 'threshold'),
+      'VALIDATION_REQUEST_INVALID',
+      'PROACTIVE_SEND payload.policyBinding values are invalid.'
+    );
+    return {
+      environment: environment,
+      frequency: frequency,
+      mode: mode
     };
   }
 
@@ -890,6 +1008,8 @@ var QueueService = (function() {
   return {
     enqueue: enqueue,
     claimBatch: claimBatch,
+    claimBatchByType: claimBatchByType,
+    claimEventById: claimEventById,
     markDone: markDone,
     markRetry: markRetry,
     markDead: markDead,

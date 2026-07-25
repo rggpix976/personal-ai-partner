@@ -14,6 +14,7 @@
     "sample",
     "elapsedMinutes",
     "timeWeight",
+    "policyBinding",
     "characterRuntimeMode"
   ],
   "properties": {
@@ -56,6 +57,36 @@
     "timeWeight": {
       "type": "number",
       "minimum": 0
+    },
+    "policyBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "environment",
+        "frequency",
+        "mode"
+      ],
+      "properties": {
+        "environment": {
+          "enum": [
+            "test",
+            "prod"
+          ]
+        },
+        "frequency": {
+          "enum": [
+            "low",
+            "normal",
+            "high"
+          ]
+        },
+        "mode": {
+          "enum": [
+            "probability",
+            "threshold"
+          ]
+        }
+      }
     },
     "characterRuntimeMode": {
       "enum": [
