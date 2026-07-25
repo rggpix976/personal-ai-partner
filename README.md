@@ -260,9 +260,9 @@ new event and is idempotent for the same `manualRequestId`.
 
 See [Release operations](docs/operations/RELEASE_OPERATIONS.md) for the
 deployment, recovery, backup/restore, and rollback checklist.
-The CharacterPack cutover is separately gated by the
-[PR 9 staged activation runbook](docs/operations/PR9_STAGED_ACTIVATION.md);
-record only sanitized aggregate evidence in its linked template.
+CharacterPackの本番切替は
+[PR 9 段階的本番有効化手順](docs/operations/PR9_STAGED_ACTIVATION.md)
+に従い、リンク先の証跡テンプレートには機密情報を除いた集計結果だけを記録します。
 
 ## Proactive operation and rollback
 

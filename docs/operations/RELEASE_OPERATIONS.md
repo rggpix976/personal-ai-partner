@@ -1,10 +1,10 @@
 # Release operations
 
-For the PR 4–8 CharacterPack production cutover, use the stricter
-[PR 9 staged activation runbook](PR9_STAGED_ACTIVATION.md) and its sanitized
-[evidence template](../qa/PR9_EVIDENCE_TEMPLATE.md). That runbook controls the
-order of trigger freeze, a7 migration, dormant settings, surface canaries,
-external proactive delivery, rollback, and final monitoring.
+PR 4〜PR 8のCharacterPackを本番へ切り替える場合は、
+[PR 9 段階的本番有効化手順](PR9_STAGED_ACTIVATION.md)と
+[PR 9 本番確認・証跡テンプレート](../qa/PR9_EVIDENCE_TEMPLATE.md)
+を使用します。この手順が、トリガー停止、a7移行、未有効状態での設定、
+各機能の段階的テスト、自発発言の外部送信、ロールバック、最終監視の順序を管理します。
 
 This runbook covers release-hardening operations that are separate from diary
 quality work and persona development. Production configuration, trigger,

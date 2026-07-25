@@ -962,5 +962,5 @@ remain PR 9 work.
 - [A1 Data and Event Contracts](../a1/04_DATA_AND_EVENT_CONTRACTS.md)
 - [A1 Error Contract](../a1/05_ERROR_CONTRACT.md)
 - [A2 Platform Baseline](../spec/A2_PLATFORM_BASELINE.md)
-- [PR 9 staged activation](../operations/PR9_STAGED_ACTIVATION.md)
-- [PR 9 sanitized evidence template](../qa/PR9_EVIDENCE_TEMPLATE.md)
+- [PR 9 段階的本番有効化手順](../operations/PR9_STAGED_ACTIVATION.md)
+- [PR 9 本番確認・証跡テンプレート](../qa/PR9_EVIDENCE_TEMPLATE.md)

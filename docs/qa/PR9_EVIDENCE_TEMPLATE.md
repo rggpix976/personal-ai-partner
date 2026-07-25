@@ -1,112 +1,129 @@
-# PR 9 sanitized release evidence
+# PR 9 本番確認・証跡テンプレート
 
-Copy this template for the live run. Store only the allowed aggregate evidence
-defined in
-[`PR9_STAGED_ACTIVATION.md`](../operations/PR9_STAGED_ACTIVATION.md).
-Do not paste user content, names, prompts, IDs, URLs, email addresses, secrets,
-or screenshots containing them.
+本番テストでは、このテンプレートをコピーして使用します。記録できる情報は
+[`PR9_STAGED_ACTIVATION.md`](../operations/PR9_STAGED_ACTIVATION.md)
+の10章に記載された集計情報だけです。
 
-## Candidate
+ユーザー内容、名前、プロンプト、各種ID、URL、メールアドレス、秘密情報、および
+それらが写ったスクリーンショットを貼り付けないでください。
 
-| Field | Value |
+## 1. 本番候補
+
+| 記録項目 | 記入欄 |
 |---|---|
-| Full Git SHA | |
-| PR number | |
-| Apps Script version number | |
-| Schema version | |
-| CharacterPack version | |
-| Policy/catalog versions | |
-| Operator-confirmed time (JST, minute precision) | |
+| 完全なGit SHA | |
+| PR番号 | |
+| Apps Scriptバージョン番号 | |
+| スキーマバージョン | |
+| CharacterPackバージョン | |
+| policy・catalogバージョン | |
+| 確認時刻（日本時間・分単位） | |
 
-## Human approvals
+## 2. 人間による承認
 
-| Gate | Approval | Time (JST) | Notes using controlled codes only |
+結果欄には「合格」または「停止」を記入します。備考には管理されたstatus、
+error、reason codeだけを記録します。
+
+| ゲート | 結果 | 時刻（日本時間） | 備考 |
 |---|---|---|---|
-| H0 reviewed candidate | `PASS / STOP` | | |
-| H1 backup and freeze | `PASS / STOP` | | |
-| H2 deploy and migration | `PASS / STOP` | | |
-| H3 onboarding/settings | `PASS / STOP` | | |
-| H4 chat/image/routing | `PASS / STOP` | | |
-| H5 diary/memory | `PASS / STOP` | | |
-| H6 proactive delivery | `PASS / STOP` | | |
-| H7 scheduling/observation | `PASS / STOP` | | |
-| Rollback rehearsal | `PASS / STOP` | | |
+| H0：本番候補の確認 | `合格 / 停止` | | |
+| H1：バックアップ・トリガー停止 | `合格 / 停止` | | |
+| H2：コード配置・スキーマ移行 | `合格 / 停止` | | |
+| H3：初回設定・未有効状態 | `合格 / 停止` | | |
+| H4：会話・画像・アプリ案内 | `合格 / 停止` | | |
+| H5：日記・記憶 | `合格 / 停止` | | |
+| H6：自発発言・外部送信 | `合格 / 停止` | | |
+| H7：トリガー復旧・監視 | `合格 / 停止` | | |
+| ロールバック試験 | `合格 / 停止` | | |
 
-## Automated checks
+## 3. 自動検証
 
-| Check | Pass count | Failure count | Result |
+| 検証 | 成功件数 | 失敗件数 | 結果 |
 |---|---:|---:|---|
-| Apps Script self-tests | | | `PASS / STOP` |
-| Contract validation | | | `PASS / STOP` |
-| Static audit | | | `PASS / STOP` |
-| Syntax/diff checks | | | `PASS / STOP` |
+| Apps Script self-test | | | `合格 / 停止` |
+| 契約検証 | | | `合格 / 停止` |
+| static audit | | | `合格 / 停止` |
+| 構文・差分検証 | | | `合格 / 停止` |
 
-## Migration and configuration
+## 4. スキーマ移行・設定
 
-| Check | Expected | Observed | Result |
+| 確認項目 | 合格条件 | 確認結果 | 判定 |
 |---|---|---|---|
-| Migration actions | append/default only | | `PASS / STOP` |
-| Existing content rows rewritten | `0` | | `PASS / STOP` |
-| Duplicate controlled config keys | `0` | | `PASS / STOP` |
-| V2 profile revision | positive integer (do not record value) | | `PASS / STOP` |
-| Final configuration stage | `S4` | | `PASS / STOP` |
+| スキーマ移行 | 末尾列追加・不足default追加だけ | | `合格 / 停止` |
+| 既存内容行の書換え | 0件 | | `合格 / 停止` |
+| 対象configキーの重複 | 0件 | | `合格 / 停止` |
+| V2 profile revision | 正の整数。値自体は記録しない | | `合格 / 停止` |
+| 最終設定段階 | S4 | | `合格 / 停止` |
 
-## Surface acceptance
+## 5. 推しとしての確認
 
-Record only result and controlled failure category. Do not record the test
-prompt or generated output.
+この表にはテスト入力や生成結果を書かず、合否と管理された失敗分類だけを記録します。
 
-| Criterion | Result | Controlled failure category |
+| 確認内容 | 結果 | 管理された失敗分類 |
 |---|---|---|
-| PI-010 identity fixed response | `PASS / STOP` | |
-| PI-011 world/truth boundary | `PASS / STOP` | |
-| PI-012 product route outside bubble | `PASS / STOP` | |
-| PI-013 internal fixed response | `PASS / STOP` | |
-| PI-014 capability fixed response | `PASS / STOP` | |
-| PI-015 affection handling | `PASS / STOP` | |
-| PI-030 chat sink protection | `PASS / STOP` | |
-| PI-031 image sink protection | `PASS / STOP` | |
-| PI-032 proactive protected send | `PASS / STOP` | |
-| PI-036 proactive retry revalidation | `PASS / STOP` | |
-| PI-033 diary protected sink | `PASS / STOP` | |
-| PI-034 memory provenance/grounding | `PASS / STOP` | |
-| PI-035 technical error UI | `PASS / STOP` | |
-| PI-042 native Kansai/persona review | `PASS / STOP` | |
-| PI-043 exact fixed copy | `PASS / STOP` | |
-| PI-051 unsafe content absent from sinks/logs | `PASS / STOP` | |
-| PI-056 legacy rows not promoted | `PASS / STOP` | |
-| PI-060 dormant-before-activation proof | `PASS / STOP` | |
-| PI-061 rollback proof | `PASS / STOP` | |
+| 通常会話が自然な関西弁になっている | `合格 / 停止` | |
+| 温厚で世話焼きな人物像になっている | `合格 / 停止` | |
+| AIとして自己説明していない | `合格 / 停止` | |
+| 身体・住所・外部生活を捏造していない | `合格 / 停止` | |
+| 愛情表現要求へ承認済みの照れ方で返す | `合格 / 停止` | |
+| 禁止した直接的愛情表現がない | `合格 / 停止` | |
+| 技術説明が推しの吹き出し外にある | `合格 / 停止` | |
+| 日記の関西弁・人物像・事実関係が自然 | `合格 / 停止` | |
+| 自発発言に返信圧力・罪悪感誘導がない | `合格 / 停止` | |
 
-## Operational evidence
+## 6. 機能別受入条件
 
-| Check | Expected | Observed | Result |
+| 基準 | 結果 | 管理された失敗分類 |
+|---|---|---|
+| PI-010：存在への疑いに固定文で返す | `合格 / 停止` | |
+| PI-011：身体・住所・外部生活を捏造しない | `合格 / 停止` | |
+| PI-012：AI利用説明をアプリ案内へ出す | `合格 / 停止` | |
+| PI-013：内部情報要求へ固定文で返す | `合格 / 停止` | |
+| PI-014：外部操作要求へ固定文で返す | `合格 / 停止` | |
+| PI-015：愛情表現要求を承認済みの照れ方で扱う | `合格 / 停止` | |
+| PI-030：未承認会話を保存しない | `合格 / 停止` | |
+| PI-031：未承認画像返答・summaryを保存しない | `合格 / 停止` | |
+| PI-032：自発発言を承認後だけ送信する | `合格 / 停止` | |
+| PI-036：自発発言の再試行時に再承認する | `合格 / 停止` | |
+| PI-033：未承認日記を保存しない | `合格 / 停止` | |
+| PI-034：記憶の根拠・由来を検証する | `合格 / 停止` | |
+| PI-035：技術的エラーを状態表示へ出す | `合格 / 停止` | |
+| PI-042：関西弁・人物像を人間が承認する | `合格 / 停止` | |
+| PI-043：固定文が承認済み本文と一致する | `合格 / 停止` | |
+| PI-051：unsafe内容がsink・logに存在しない | `合格 / 停止` | |
+| PI-056：legacy行を自動昇格しない | `合格 / 停止` | |
+| PI-060：有効化前は従来動作を維持する | `合格 / 停止` | |
+| PI-061：設定ロールバックで従来動作へ戻る | `合格 / 停止` | |
+
+## 7. 運用状態
+
+| 確認項目 | 合格条件 | 確認結果 | 判定 |
 |---|---:|---:|---|
-| `processQueueJob` trigger count | 1 | | `PASS / STOP` |
-| `schedulerJob` trigger count | 1 | | `PASS / STOP` |
-| Unexpected trigger count | 0 | | `PASS / STOP` |
-| Unresolved recent `DEAD` count | 0 | | `PASS / STOP` |
-| Stale `PROCESSING` count | 0 | | `PASS / STOP` |
-| Unsafe persisted/sent metric | 0 | | `PASS / STOP` |
-| Unauthorized sink-attempt metric | 0 | | `PASS / STOP` |
-| Duplicate diary anchor count | 0 | | `PASS / STOP` |
-| Duplicate proactive delivery count | 0 | | `PASS / STOP` |
+| `processQueueJob`トリガー | 1件 | | `合格 / 停止` |
+| `schedulerJob`トリガー | 1件 | | `合格 / 停止` |
+| 想定外トリガー | 0件 | | `合格 / 停止` |
+| 未解決の直近`DEAD` | 0件 | | `合格 / 停止` |
+| stale `PROCESSING` | 0件 | | `合格 / 停止` |
+| unsafe persisted・sent metric | 0 | | `合格 / 停止` |
+| unauthorized sink-attempt metric | 0 | | `合格 / 停止` |
+| 日記アンカー重複 | 0件 | | `合格 / 停止` |
+| 自発発言の二重送信 | 0件 | | `合格 / 停止` |
 
-## Backup and rollback
+## 8. バックアップ・ロールバック
 
-| Check | Result | Notes without resource identifiers |
+| 確認項目 | 結果 | IDなどを含まない備考 |
 |---|---|---|
-| Current backup exists | `PASS / STOP` | |
-| Isolated restore succeeds | `PASS / STOP` | |
-| S4 → S0 rollback succeeds | `PASS / STOP` | |
-| a7-compatible immutable code rollback identified | `PASS / STOP` | |
-| Candidate restored after rehearsal | `PASS / STOP` | |
+| 最新バックアップがある | `合格 / 停止` | |
+| 隔離環境への復元に成功した | `合格 / 停止` | |
+| S4からS0へ戻せた | `合格 / 停止` | |
+| a7対応済み不変コード版を特定した | `合格 / 停止` | |
+| 試験後に承認済み候補へ戻した | `合格 / 停止` | |
 
-## Final decision
+## 9. 最終判断
 
 ```text
-Decision: RELEASE / ROLLBACK / HOLD
-Reason code:
-Decision time (JST, minute precision):
-All prohibited-data checks: PASS / STOP
+判断：正式版として承認 / ロールバック / 保留
+理由コード：
+判断時刻（日本時間・分単位）：
+禁止情報が証跡に含まれていない：合格 / 停止
 ```

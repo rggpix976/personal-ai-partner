@@ -1,69 +1,76 @@
-# PR 9 staged activation runbook
+# PR 9 段階的本番有効化手順
 
-## 1. Purpose and authority boundary
+## 1. この手順書の目的
 
-This runbook is the production-change gate for the single
-`warm-kansai-caretaker.v1` CharacterPack. PRs 4–8 are already merged behind
-legacy-safe defaults. PR 9 is not complete merely because code is deployed:
-the schema migration, user settings, staged configuration changes, live
-acceptance, monitoring, and rollback proof all require a human operator.
+この手順書は、単一のCharacterPack
+`warm-kansai-caretaker.v1`を本番で有効化するための最終承認手順です。
+PR 4〜PR 8の実装は、すべて従来動作を維持する初期値の後ろに統合されています。
 
-Do not begin a mutation step until the preceding gate is recorded as `PASS`.
-On any `STOP` condition:
+PR 9は、コードを配置しただけでは完了しません。次の作業には、すべて人間の確認が
+必要です。
 
-1. stop the current stage;
-2. do not retry by editing queue rows, provenance, or content;
-3. apply the rollback procedure in section 9 when production behavior changed;
-4. record only the sanitized evidence allowed by section 10.
+- スキーマ移行
+- ユーザー設定の保存
+- 機能の段階的有効化
+- ブラウザでの受入テスト
+- 実行状態の監視
+- ロールバック確認
 
-This runbook never authorizes displaying or copying message/diary content,
-prompts, event/resource IDs, URLs, email addresses, API keys, tokens, or
-deployment IDs into a PR, issue, chat response, or evidence file.
+先行するゲートが「合格」になるまで、次の変更操作へ進んではいけません。
+「停止条件」に1件でも該当した場合は、次の順で対応します。
 
-## 2. Fixed target and release invariants
+1. 現在の工程を停止する。
+2. キュー行、承認情報、生成内容を手作業で修正しない。
+3. 本番動作を変更済みなら、9章のロールバックを実施する。
+4. 10章で許可された情報だけを証跡へ記録する。
 
-The reviewed target is:
+PR、Issue、チャット回答、証跡ファイルには、次の情報を記録しません。
 
-| Item | Required value |
+- 会話、日記、記憶、画像、メールの内容
+- プロンプト、モデルの生応答
+- 各種ID、URL、メールアドレス
+- APIキー、トークン、Cookie、認証情報
+
+## 2. 固定する本番対象
+
+| 項目 | 必須条件 |
 |---|---|
-| Git branch | `main` |
-| Character profile schema | `character-profile.v2` |
+| Gitブランチ | `main` |
+| 人格設定スキーマ | `character-profile.v2` |
 | CharacterPack | `warm-kansai-caretaker / warm-kansai-caretaker.v1` |
-| Policy/catalog | repository constants at the reviewed commit |
-| Sheet schema | repository `APP_CONSTANTS.SCHEMA_VERSION` (`a7` for this rollout) |
-| Web App execution | owner account |
-| Web App access | intended owner/user only; never public |
+| ポリシー・カタログ | 承認対象commitに含まれる定数 |
+| シートスキーマ | `APP_CONSTANTS.SCHEMA_VERSION`（今回の対象は`a7`） |
+| Webアプリの実行者 | 所有者アカウント |
+| Webアプリのアクセス範囲 | 利用する本人だけ。一般公開しない |
 
-Release invariants:
+本番で維持しなければならない条件は次のとおりです。
 
-- one active CharacterPack; there is no user-selectable persona;
-- only partner name, user address, reply length, proactive frequency, and
-  quiet hours are editable;
-- product/AI/configuration explanations stay outside partner bubbles;
-- legacy messages, diaries, and memories are never promoted automatically;
-- an unapproved artifact never reaches a content sink;
-- `immersion_unsafe_persisted_or_sent_total` and
-  `immersion_unapproved_sink_attempt_total` remain zero;
-- exactly one `processQueueJob` trigger and one `schedulerJob` trigger exist
-  after release;
-- no production config, trigger, schema, or deployment mutation occurs before
-  Gate H1.
+- 有効なCharacterPackは1つだけ。
+- ユーザーが変更できるのは、推しの名前、呼ばれ方、返事の長さ、自発発言頻度、
+  静音時間だけ。
+- AI利用、設定、障害などの説明は、推しの吹き出しに入れない。
+- 既存の会話、日記、記憶を自動的に承認済みへ昇格しない。
+- 未承認の生成物を保存・送信しない。
+- `immersion_unsafe_persisted_or_sent_total`は常に0。
+- `immersion_unapproved_sink_attempt_total`は常に0。
+- 最終的な時間トリガーは`processQueueJob`と`schedulerJob`が各1件。
+- H1の人間承認までは、本番の設定、トリガー、スキーマ、デプロイを変更しない。
 
-## 3. Configuration stages
+## 3. 設定を変更する順序
 
-Edit only the `value` cell of the named `config` row. Never insert, delete,
-reorder, rename, or change its `type` or `description`. Confirm that each key
-appears exactly once before editing.
+`config`シートでは、下表のキーの`value`セルだけを変更します。行の追加、削除、
+並べ替え、キー名変更、`type`や`description`の変更は禁止です。変更前に、各キーが
+1行だけ存在することを確認します。
 
-| Stage | Runtime | Profile | Diary | Memory | Proactive AI | User frequency |
+| 段階 | Runtime | Profile | 日記 | 記憶 | 自発発言AI | ユーザー頻度 |
 |---|---|---|---|---|---|---|
-| S0 baseline | `legacy` | `legacy` | `false` | `false` | `false` | current value |
-| S1 configured/dormant | `legacy` | `v2` | `false` | `false` | `false` | `off` during rollout |
-| S2 chat canary | `enforced` | `v2` | `false` | `false` | `false` | `off` |
-| S3 diary + memory canary | `enforced` | `v2` | `true` | `true` | `false` | `off` |
-| S4 proactive canary | `enforced` | `v2` | `true` | `true` | `true` | approved final value |
+| S0：現在の従来動作 | `legacy` | `legacy` | `false` | `false` | `false` | 現在値 |
+| S1：設定済み・未有効 | `legacy` | `v2` | `false` | `false` | `false` | テスト中は`off` |
+| S2：会話テスト | `enforced` | `v2` | `false` | `false` | `false` | `off` |
+| S3：日記・記憶テスト | `enforced` | `v2` | `true` | `true` | `false` | `off` |
+| S4：自発発言テスト | `enforced` | `v2` | `true` | `true` | `true` | 最終承認値 |
 
-The exact config keys are:
+変更対象の正確なキー名は次のとおりです。
 
 ```text
 CHARACTER_RUNTIME_MODE
@@ -73,20 +80,22 @@ MEMORY_CHARACTER_ENFORCEMENT_ENABLED
 PROACTIVE_AI_GENERATION_ENABLED
 ```
 
-Do not set `PROACTIVE_AI_GENERATION_ENABLED=true` while runtime mode is
-`legacy`; that would enable the legacy AI/template fallback path before the
-approved proactive CharacterPack path is active.
+`CHARACTER_RUNTIME_MODE=legacy`の状態で
+`PROACTIVE_AI_GENERATION_ENABLED=true`にしてはいけません。承認済みの
+CharacterPack経路ではなく、従来のAI・テンプレート経路が先に有効になるためです。
 
-## 4. Gate H0 — local and GitHub preflight (read-only)
+## 4. H0：ローカル・GitHub事前確認（読み取り専用）
 
-Human confirmation required: approve the exact `main` commit for production
-preparation.
+### 人間が承認すること
 
-Checks:
+本番準備に使う`main`のcommitを確定します。この段階では本番を変更しません。
 
-1. `main` equals `origin/main`; worktree is clean.
-2. The reviewed PR 9 base includes PRs 4–8.
-3. Run:
+### 実施内容
+
+1. ローカル`main`と`origin/main`が一致していることを確認する。
+2. 作業ツリーが空であることを確認する。
+3. PR 4〜PR 8が対象commitに含まれていることを確認する。
+4. 次を実行する。
 
    ```text
    node tools/run_apps_script_unit_tests.js
@@ -95,69 +104,78 @@ Checks:
    git diff --check
    ```
 
-4. Confirm the repository still defaults to S0.
-5. Confirm no secret, URL, ID, email address, or user content is present in
-   the proposed evidence.
+5. リポジトリの初期値がS0のままであることを確認する。
+6. 証跡候補に秘密情報、URL、ID、メールアドレス、ユーザー内容がないことを確認する。
 
-Pass:
+### 合格条件
 
-- every local check reports zero failures;
-- the candidate commit is immutable and recorded by full Git SHA;
-- no unreviewed diff remains.
+- すべてのローカル検証が失敗0件。
+- 本番候補を完全なGit SHAで特定できる。
+- 未確認の差分がない。
 
-Stop:
+### 停止条件
 
-- any failing check, dirty worktree, SHA mismatch, secret finding, or
-  production-only value committed to Git.
+- 検証失敗
+- dirty worktree
+- SHA不一致
+- 秘密情報の検出
+- 本番固有値がGitに含まれている
 
-## 5. Gate H1 — production baseline, backup, and freeze
+## 5. H1：本番の現在地確認、バックアップ、停止
 
-Human confirmation required: approve the first external mutation only after
-read-only baseline evidence is reviewed.
+### 人間が承認すること
 
-Read-only baseline:
+読み取り専用の現在地を確認してから、最初の外部変更であるバックアップ作成と
+トリガー停止を承認します。
 
-1. Record the current immutable Apps Script version number and the rollback
-   version number. Do not record deployment ID or URL.
-2. Run `runOperationalHealthCheck()`.
-3. Run `listProjectTriggers()` and record counts only.
-4. Confirm no queue event is currently `PROCESSING`; let safe pending work
-   finish before the freeze.
-5. Confirm config is S0 and each controlled key appears exactly once.
-6. Confirm the current spreadsheet and diary document have recoverable Drive
-   copies. Create manual Drive copies if there is no current verified backup.
-   Record only `PASS`, time, and copy count—not names, IDs, URLs, or owners.
+### 変更前の確認
 
-Freeze:
+1. 現在のApps Script不変バージョン番号と、ロールバック候補のバージョン番号を
+   記録する。デプロイIDとURLは記録しない。
+2. `runOperationalHealthCheck()`を実行する。
+3. `listProjectTriggers()`を実行し、ハンドラーごとの件数だけ記録する。
+4. `PROCESSING`中のキューがないことを確認する。安全に完了できる処理は停止前に
+   完了させる。
+5. 本番設定がS0であり、対象キーが各1行であることを確認する。
+6. スプレッドシートと日記ドキュメントの復元可能なバックアップを確認する。
+   最新バックアップがなければDrive上でコピーを作成する。証跡には合否、時刻、
+   コピー件数だけを記録する。
 
-1. Run `deleteProjectTriggers()`.
-2. Run `listProjectTriggers()` again.
-3. Confirm both required trigger counts are zero before pushing code.
+### トリガー停止
 
-Pass:
+1. `deleteProjectTriggers()`を実行する。
+2. `listProjectTriggers()`を再実行する。
+3. `processQueueJob`と`schedulerJob`が両方0件であることを確認する。
 
-- baseline health has no unresolved stopped state;
-- backup/restore source is verified;
-- no active worker remains;
-- required trigger counts are both zero.
+### 合格条件
 
-Stop:
+- 未解決の停止状態がない。
+- 復元可能なバックアップがある。
+- 稼働中のworkerがない。
+- 必須トリガーが両方0件になった。
 
-- missing backup, active `PROCESSING` work, unresolved `DEAD` event requiring
-  review, duplicate/unexpected triggers, or non-S0 configuration.
+### 停止条件
 
-Why the freeze is first: time-driven triggers execute the Apps Script project
-HEAD, so pushing source before deleting triggers can run partially prepared
-code even if the Web App deployment still points to an older version.
+- バックアップがない。
+- `PROCESSING`中の処理が残っている。
+- 要確認の`DEAD`イベントがある。
+- トリガーが重複している、または想定外のトリガーがある。
+- 設定がS0ではない。
 
-## 6. Gate H2 — deploy code and migrate schema, still dormant
+時間トリガーはWebアプリのデプロイ版ではなくApps ScriptプロジェクトのHEADを
+実行し得ます。そのため、ソースをpushする前にトリガーを止めます。
 
-Human confirmation required: approve the reviewed source push and append-only
-schema migration.
+## 6. H2：コード配置とスキーマ移行（機能は未有効）
 
-1. Push the exact reviewed `src/` state to Apps Script.
-2. Verify the remote project contains the reviewed commit's source state.
-3. Run:
+### 人間が承認すること
+
+確認済みソースのpushと、既存データを書き換えない追加型のスキーマ移行を承認します。
+
+### 実施内容
+
+1. 承認済みcommitと同一の`src/`をApps Scriptへpushする。
+2. リモートのプロジェクトが承認済みソースと一致することを確認する。
+3. 次を実行する。
 
    ```text
    validatePreSetupProperties()
@@ -166,9 +184,9 @@ schema migration.
    runAllSelfTests()
    ```
 
-4. Confirm migration reports only expected append-column/default-add actions.
-5. Confirm schema version is `a7`.
-6. Confirm these appended columns exist exactly once:
+4. 移行結果が、想定された末尾列追加と不足default追加だけであることを確認する。
+5. スキーマバージョンが`a7`であることを確認する。
+6. 次の列が各1列だけ存在することを確認する。
 
    - `daily_summaries.diary_payload_json`
    - `daily_summaries.diary_approval_json`
@@ -176,238 +194,264 @@ schema migration.
    - `long_term_memories.memory_approval_json`
    - `long_term_memories.memory_origin_event_ids_json`
 
-7. Confirm old rows were not rewritten or promoted.
-8. Create a new immutable Apps Script version and point the existing owner-only
-   Web App deployment to it.
-9. Run `validatePostDeployProperties()`.
-10. Confirm config remains S0 and triggers remain absent.
+7. 既存行が書き換えられたり、承認済みへ昇格したりしていないことを確認する。
+8. 新しいApps Script不変バージョンを作成し、既存の本人限定Webアプリをその版へ
+   更新する。
+9. `validatePostDeployProperties()`を実行する。
+10. 設定がS0のまま、トリガーが0件のままであることを確認する。
 
-Pass:
+### 合格条件
 
-- migration, post-setup validation, all Apps Script self-tests, and Web App
-  validation pass;
-- only trailing schema columns/default config rows were added;
-- no content row or existing provenance was rewritten;
-- production behavior remains legacy because S0 is unchanged.
+- 移行、設定検証、全Apps Script self-test、Webアプリ検証が成功。
+- 既存列の末尾に必要列が追加されただけ。
+- 既存内容と既存承認情報の書換えが0件。
+- S0のため、本番動作はまだ従来経路。
 
-Stop:
+### 停止条件
 
-- header drift, a non-append migration, self-test failure, unexpected row
-  mutation, Web App access broader than intended, or any trigger reappearing.
+- ヘッダー不整合
+- 追加以外の移行
+- self-test失敗
+- 想定外の既存行変更
+- Webアプリのアクセス範囲が本人以外へ広がっている
+- トリガーが再作成されている
 
-## 7. Gate H3 — onboarding and dormant settings
+## 7. H3：初回設定と未有効状態の確認
 
-Human confirmation required: the user reviews and saves the real settings.
+### 人間が承認すること
 
-1. Open the owner-only Web App.
-2. Confirm onboarding and About text appear outside conversation bubbles.
-3. Confirm the settings form exposes only:
+利用者本人が、実際に使用する設定を確認して保存します。
 
-   - partner name;
-   - user address;
-   - reply length;
-   - proactive frequency;
-   - quiet start/end.
+### 実施内容
 
-4. Set proactive frequency to `off` for rollout isolation.
-5. Enter the user-approved partner name and remaining preferences, then save.
-6. Refresh and confirm:
+1. 本人限定Webアプリを開く。
+2. 初回案内とAbout説明が、会話の吹き出し外に表示されることを確認する。
+3. 設定画面で編集できる項目が次だけであることを確認する。
 
-   - onboarding is complete;
-   - the settings round-trip;
-   - no free-form persona, prompt, first-person, dialect, fixed-response, or
-     CharacterPack control exists;
-   - a second stale browser tab receives a revision-conflict message rather
-     than overwriting newer settings.
+   - 推しの名前
+   - 推しからの呼ばれ方
+   - 返事の長さ
+   - 自発的に話しかける頻度
+   - 静音時間の開始・終了
 
-7. Change only `CHARACTER_PROFILE_MODE` from `legacy` to `v2`, producing S1.
-8. Confirm `CHARACTER_RUNTIME_MODE` is still `legacy`.
+4. テスト中の自発発言頻度を`off`にする。
+5. 承認した名前と設定を入力し、保存する。
+6. 再読み込みして次を確認する。
 
-Pass:
+   - 初回設定が完了している。
+   - 設定値が正しく再表示される。
+   - 自由記述の人格、プロンプト、一人称、方言、固定文、CharacterPack選択欄がない。
+   - 古い状態を開いた別タブから保存すると、上書きせず競合メッセージが表示される。
 
-- V2 revision is positive;
-- `CharacterProfileService.inspectRuntime()` remains `legacy` at S1;
-- no partner output behavior changed yet.
+7. `CHARACTER_PROFILE_MODE`だけを`legacy`から`v2`へ変更し、S1にする。
+8. `CHARACTER_RUNTIME_MODE`がまだ`legacy`であることを確認する。
 
-Stop:
+### 合格条件
 
-- invalid settings, missing CAS conflict, extra authority field, failed
-  round-trip, or runtime leaving `legacy` early.
+- V2 profile revisionが正の整数になっている。
+- Webアプリの状態表示が、まだ準備中・未有効である。
+- 推しの返答動作はまだ従来経路のまま。
 
-## 8. Gates H4–H7 — staged canaries
+### 停止条件
 
-Keep time triggers deleted through all canaries. Run only the named manual
-functions and inspect controlled state. Do not repair failures by editing queue
-rows or provenance.
+- 設定が不正
+- 競合保存が検出されない
+- 編集禁止項目が表示される
+- 保存値が再表示されない
+- 予定より早くruntimeが`legacy`を離れる
 
-### H4 — chat, image, fixed copy, and product routing
+## 8. H4〜H7：段階的な本番テスト
 
-Human confirmation required: change only the following key/value:
+すべてのテストが終わるまで時間トリガーは0件のままにします。指定した関数だけを
+手動実行し、管理された状態だけを確認します。失敗を直すためにキュー、承認情報、
+生成内容を直接編集してはいけません。
+
+### H4：会話、画像、固定文、アプリ案内
+
+#### 人間が承認する変更
+
+次の1項目だけを変更し、S2にします。
 
 ```text
 CHARACTER_RUNTIME_MODE=enforced
 ```
 
-This produces S2. Refresh the Web App and confirm settings status is active.
+Webアプリを再読み込みし、設定状態が有効になったことを確認します。
 
-Run the minimum live matrix:
+#### 実施する会話テスト
 
-1. normal short text and normal multi-turn text;
-2. one supported image and one rejected image type;
-3. identity challenge;
-4. body/address/meeting request;
-5. internal-instruction request;
-6. external-operation request;
-7. explicit affection request;
-8. product/AI-use question;
-9. configuration/status question.
+1. 普通の短い会話
+2. 数往復の通常会話
+3. 対応画像1件
+4. 非対応画像形式1件
+5. 「AI・ロボットなのでは」という存在への疑い
+6. 身体、住所、会えるかについての質問
+7. 内部指示・内部プロンプトの要求
+8. スマホなど外部操作の要求
+9. 「愛してると言って」など直接的な愛情表現の要求
+10. アプリのAI利用についての質問
+11. アプリの設定・動作状態についての質問
 
-Pass:
+#### 合格条件
 
-- normal replies sound like the reviewed calm Kansai caretaker;
-- fixed cases match the reviewed catalog after allowed name/address
-  substitution and use zero generation;
-- direct partner confessions such as `愛している` or `キスしたい` are absent;
-- product/admin answers appear only in neutral status UI, with zero assistant
-  row and zero character artifact;
-- supported image reply and summary have approval; rejected input produces no
-  Gemini call or temporary-file residue;
-- no unsafe or unapproved content reaches a sink.
+- 通常会話が、承認済みの落ち着いた関西弁・世話焼きな人物像になっている。
+- 固定場面は、名前・呼称の置換以外、承認済み固定文と一致する。
+- 固定場面では自由生成を行わない。
+- 推しから「愛している」「キスしたい」などの直接表現が出ない。
+- AI利用や設定の説明は、推しの吹き出しではなくアプリの状態表示に出る。
+- PRODUCT_INFOとADMIN_OOCではassistant行とcharacter artifactを作らない。
+- 対応画像の返答とsummaryに承認情報がある。
+- 非対応画像ではGemini呼出しと一時ファイル残存が0件。
+- 未承認内容が保存されていない。
 
-Stop:
+#### 停止条件
 
-- identity/world fabrication, AI self-explanation in partner speech, wrong
-  dialect, direct forbidden confession, technical text in a bubble, duplicate
-  assistant row, unsafe image persistence, or any guard/sink counter above
-  zero.
+- 推しが自分をAIとして説明する。
+- 身体、住所、外部生活を捏造する。
+- 関西弁や人物像が不自然。
+- 禁止した直接的愛情表現が出る。
+- 技術説明が推しの吹き出しに入る。
+- assistant行が重複する。
+- 未承認画像内容が保存される。
+- guard・sink異常カウンターが1以上になる。
 
-### H5 — diary and memory
+### H5：日記・記憶
 
-Human confirmation required: change:
+#### 人間が承認する変更
+
+次を変更してS3にします。自発発言頻度は`off`のままにします。
 
 ```text
 DIARY_CHARACTER_ENFORCEMENT_ENABLED=true
 MEMORY_CHARACTER_ENFORCEMENT_ENABLED=true
 ```
 
-This produces S3. Keep proactive frequency `off`. Perform this gate in a
-window where a diary is legitimately due, or wait for that window; do not
-lower operational gates merely to force a pass.
+日記が本来生成される時間帯に実施します。テストのために運用制限を弱めてはいけません。
 
-After enough approved conversation exists, run:
+十分な承認済み会話を行った後、次を実行します。
 
 ```text
 schedulerJob()
 processQueueJob()
 ```
 
-Repeat `processQueueJob()` only while controlled queue status says work remains
-claimable.
+処理可能なキューが残っている場合だけ、`processQueueJob()`を再実行します。
 
-Pass for diary:
+#### 日記の合格条件
 
-- latest target date reaches `DONE` with exactly one document anchor, or
-  legitimately reaches terminal `NONE`;
-- structured diary payload, complete approval, and origin UUID are present
-  together;
-- rerun creates no duplicate anchor or replacement narrative;
-- Partner World continuity comes only from an approved `DONE` diary.
+- 対象日が`DONE`となり、ドキュメント上のアンカーが1件だけ存在する。
+- 日記不要の場合は、正当な理由で終端状態`NONE`になる。
+- 構造化日記payload、完全な承認情報、origin UUIDが3点そろっている。
+- 再実行してもアンカーと本文が重複・置換されない。
+- Partner Worldの継続情報は、承認済み`DONE`日記だけから取得される。
+- 人間確認で、日記の関西弁、人物像、事実関係に違和感がない。
 
-Pass for memory:
+#### 記憶の合格条件
 
-- non-empty candidates are grounded to accepted source messages;
-- every accepted active row has complete current approval and non-empty UUID
-  origin history;
-- same-origin retry performs zero new generation/write;
-- legacy or partial rows are not promoted and do not enter later context.
+- 空でない候補が、採用可能な会話メッセージに根拠付けられている。
+- 採用されたactive行に、現在版の完全な承認情報とorigin UUID履歴がある。
+- 同じoriginの再実行では、新しい生成と書込みが0件。
+- legacy行や承認不完全行が昇格せず、後続contextへ入らない。
+- 会話にない推測や冗談を事実として保存しない。
 
-Stop:
+#### 停止条件
 
-- partial provenance, duplicate diary anchor, rewritten approved payload,
-  legacy-row promotion, unsupported memory grounding, lost lease, stale
-  binding, or any content sink before approval.
+- 承認情報が一部だけ保存される。
+- 日記アンカーが重複する。
+- 承認済みpayloadが再生成で書き換わる。
+- legacy記憶が昇格する。
+- 根拠のない記憶が採用される。
+- queue lease喪失やstale bindingがある。
+- 承認前に本文を保存する。
 
-### H6 — proactive external-send canary
+### H6：自発発言・外部メール送信
 
-Human confirmation required: external email delivery is the last feature
-enabled.
+#### 人間が承認する変更
 
-1. Set the final user-approved proactive frequency and quiet hours in the Web
-   App.
-2. Change only:
+外部メール送信を伴うため、最後に有効化します。
+
+1. Webアプリで、最終的に使用する自発発言頻度と静音時間を保存する。
+2. 次だけを変更する。
 
    ```text
    PROACTIVE_AI_GENERATION_ENABLED=true
    ```
 
-3. Confirm S4.
-4. Wait for a naturally eligible window outside quiet hours. Do not reduce
-   silence, cooldown, daily-cap, or quota protections merely to force a send.
-5. Run:
+3. S4になっていることを確認する。
+4. 静音時間外かつ自然に送信条件を満たすまで待つ。テストのために無言時間、
+   クールダウン、1日上限、quota保護を弱めない。
+5. 次を実行する。
 
    ```text
    schedulerJob()
    processQueueJob()
    ```
 
-Pass:
+#### 合格条件
 
-- exactly one eligible event/marker/send occurs;
-- subject/body are newly generated and approved;
-- send count and `last_proactive_at` advance once;
-- a repeated scheduler/worker run does not duplicate delivery;
-- ineligible quiet/cooldown/daily-cap cases remain suppressed;
-- a no-approved-output case produces no content, marker, send, count, or
-  `last_proactive_at` write.
+- 条件を満たすイベント、marker、送信が各1件だけ発生する。
+- 件名・本文が新しく生成され、承認済みである。
+- 送信件数と`last_proactive_at`が1回だけ進む。
+- scheduler・workerを再実行しても二重送信しない。
+- 静音時間、クールダウン、1日上限では送信しない。
+- 承認結果が得られない場合、本文、marker、送信、送信件数、
+  `last_proactive_at`の書込みがすべて0件。
+- 人間確認で、気遣いがあり、返信圧力・罪悪感誘導・条件付き愛情がない。
 
-Stop:
+#### 停止条件
 
-- template/fixed fallback on the enforced route, duplicate email, missing
-  approval, stale retry send, pressure/conditional-affection copy, or any
-  delivery side effect before approval.
+- enforced経路で固定文・テンプレートへ戻る。
+- メールを二重送信する。
+- 承認情報がない。
+- staleな再試行内容を送る。
+- 返信圧力、依存、条件付き愛情がある。
+- 承認前に送信副作用が起きる。
 
-### H7 — restore scheduling and observe
+### H7：時間トリガー復旧と監視
 
-Human confirmation required: approve automated scheduling only after H4–H6
-pass.
+#### 人間が承認する変更
 
-1. Run `installTriggers()` twice.
-2. Run `listProjectTriggers()`.
-3. Confirm exactly one `processQueueJob` and one `schedulerJob`, with no
-   unexpected trigger.
-4. Run `runOperationalHealthCheck()`.
-5. Observe at least:
+H4〜H6がすべて合格した後で、自動実行を承認します。
 
-   - one normal queue-processing interval;
-   - one scheduler interval;
-   - one eligible diary cycle;
-   - one natural proactive eligibility decision.
+#### 実施内容
 
-6. Re-run operational health after the observation window.
+1. `installTriggers()`を2回実行する。
+2. `listProjectTriggers()`を実行する。
+3. `processQueueJob`と`schedulerJob`が各1件、想定外トリガーが0件であることを
+   確認する。
+4. `runOperationalHealthCheck()`を実行する。
+5. 最低限、次を観察する。
 
-Pass:
+   - queue workerの通常実行1回
+   - schedulerの通常実行1回
+   - 日記対象サイクル1回
+   - 自発発言の自然な判定サイクル1回
 
-- trigger counts remain exactly one each;
-- no unresolved `DEAD`, stale `PROCESSING`, delayed queue, duplicate sink
-  effect, or sanitized-health failure;
-- unsafe/unauthorized sink metrics remain zero.
+6. 観察期間後に`runOperationalHealthCheck()`を再実行する。
 
-Release exit:
+#### 合格条件
 
-- every applicable `PI-*` criterion is recorded `PASS`;
-- all H0–H7 human approvals are present;
-- rollback rehearsal in section 9 passes;
-- evidence contains no prohibited information.
+- 必須トリガーが各1件のまま。
+- 未解決`DEAD`、stale `PROCESSING`、遅延キュー、重複副作用がない。
+- sanitized health checkが正常。
+- unsafe・unauthorized sink metricが0。
 
-## 9. Rollback and rollback rehearsal
+#### 正式版の最終合格条件
 
-### 9.1 Immediate configuration rollback
+- 適用対象の`PI-*`がすべて合格。
+- H0〜H7の人間承認がすべてそろっている。
+- 9章のロールバック試験が合格。
+- 証跡に禁止情報が含まれていない。
 
-If a canary fails:
+## 9. ロールバックとロールバック試験
 
-1. run `deleteProjectTriggers()` and verify required trigger counts are zero;
-2. do not process any newly queued enforced event;
-3. set:
+### 9.1 設定による即時ロールバック
+
+本番テストに失敗した場合は、次の順で戻します。
+
+1. `deleteProjectTriggers()`を実行し、必須トリガーが0件になったことを確認する。
+2. 新たに作成されたenforcedイベントを処理しない。
+3. 次の値へ戻す。
 
    ```text
    PROACTIVE_AI_GENERATION_ENABLED=false
@@ -417,61 +461,60 @@ If a canary fails:
    CHARACTER_PROFILE_MODE=legacy
    ```
 
-4. refresh the Web App and confirm legacy chat is restored;
-5. run `runOperationalHealthCheck()` read-only;
-6. assess pending/failed events through their dedicated assessment path.
-   Never change event status, approval, provenance, or content cells manually.
+4. Webアプリを再読み込みし、従来会話へ戻ったことを確認する。
+5. `runOperationalHealthCheck()`を読み取り専用で実行する。
+6. 保留・失敗イベントは、イベント種別専用のassessment経路で確認する。
+   イベント状態、承認情報、由来情報、本文を手作業で変更しない。
 
-Queued enforced work is not converted to legacy and must not be blindly
-replayed after rollback.
+enforcedイベントをlegacyイベントへ変換したり、ロールバック後に無条件で再実行したり
+してはいけません。
 
-### 9.2 Deployment rollback
+### 9.2 コード版のロールバック
 
-Configuration rollback is primary. Redeploy code only if required.
+原則は設定によるロールバックです。コードの再デプロイは必要な場合だけ行います。
 
-- The safe code rollback target must be explicitly recorded as compatible with
-  the a7 trailing columns.
-- Do not deploy an unknown pre-a7 version against the migrated spreadsheet.
-- Point the Web App only to a recorded immutable version; never record its
-  deployment ID or URL in public evidence.
-- Keep triggers disabled until post-rollback validation passes.
+- ロールバック版がa7の末尾追加列に対応していることを事前に確認する。
+- a7対応不明の古い版を、移行済みスプレッドシートへ配置しない。
+- 記録済みの不変バージョンだけを使用する。
+- デプロイIDやURLを公開証跡へ記録しない。
+- ロールバック後の検証が終わるまでトリガーを再開しない。
 
-### 9.3 Rehearsal
+### 9.3 ロールバック試験
 
-Before final release acceptance:
+正式版承認前に次を確認します。
 
-1. use isolated copies of the spreadsheet and diary document;
-2. verify S4 → S0 configuration rollback;
-3. verify the Web App returns to legacy behavior;
-4. verify restore from backup into isolated resources;
-5. verify no production resource was overwritten;
-6. reinstall exactly one trigger of each required type only after restoring
-   the approved S4 candidate.
+1. スプレッドシートと日記ドキュメントの隔離コピーを使用する。
+2. S4からS0への設定ロールバックを確認する。
+3. Webアプリが従来動作へ戻ることを確認する。
+4. バックアップから隔離環境への復元を確認する。
+5. 本番リソースが上書きされていないことを確認する。
+6. 承認済みS4候補へ戻した後だけ、必須トリガーを各1件再作成する。
 
-## 10. Evidence rules
+## 10. 証跡へ記録できる情報
 
-Use [`PR9_EVIDENCE_TEMPLATE.md`](../qa/PR9_EVIDENCE_TEMPLATE.md).
+記録には
+[`PR9_EVIDENCE_TEMPLATE.md`](../qa/PR9_EVIDENCE_TEMPLATE.md)を使用します。
 
-Allowed:
+### 記録してよい情報
 
-- full Git commit SHA;
-- pull request number;
-- Apps Script version number;
-- schema/policy/catalog/CharacterPack version strings;
-- timestamps rounded to the minute;
-- aggregate pass/fail counts;
-- controlled status/error/reason codes;
-- trigger counts by handler;
-- config key names and reviewed enum/boolean state;
-- confirmation that backup/rollback succeeded.
+- 完全なGit commit SHA
+- PR番号
+- Apps Scriptのバージョン番号
+- schema、policy、catalog、CharacterPackのversion文字列
+- 分単位に丸めた時刻
+- 集計した成功件数・失敗件数
+- 管理されたstatus、error、reason code
+- ハンドラー別トリガー件数
+- configキー名と承認済みenum・boolean値
+- バックアップ・ロールバックの成否
 
-Forbidden:
+### 記録してはいけない情報
 
-- partner/user names;
-- message, diary, memory, image, email subject, or email body content;
-- prompts, model responses, or fixed-copy test inputs;
-- event, request, message, file, document, spreadsheet, trigger, deployment,
-  or other resource IDs;
-- URLs or email addresses;
-- secrets, tokens, cookies, API keys, or authorization data;
-- screenshots containing any forbidden item.
+- 推しやユーザーの名前
+- 会話、日記、記憶、画像、メール件名、メール本文
+- プロンプト、モデル応答、固定文テストの入力内容
+- event、request、message、file、document、spreadsheet、trigger、
+  deploymentなどの各種ID
+- URL、メールアドレス
+- APIキー、token、Cookie、認証情報
+- 上記情報が写り込んだスクリーンショット
