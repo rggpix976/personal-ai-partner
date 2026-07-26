@@ -68,10 +68,11 @@ Codexから「H0〜H2合格、人間テスト開始可」と報告を受けて�
 - 所有者アカウントでアプリの初期画面を開ける。
 - Script Propertyの`WEB_APP_URL`と画面表示URLが完全に一致する。
 
+
 `https://script.google.com/macros/library/d/...`はライブラリURLです。
 画面に「ライブラリ」と表示されているものは、このテストに使用しません。
 
-判定：`[ ] 合格`　`[ ] 停止`
+判定：`[〇] 合格`　`[ ] 停止`
 
 ### 4.2 その他の画面
 
@@ -194,7 +195,7 @@ Codexから次の6項目がすべて合格と報告されていることを確�
 
 期待結果：上記以外の人格設定を変更できない。
 
-判定：`[ ] 合格`　`[ ] 停止`
+判定：`[〇] 合格`　`[ ] 停止`
 
 ### H3-02 設定の保存
 
@@ -210,7 +211,7 @@ Codexから次の6項目がすべて合格と報告されていることを確�
 
 期待結果：エラーや競合表示がなく、再読み込み後も設定が維持される。
 
-判定：`[ ] 合格`　`[ ] 停止`
+判定：`[〇] 合格`　`[ ] 停止`
 
 ### H3-03 別タブからの上書き防止
 
@@ -234,7 +235,7 @@ Codexから次の6項目がすべて合格と報告されていることを確�
 
 期待結果：古い画面からの保存が拒否され、先に保存した内容が守られる。
 
-判定：`[ ] 合格`　`[ ] 停止`
+判定：`[〇] 合格`　`[ ] 停止`
 
 ### H3-04 V2 revisionと準備モード
 
@@ -248,7 +249,7 @@ Codexから次の6項目がすべて合格と報告されていることを確�
 期待結果：「設定は保存できますが、現在は準備モードです。本番有効化は管理手順で
 行います。」と表示される。通常の設定値は失われない。
 
-判定：`[ ] 合格`　`[ ] 停止`
+判定：`[〇] 合格`　`[ ] 停止`
 
 ## 8. H4：会話、固定文、アプリ案内
 
@@ -275,7 +276,7 @@ Codexから次の6項目がすべて合格と報告されていることを確�
 
 期待結果：テスト環境で会話だけが有効になり、自動トリガーは0件のまま。
 
-判定：`[ ] 合格`　`[ ] 停止`
+判定：`[〇] 合格`　`[ ] 停止`
 
 ### H4-00 アプリ案内
 
@@ -291,7 +292,7 @@ Codexから次の6項目がすべて合格と報告されていることを確�
 
 期待結果：技術説明が推し本人の発言として表示されない。
 
-判定：`[ ] 合格`　`[ ] 停止`
+判定：`[〇] 合格`　`[ ] 停止`
 
 ### H4-01・H4-02 通常会話
 
@@ -304,7 +305,7 @@ Codexから次の6項目がすべて合格と報告されていることを確�
 
 期待結果：落ち着いた関西弁、温厚さ、面倒見の良さが自然である。
 
-判定：`[ ] 合格`　`[ ] 停止`
+判定：`[〇] 合格`　`[ ] 停止`
 
 ### H4-03〜H4-08 固定セリフ
 
@@ -330,7 +331,7 @@ Codexから次の6項目がすべて合格と報告されていることを確�
 - スマホを実際に操作できたと言う。
 - 身体、住所、アプリ外の生活を捏造する。
 
-判定：`[ ] 合格`　`[ ] 停止`
+判定：`[〇] 合格`　`[ ] 停止`
 
 ### H4-09・H4-10 アプリ情報と管理情報
 
@@ -341,7 +342,7 @@ Codexから次の6項目がすべて合格と報告されていることを確�
 
 期待結果：どちらも推し本人の返答として扱われず、吹き出しは0件増。
 
-判定：`[ ] 合格`　`[ ] 停止`
+判定：`[〇] 合格`　`[ ] 停止`（ただし、アプリの最上部に出るので、実際の利用者は気づかない可能性大）
 
 ## 9. H4：画像
 
@@ -358,7 +359,7 @@ Codexから次の6項目がすべて合格と報告されていることを確�
 2. 白い背景に青い四角と`テスト`の文字だけを書く。
 3. 1件をPNG、もう1件をGIFとして一時フォルダへ保存する。
 
-判定：`[ ] 準備完了`　`[ ] 停止`
+判定：`[〇] 準備完了`　`[ ] 停止`
 
 ### H4-11 対応画像
 
@@ -377,7 +378,7 @@ Codexから次の6項目がすべて合格と報告されていることを確�
 - 画像に実際に見える内容だけを説明する。
 - 見えない人物、場所、感情、背景事情を断定しない。
 
-判定：`[ ] 合格`　`[ ] 停止`
+判定：`[〇] 合格`　`[ ] 停止`
 
 ### H4-12 非対応画像
 
@@ -398,7 +399,8 @@ JPEG、PNG、WebP画像を選択してください。
    確認する。
 5. Windowsの一時フォルダから、用意したPNG等とGIFを削除する。
 
-判定：`[ ] 合格`　`[ ] 停止`
+判定：`[〇] 合格`　`[ ] 停止`（ただし、機体結果はアプリの最上部に出るので、実際の利用者は気づかない可能性大）
+
 
 ### H4集計：保存の承認・由来と不正sink試行
 
@@ -483,6 +485,81 @@ MEMORY_CHARACTER_ENFORCEMENT_ENABLED=true
 
 `status=RETRY_WAIT`、`status=DEAD`、`reason=PROCESSING_INCOMPLETE`、
 または`errorCode`が`null`以外なら停止します。
+
+#### H5準備：既存の記憶イベントを安全に再開する（該当時のみ）
+
+この分岐は、H5準備中の`runMemoryReleaseTest()`が`RETRY_WAIT`になり、その後の
+実行が`duplicate=true`になった場合に、Codexからこの手順を使うよう案内されたとき
+だけ行います。今回の未処理batchを片付けるための復旧であり、H5-11の合格には
+数えません。
+
+1. Webアプリで新しいメッセージを送らず、テスト操作を止める。
+2. `runMemoryReleaseTest()`、`processQueueJob()`、その他のrelease test関数を
+   追加実行しない。`event_queue`と記憶cursorを手作業で変更しない。
+3. `runOperationalHealthCheck()`を1回実行する。
+4. 実行ログの集計値だけで、次をすべて確認する。
+
+   ```text
+   triggers.required.processQueueJob.count=0
+   triggers.required.schedulerJob.count=0
+   triggers.missingCount=2
+   triggers.duplicateCount=0
+   triggers.unexpectedCount=0
+   queue.byStatus.PENDING=0
+   queue.byStatus.PROCESSING=0
+   queue.byStatus.RETRY_WAIT=1
+   queue.byEventType.MEMORY_EXTRACT.PENDING=0
+   queue.byEventType.MEMORY_EXTRACT.PROCESSING=0
+   queue.byEventType.MEMORY_EXTRACT.RETRY_WAIT=1
+   queue.recentDead.byEventType.MEMORY_EXTRACT=0
+   queue.staleProcessing.total=0
+   queue.overdue.retryWait=1
+   ```
+
+5. 1項目でも一致しなければ実行せず停止する。一致した場合だけ、
+   `resumeMemoryReleaseTest()`を選び、「実行」を1回だけクリックする。
+6. `PR9_TEST_RESULT resumeMemoryReleaseTest`で、次の7項目を確認する。
+
+   ```text
+   eventType=MEMORY_EXTRACT
+   enqueued=false
+   duplicate=true
+   processed=true
+   status=DONE
+   reason=PROCESSED
+   errorCode=null
+   ```
+
+   この復旧分岐に限り、`enqueued=false`と`duplicate=true`は、新しいイベントを
+   作らず、既存の同一イベントだけを再開したことを示す正しい結果です。
+7. `long_term_memories`に新規・更新された行がある場合は本文を画面上だけで読み、
+   H4の会話にない事実が保存されていないことを確認する。本文は転記しない。
+8. `runOperationalHealthCheck()`をもう一度実行し、次を確認する。
+
+   ```text
+   queue.byStatus.PENDING=0
+   queue.byStatus.PROCESSING=0
+   queue.byStatus.RETRY_WAIT=0
+   queue.byEventType.MEMORY_EXTRACT.PENDING=0
+   queue.byEventType.MEMORY_EXTRACT.PROCESSING=0
+   queue.byEventType.MEMORY_EXTRACT.RETRY_WAIT=0
+   queue.recentDead.total=0
+   queue.recentDead.byEventType.MEMORY_EXTRACT=0
+   queue.staleProcessing.total=0
+   queue.overdue.retryWait=0
+   ```
+
+9. すべて一致した場合だけ、H5準備の通常手順へ戻る。H5-01後に作られる新しい
+   batchについて、H5-11の`runMemoryReleaseTest()`を通常どおり別途確認する。
+
+手順6が上記と異なる、関数が例外終了する、または復旧後の集計が一致しない場合は、
+再実行せず停止します。特に`TARGET_EVENT_MISSING`、
+`TARGET_EVENT_AMBIGUOUS`、`TARGET_EVENT_MISMATCH`、
+`TARGET_EVENT_PROCESSING`、`TARGET_EVENT_NOT_DUE`、
+`TARGET_EVENT_NOT_CLAIMABLE`、`PROCESSING_INCOMPLETE`、
+`status=RETRY_WAIT`、`status=DEAD`、非nullの`errorCode`は停止です。
+
+判定：`[ ] 合格`　`[ ] 対象外`　`[ ] 停止`
 
 判定：`[ ] 完了`　`[ ] 停止`
 
@@ -618,6 +695,8 @@ H5-04が`DONE`の場合だけ行います。
 
 `status=RETRY_WAIT`、`status=DEAD`、`reason=PROCESSING_INCOMPLETE`、
 または`errorCode`が`null`以外なら停止します。
+H5準備の`resumeMemoryReleaseTest()`は既存batchの復旧専用であり、この通常テストの
+代わりにはなりません。確認目的の連続実行やキュー手編集にも使用しません。
 
 記憶本文と各種IDは証跡へ転記しません。
 

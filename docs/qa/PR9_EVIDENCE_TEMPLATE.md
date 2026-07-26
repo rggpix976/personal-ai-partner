@@ -117,6 +117,9 @@ error、reason codeだけを記録します。
 
 | ケース | 確認内容 | 合格条件 | 結果 | reason codeまたは件数だけ |
 |---|---|---|---|---|
+| H5準備-復旧前（該当時のみ） | 既存`MEMORY_EXTRACT`の安全ゲート | トリガー0件、`PENDING=0 / PROCESSING=0 / RETRY_WAIT=1`、記憶の未解決`DEAD=0`、stale 0件、`overdue.retryWait=1` | `合格 / 対象外 / 停止` | |
+| H5準備-復旧（該当時のみ） | `resumeMemoryReleaseTest` | `false / true / true / DONE / PROCESSED / null` | `合格 / 対象外 / 停止` | |
+| H5準備-復旧後（該当時のみ） | 復旧後の安全ゲート | 全非終端0件、未解決`DEAD` 0件、stale・overdue各0件 | `合格 / 対象外 / 停止` | |
 | H5-01 | D日の会話 | 5往復以上、送信・返信失敗0件 | `合格 / 停止` | |
 | H5-02 | D+1日の実行時刻 | 日本時間23:30以降 | `合格 / 停止` | |
 | H5-03 | `DIARY_GENERATE`実行前 | 非終端・未解決`DEAD`が各0件 | `合格 / 停止` | |
@@ -134,6 +137,9 @@ error、reason codeだけを記録します。
 | H5集計 | 日記・記憶の承認・由来監査 | `valid=true`、日記・記憶各1件以上、unsafe 0件、issues 0件 | `合格 / 停止` | |
 
 日記本文、記憶本文、対象日、origin IDは記録しません。
+H5準備-復旧の6値は順に
+`enqueued / duplicate / processed / status / reason / errorCode`です。
+復旧時も、本文、各種ID、URL、payload、dedupe keyは記録しません。
 H5-04とH5-11の5値は順に
 `enqueued / processed / status / reason / errorCode`です。
 

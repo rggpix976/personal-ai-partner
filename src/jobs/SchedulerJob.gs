@@ -74,6 +74,20 @@ function runMemoryReleaseTest() {
   return logPr9TestResult_('runMemoryReleaseTest', result);
 }
 
+function resumeMemoryReleaseTest() {
+  assertReleaseTestTriggersStopped_();
+  var resumed =
+    resumeSingleActiveMemoryReleaseTest_() || {};
+  var result = buildMemoryResumeResult_(
+    resumed.duplicate,
+    resumed.processed,
+    resumed.status,
+    resumed.reason,
+    resumed.errorCode
+  );
+  return logPr9TestResult_('resumeMemoryReleaseTest', result);
+}
+
 function runProactiveReleaseTest() {
   assertReleaseTestTriggersStopped_();
   ProactiveMessageService.assertManualTestReady();
@@ -221,6 +235,122 @@ function enqueueDiaryIfDue_(now) {
 
 function enqueueMemoryExtractionIfDue_(nowIso) {
   var state = SheetRepository.ensureDefaultUserState();
+  var selection = selectMemoryExtractionBatch_(state);
+  if (!selection.ready) {
+    return {
+      enqueued: false,
+      reason: 'INSUFFICIENT_NEW_MESSAGES',
+      messageCount: selection.messageCount
+    };
+  }
+  return MemoryService.enqueueExtraction({
+    firstMessageId: selection.firstMessageId,
+    lastMessageId: selection.lastMessageId,
+    sourceMessageIds: selection.sourceMessageIds,
+    requestedAt: nowIso
+  });
+}
+
+function resumeSingleActiveMemoryReleaseTest_() {
+  var eventType = 'MEMORY_EXTRACT';
+  var activeStatuses = {
+    PENDING: true,
+    PROCESSING: true,
+    RETRY_WAIT: true
+  };
+  var activeEvents = (SheetRepository.listEvents() || [])
+    .filter(function(event) {
+      return event && activeStatuses[event.status];
+    });
+  if (activeEvents.length === 0) {
+    return buildMemoryResumeResult_(
+      false,
+      false,
+      null,
+      'TARGET_EVENT_MISSING',
+      null
+    );
+  }
+  if (activeEvents.length !== 1) {
+    return buildMemoryResumeResult_(
+      false,
+      false,
+      null,
+      'TARGET_EVENT_AMBIGUOUS',
+      null
+    );
+  }
+
+  var event = activeEvents[0];
+  var state = SheetRepository.getUserState();
+  var selection = state
+    ? selectMemoryExtractionBatch_(state)
+    : null;
+  if (
+    !selection ||
+    !selection.ready ||
+    !memoryResumeEventMatchesSelection_(event, selection)
+  ) {
+    return buildMemoryResumeResult_(
+      false,
+      false,
+      pr9SafeUpperToken_(event.status),
+      'TARGET_EVENT_MISMATCH',
+      safeMemoryResumeErrorCode_(event)
+    );
+  }
+
+  if (event.status === 'PROCESSING') {
+    return buildMemoryResumeResult_(
+      true,
+      false,
+      'PROCESSING',
+      'TARGET_EVENT_PROCESSING',
+      safeMemoryResumeErrorCode_(event)
+    );
+  }
+  if (!memoryResumeLifecycleIsValid_(event)) {
+    return buildMemoryResumeResult_(
+      true,
+      false,
+      pr9SafeUpperToken_(event.status),
+      'TARGET_EVENT_MISMATCH',
+      safeMemoryResumeErrorCode_(event)
+    );
+  }
+  if (!memoryResumeEventIsDue_(event, new Date())) {
+    return buildMemoryResumeResult_(
+      true,
+      false,
+      pr9SafeUpperToken_(event.status),
+      'TARGET_EVENT_NOT_DUE',
+      safeMemoryResumeErrorCode_(event)
+    );
+  }
+
+  var fingerprint = buildMemoryResumeFingerprint_(
+    event,
+    selection,
+    state
+  );
+  var processing = processReleaseTestEventById_(
+    eventType,
+    event.eventId,
+    {
+      expectedClaimFingerprint: fingerprint
+    }
+  );
+  return buildMemoryResumeResult_(
+    true,
+    processing.status === 'DONE',
+    processing.status,
+    processing.reason,
+    processing.errorCode
+  );
+}
+
+function selectMemoryExtractionBatch_(state) {
+  state = state || {};
   var interval = Math.max(getConfigInt_('MEMORY_EXTRACT_INTERVAL', 10), 1);
   var allMessages = SheetRepository.listRecentMessages(Math.max(interval * 3, 50)).slice().reverse();
   var candidateMessages = [];
@@ -234,20 +364,193 @@ function enqueueMemoryExtractionIfDue_(nowIso) {
   });
   if (sourceMessages.length < interval) {
     return {
-      enqueued: false,
-      reason: 'INSUFFICIENT_NEW_MESSAGES',
+      ready: false,
       messageCount: sourceMessages.length
     };
   }
   var batch = sourceMessages.slice(0, interval);
-  return MemoryService.enqueueExtraction({
+  return {
+    ready: true,
+    messageCount: sourceMessages.length,
     firstMessageId: batch[0].messageId,
     lastMessageId: batch[batch.length - 1].messageId,
     sourceMessageIds: batch.map(function(message) {
       return message.messageId;
-    }),
-    requestedAt: nowIso
+    })
+  };
+}
+
+function memoryResumeEventMatchesSelection_(event, selection) {
+  if (
+    !event ||
+    event.eventType !== 'MEMORY_EXTRACT' ||
+    !Validators.isUuidV4(event.eventId) ||
+    !memoryResumeSelectionIsValid_(selection) ||
+    !event.payload ||
+    typeof event.payload !== 'object' ||
+    Array.isArray(event.payload)
+  ) {
+    return false;
+  }
+  var payload = event.payload;
+  var expectedDedupeKey =
+    'MEMORY_EXTRACT:' +
+    selection.firstMessageId +
+    ':' +
+    selection.lastMessageId;
+  return (
+    event.dedupeKey === expectedDedupeKey &&
+    payload.firstMessageId === selection.firstMessageId &&
+    payload.lastMessageId === selection.lastMessageId &&
+    Array.isArray(payload.sourceMessageIds) &&
+    JSON.stringify(payload.sourceMessageIds) ===
+      JSON.stringify(selection.sourceMessageIds) &&
+    Validators.isIsoDateTimeString(payload.requestedAt) &&
+    payload.characterRuntimeMode === 'enforced' &&
+    memoryResumeBindingIsValid_(payload.characterBinding)
+  );
+}
+
+function memoryResumeBindingIsValid_(value) {
+  var fields = [
+    'profileSchemaVersion',
+    'profileRevision',
+    'policyVersion',
+    'catalogVersion',
+    'characterPackId',
+    'characterPackVersion'
+  ];
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === fields.length &&
+    fields.every(function(field) {
+      return Object.prototype.hasOwnProperty.call(
+        value,
+        field
+      );
+    }) &&
+    value.profileSchemaVersion ===
+      APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION &&
+    typeof value.profileRevision === 'number' &&
+    Number.isSafeInteger(value.profileRevision) &&
+    value.profileRevision > 0 &&
+    value.policyVersion ===
+      APP_CONSTANTS.CHARACTER.POLICY_VERSION &&
+    value.catalogVersion ===
+      APP_CONSTANTS.CHARACTER.CATALOG_VERSION &&
+    typeof value.characterPackId === 'string' &&
+    /^[a-z0-9][a-z0-9-]{2,63}$/.test(
+      value.characterPackId
+    ) &&
+    typeof value.characterPackVersion === 'string' &&
+    /^[a-z0-9][a-z0-9.-]{2,79}$/.test(
+      value.characterPackVersion
+    )
+  );
+}
+
+function memoryResumeSelectionIsValid_(selection) {
+  if (
+    !selection ||
+    !Array.isArray(selection.sourceMessageIds) ||
+    selection.sourceMessageIds.length === 0 ||
+    selection.firstMessageId !==
+      selection.sourceMessageIds[0] ||
+    selection.lastMessageId !==
+      selection.sourceMessageIds[
+        selection.sourceMessageIds.length - 1
+      ]
+  ) {
+    return false;
+  }
+  var seen = {};
+  return selection.sourceMessageIds.every(function(messageId) {
+    if (
+      !Validators.isUuidV4(messageId) ||
+      seen[messageId]
+    ) {
+      return false;
+    }
+    seen[messageId] = true;
+    return true;
   });
+}
+
+function memoryResumeLifecycleIsValid_(event) {
+  var attemptCount = Number(event.attemptCount);
+  if (
+    !isFinite(attemptCount) ||
+    Math.floor(attemptCount) !== attemptCount ||
+    attemptCount < 0 ||
+    event.lockedAt != null ||
+    event.lockedBy != null
+  ) {
+    return false;
+  }
+  if (event.status === 'RETRY_WAIT') {
+    return attemptCount > 0 &&
+      attemptCount < 5 &&
+      Validators.isIsoDateTimeString(event.nextAttemptAt);
+  }
+  return false;
+}
+
+function memoryResumeEventIsDue_(event, now) {
+  return getIsoTimeMillis(event.nextAttemptAt) <= now.getTime();
+}
+
+function buildMemoryResumeFingerprint_(
+  event,
+  selection,
+  state
+) {
+  return {
+    requireExclusiveActive: true,
+    lastMemoryCursor:
+      state.last_memory_cursor || null,
+    status: event.status,
+    attemptCount: Number(event.attemptCount),
+    nextAttemptAt: event.nextAttemptAt || null,
+    lockedAt: event.lockedAt || null,
+    lockedBy: event.lockedBy || null,
+    dedupeKey: event.dedupeKey,
+    firstMessageId: selection.firstMessageId,
+    lastMessageId: selection.lastMessageId,
+    sourceMessageIds: selection.sourceMessageIds.slice(),
+    requestedAt: event.payload.requestedAt,
+    characterRuntimeMode: 'enforced',
+    characterBindingJson: JSON.stringify(
+      event.payload.characterBinding
+    )
+  };
+}
+
+function safeMemoryResumeErrorCode_(event) {
+  return pr9SafeUpperToken_(
+    event &&
+      event.lastError &&
+      event.lastError.code
+  );
+}
+
+function buildMemoryResumeResult_(
+  duplicate,
+  processed,
+  status,
+  reason,
+  errorCode
+) {
+  return {
+    eventType: 'MEMORY_EXTRACT',
+    enqueued: false,
+    duplicate: Boolean(duplicate),
+    processed: Boolean(processed),
+    status: pr9SafeUpperToken_(status),
+    reason: pr9SafeUpperToken_(reason),
+    errorCode: pr9SafeUpperToken_(errorCode)
+  };
 }
 
 function enqueueWeeklyBackupIfDue_(now) {
@@ -369,6 +672,7 @@ function buildPr9TestLogPayload_(functionName, result) {
   if (
     functionName === 'runDiaryReleaseTest' ||
     functionName === 'runMemoryReleaseTest' ||
+    functionName === 'resumeMemoryReleaseTest' ||
     functionName === 'runProactiveReleaseTest'
   ) {
     return buildPr9ReleaseTestLog_(result);

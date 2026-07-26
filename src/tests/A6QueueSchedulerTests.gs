@@ -170,6 +170,20 @@ function runA6QueueSchedulerTests() {
     };
   }
 
+  function buildValidMemoryResumeBinding() {
+    return {
+      profileSchemaVersion:
+        APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION,
+      profileRevision: 1,
+      policyVersion:
+        APP_CONSTANTS.CHARACTER.POLICY_VERSION,
+      catalogVersion:
+        APP_CONSTANTS.CHARACTER.CATALOG_VERSION,
+      characterPackId: 'test-kansai-partner',
+      characterPackVersion: '1.0.0'
+    };
+  }
+
   test('QueueService.enqueue reuses active duplicate dedupe keys', function() {
     var inserted = [];
     withOverrides({
@@ -2898,6 +2912,23 @@ function runA6QueueSchedulerTests() {
             eventId: secretId
           };
         },
+        resumeSingleActiveMemoryReleaseTest_: function() {
+          return {
+            eventType: 'MEMORY_EXTRACT',
+            enqueued: false,
+            duplicate: true,
+            processed: false,
+            status: 'RETRY_WAIT',
+            reason: 'TARGET_EVENT_NOT_DUE',
+            errorCode: 'CHARACTER_OUTPUT_BLOCKED',
+            eventId: secretId,
+            dedupeKey: 'MEMORY_EXTRACT:' + secretId,
+            payload: {
+              body: secretBody,
+              ownerEmail: secretEmail
+            }
+          };
+        },
         enqueueProactiveIfEligible_: function() {
           return {
             eligible: false,
@@ -2916,6 +2947,8 @@ function runA6QueueSchedulerTests() {
           inspectPreviousDiaryReleaseTest();
         results.diary = runDiaryReleaseTest();
         results.memory = runMemoryReleaseTest();
+        results.memoryResume =
+          resumeMemoryReleaseTest();
         results.proactive = runProactiveReleaseTest();
 
         currentTriggers = [
@@ -2939,6 +2972,11 @@ function runA6QueueSchedulerTests() {
           results.diary.reason === 'DIARY_NOT_REQUIRED' &&
           results.memory.reason ===
             'INSUFFICIENT_NEW_MESSAGES' &&
+          results.memoryResume.reason ===
+            'TARGET_EVENT_NOT_DUE' &&
+          results.memoryResume.eventId === undefined &&
+          results.memoryResume.payload === undefined &&
+          Object.keys(results.memoryResume).length === 7 &&
           results.proactive.reason === 'PROBABILITY_MISS',
         'Logging changed a release-test return contract.'
       );
@@ -2949,7 +2987,7 @@ function runA6QueueSchedulerTests() {
         'Trigger inspection or readiness return behavior changed.'
       );
       assert(
-        logs.length === 9,
+        logs.length === 10,
         'Every PR9 public operator must emit exactly one result line.'
       );
 
@@ -3035,6 +3073,7 @@ function runA6QueueSchedulerTests() {
       [
         'runDiaryReleaseTest',
         'runMemoryReleaseTest',
+        'resumeMemoryReleaseTest',
         'runProactiveReleaseTest'
       ].forEach(function(functionName) {
         var releaseLog = readLog(functionName);
@@ -3326,10 +3365,578 @@ function runA6QueueSchedulerTests() {
   );
 
   test(
+    'resumeMemoryReleaseTest processes only the exact due active memory event',
+    function() {
+      var eventId =
+        'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+      var firstMessageId =
+        '11111111-1111-4111-8111-111111111111';
+      var middleMessageId =
+        '22222222-2222-4222-8222-222222222222';
+      var lastMessageId =
+        '33333333-3333-4333-8333-333333333333';
+      var sourceMessageIds = [
+        firstMessageId,
+        middleMessageId,
+        lastMessageId
+      ];
+      var activeEvent = {
+        eventId: eventId,
+        eventType: 'MEMORY_EXTRACT',
+        dedupeKey:
+          'MEMORY_EXTRACT:' +
+          firstMessageId +
+          ':' +
+          lastMessageId,
+        payload: {
+          firstMessageId: firstMessageId,
+          lastMessageId: lastMessageId,
+          sourceMessageIds: sourceMessageIds.slice(),
+          requestedAt: '2026-07-26T12:00:00+09:00',
+          characterRuntimeMode: 'enforced',
+          characterBinding:
+            buildValidMemoryResumeBinding()
+        },
+        status: 'RETRY_WAIT',
+        attemptCount: 1,
+        nextAttemptAt: '2026-07-26T12:05:00+09:00',
+        lockedAt: null,
+        lockedBy: null,
+        lastError: {
+          code: 'CHARACTER_OUTPUT_BLOCKED',
+          message: 'private failure detail'
+        }
+      };
+      var inactiveEvent = {
+        eventId:
+          'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        eventType: 'CHAT_REPLY',
+        status: 'DONE'
+      };
+      var processCalls = 0;
+      var result = null;
+
+      withOverrides({
+        console: {
+          log: function() {}
+        },
+        ScriptApp: {
+          getProjectTriggers: function() {
+            return [];
+          }
+        },
+        SheetRepository: {
+          listEvents: function() {
+            return [inactiveEvent, activeEvent];
+          },
+          getUserState: function() {
+            return {
+              last_memory_cursor: null
+            };
+          }
+        },
+        selectMemoryExtractionBatch_: function() {
+          return {
+            ready: true,
+            messageCount: sourceMessageIds.length,
+            firstMessageId: firstMessageId,
+            lastMessageId: lastMessageId,
+            sourceMessageIds: sourceMessageIds.slice()
+          };
+        },
+        enqueueMemoryExtractionIfDue_: function() {
+          throw new Error(
+            'Resume must never enqueue a new event.'
+          );
+        },
+        processReleaseTestEventById_: function(
+          eventType,
+          selectedEventId,
+          options
+        ) {
+          processCalls += 1;
+          var fingerprint =
+            options && options.expectedClaimFingerprint;
+          assert(
+            eventType === 'MEMORY_EXTRACT' &&
+              selectedEventId === eventId,
+            'Resume selected a different queue event.'
+          );
+          assert(
+            fingerprint &&
+              fingerprint.requireExclusiveActive === true &&
+              fingerprint.lastMemoryCursor == null &&
+              fingerprint.status === 'RETRY_WAIT' &&
+              fingerprint.attemptCount === 1 &&
+              fingerprint.nextAttemptAt ===
+                activeEvent.nextAttemptAt &&
+              fingerprint.lockedAt == null &&
+              fingerprint.lockedBy == null &&
+              fingerprint.dedupeKey ===
+                activeEvent.dedupeKey &&
+              JSON.stringify(
+                fingerprint.sourceMessageIds
+              ) === JSON.stringify(sourceMessageIds) &&
+              fingerprint.requestedAt ===
+                activeEvent.payload.requestedAt &&
+              fingerprint.characterBindingJson ===
+                JSON.stringify(
+                  activeEvent.payload.characterBinding
+                ),
+            'Resume omitted the exact claim fingerprint.'
+          );
+          return {
+            status: 'DONE',
+            reason: 'PROCESSED',
+            errorCode: null
+          };
+        }
+      }, function() {
+        withFixedNow(
+          '2026-07-26T12:10:00+09:00',
+          function() {
+            result = resumeMemoryReleaseTest();
+          }
+        );
+      });
+
+      assert(
+        processCalls === 1 &&
+          result.eventType === 'MEMORY_EXTRACT' &&
+          result.enqueued === false &&
+          result.duplicate === true &&
+          result.processed === true &&
+          result.status === 'DONE' &&
+          result.reason === 'PROCESSED' &&
+          result.errorCode == null,
+        'The exact active memory event was not resumed.'
+      );
+      assert(
+        JSON.stringify(Object.keys(result).sort()) ===
+          JSON.stringify([
+            'duplicate',
+            'enqueued',
+            'errorCode',
+            'eventType',
+            'processed',
+            'reason',
+            'status'
+          ]),
+        'The resume return exposed non-allowlisted fields.'
+      );
+    }
+  );
+
+  test(
+    'resumeMemoryReleaseTest fails closed for unsafe queue states',
+    function() {
+      var eventId =
+        'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+      var firstMessageId =
+        '11111111-1111-4111-8111-111111111111';
+      var lastMessageId =
+        '33333333-3333-4333-8333-333333333333';
+      var selection = {
+        ready: true,
+        messageCount: 2,
+        firstMessageId: firstMessageId,
+        lastMessageId: lastMessageId,
+        sourceMessageIds: [
+          firstMessageId,
+          lastMessageId
+        ]
+      };
+
+      function buildEvent(patch) {
+        var event = {
+          eventId: eventId,
+          eventType: 'MEMORY_EXTRACT',
+          dedupeKey:
+            'MEMORY_EXTRACT:' +
+            firstMessageId +
+            ':' +
+            lastMessageId,
+          payload: {
+            firstMessageId: firstMessageId,
+            lastMessageId: lastMessageId,
+            sourceMessageIds:
+              selection.sourceMessageIds.slice(),
+            requestedAt:
+              '2026-07-26T12:00:00+09:00',
+            characterRuntimeMode: 'enforced',
+            characterBinding:
+              buildValidMemoryResumeBinding()
+          },
+          status: 'RETRY_WAIT',
+          attemptCount: 1,
+          nextAttemptAt:
+            '2026-07-26T12:05:00+09:00',
+          lockedAt: null,
+          lockedBy: null,
+          lastError: {
+            code: 'CHARACTER_OUTPUT_BLOCKED'
+          }
+        };
+        Object.keys(patch || {}).forEach(function(key) {
+          event[key] = patch[key];
+        });
+        return event;
+      }
+
+      var invalidBindingEvent = buildEvent();
+      invalidBindingEvent.payload.characterBinding = {
+        profileSchemaVersion:
+          APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION
+      };
+      var scenarios = [{
+        name: 'missing',
+        events: [],
+        reason: 'TARGET_EVENT_MISSING',
+        duplicate: false,
+        status: null
+      }, {
+        name: 'ambiguous',
+        events: [
+          buildEvent(),
+          {
+            eventId:
+              'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            eventType: 'CHAT_REPLY',
+            status: 'PENDING'
+          }
+        ],
+        reason: 'TARGET_EVENT_AMBIGUOUS',
+        duplicate: false,
+        status: null
+      }, {
+        name: 'mismatch',
+        events: [
+          buildEvent({
+            dedupeKey:
+              'MEMORY_EXTRACT:' +
+              lastMessageId +
+              ':' +
+              firstMessageId
+          })
+        ],
+        reason: 'TARGET_EVENT_MISMATCH',
+        duplicate: false,
+        status: 'RETRY_WAIT'
+      }, {
+        name: 'invalid character binding',
+        events: [invalidBindingEvent],
+        reason: 'TARGET_EVENT_MISMATCH',
+        duplicate: false,
+        status: 'RETRY_WAIT'
+      }, {
+        name: 'processing',
+        events: [
+          buildEvent({
+            status: 'PROCESSING',
+            lockedAt:
+              '2026-07-26T12:09:00+09:00',
+            lockedBy: 'queue-lease:v1:private'
+          })
+        ],
+        reason: 'TARGET_EVENT_PROCESSING',
+        duplicate: true,
+        status: 'PROCESSING'
+      }, {
+        name: 'pending is outside recovery scope',
+        events: [
+          buildEvent({
+            status: 'PENDING',
+            attemptCount: 0,
+            nextAttemptAt: null,
+            lastError: null
+          })
+        ],
+        reason: 'TARGET_EVENT_MISMATCH',
+        duplicate: true,
+        status: 'PENDING'
+      }, {
+        name: 'not due',
+        events: [
+          buildEvent({
+            nextAttemptAt:
+              '2026-07-26T12:30:00+09:00'
+          })
+        ],
+        reason: 'TARGET_EVENT_NOT_DUE',
+        duplicate: true,
+        status: 'RETRY_WAIT'
+      }, {
+        name: 'invalid lifecycle',
+        events: [
+          buildEvent({
+            lockedAt:
+              '2026-07-26T12:01:00+09:00'
+          })
+        ],
+        reason: 'TARGET_EVENT_MISMATCH',
+        duplicate: true,
+        status: 'RETRY_WAIT'
+      }];
+
+      scenarios.forEach(function(scenario) {
+        var processCalls = 0;
+        var result = null;
+        withOverrides({
+          console: {
+            log: function() {}
+          },
+          ScriptApp: {
+            getProjectTriggers: function() {
+              return [];
+            }
+          },
+          SheetRepository: {
+            listEvents: function() {
+              return scenario.events;
+            },
+            getUserState: function() {
+              return {
+                last_memory_cursor: null
+              };
+            }
+          },
+          selectMemoryExtractionBatch_: function() {
+            return selection;
+          },
+          processReleaseTestEventById_: function() {
+            processCalls += 1;
+            throw new Error(
+              'Unsafe state reached queue processing.'
+            );
+          }
+        }, function() {
+          withFixedNow(
+            '2026-07-26T12:10:00+09:00',
+            function() {
+              result = resumeMemoryReleaseTest();
+            }
+          );
+        });
+        assert(
+          processCalls === 0 &&
+            result.reason === scenario.reason &&
+            result.duplicate === scenario.duplicate &&
+            result.status === scenario.status &&
+            result.processed === false &&
+            result.enqueued === false,
+          'Unsafe resume scenario did not stop: ' +
+            scenario.name
+        );
+      });
+    }
+  );
+
+  test(
+    'resumeMemoryReleaseTest reports a claim race or retry failure without secrets',
+    function() {
+      var safeRace = buildMemoryResumeResult_(
+        true,
+        false,
+        null,
+        'TARGET_EVENT_NOT_CLAIMABLE',
+        null
+      );
+      var retryFailure = buildMemoryResumeResult_(
+        true,
+        false,
+        'RETRY_WAIT',
+        'PROCESSING_INCOMPLETE',
+        'CHARACTER_OUTPUT_BLOCKED'
+      );
+      var unsafeFailure = buildMemoryResumeResult_(
+        true,
+        false,
+        'private status',
+        'private reason',
+        'https://example.invalid/private'
+      );
+      assert(
+        safeRace.reason ===
+          'TARGET_EVENT_NOT_CLAIMABLE' &&
+          safeRace.status == null &&
+          retryFailure.status === 'RETRY_WAIT' &&
+          retryFailure.reason ===
+            'PROCESSING_INCOMPLETE' &&
+          retryFailure.errorCode ===
+            'CHARACTER_OUTPUT_BLOCKED' &&
+          unsafeFailure.status == null &&
+          unsafeFailure.reason == null &&
+          unsafeFailure.errorCode == null,
+        'Resume result sanitization is not fail closed.'
+      );
+    }
+  );
+
+  test(
+    'QueueService exact claim rejects fingerprint or exclusivity races before mutation',
+    function() {
+      var eventId =
+        'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+      var firstMessageId =
+        '11111111-1111-4111-8111-111111111111';
+      var lastMessageId =
+        '33333333-3333-4333-8333-333333333333';
+      var sourceMessageIds = [
+        firstMessageId,
+        lastMessageId
+      ];
+      var event = {
+        eventId: eventId,
+        eventType: 'MEMORY_EXTRACT',
+        dedupeKey:
+          'MEMORY_EXTRACT:' +
+          firstMessageId +
+          ':' +
+          lastMessageId,
+        payload: {
+          firstMessageId: firstMessageId,
+          lastMessageId: lastMessageId,
+          sourceMessageIds: sourceMessageIds.slice(),
+          requestedAt:
+            '2026-07-26T12:00:00+09:00',
+          characterRuntimeMode: 'enforced',
+          characterBinding:
+            buildValidMemoryResumeBinding()
+        },
+        status: 'RETRY_WAIT',
+        attemptCount: 1,
+        nextAttemptAt: '2026-07-26T12:05:00+09:00',
+        lockedAt: null,
+        lockedBy: null
+      };
+      var fingerprint = {
+        requireExclusiveActive: true,
+        lastMemoryCursor: null,
+        status: 'RETRY_WAIT',
+        attemptCount: 1,
+        nextAttemptAt: '2026-07-26T12:05:00+09:00',
+        lockedAt: null,
+        lockedBy: null,
+        dedupeKey: event.dedupeKey,
+        firstMessageId: firstMessageId,
+        lastMessageId: lastMessageId,
+        sourceMessageIds: sourceMessageIds.slice(),
+        requestedAt: '2026-07-26T12:00:00+09:00',
+        characterRuntimeMode: 'enforced',
+        characterBindingJson: JSON.stringify(
+          buildValidMemoryResumeBinding()
+        )
+      };
+      var activeEvents = [event];
+      var currentCursor = null;
+      var updateCalls = 0;
+
+      withOverrides({
+        LockManager: {
+          withScriptLock: function(_, callback) {
+            return callback();
+          }
+        },
+        SheetRepository: {
+          getEventById: function() {
+            return event;
+          },
+          listEvents: function() {
+            return activeEvents;
+          },
+          getUserState: function() {
+            return {
+              last_memory_cursor: currentCursor
+            };
+          },
+          updateEvent: function(_, patch) {
+            updateCalls += 1;
+            event.status = patch.status;
+            event.lockedBy = patch.lockedBy;
+            return event;
+          }
+        }
+      }, function() {
+        var mismatched = {};
+        Object.keys(fingerprint).forEach(function(key) {
+          mismatched[key] = fingerprint[key];
+        });
+        mismatched.sourceMessageIds = [
+          lastMessageId,
+          firstMessageId
+        ];
+        var mismatchResult = QueueService.claimEventById(
+          'MEMORY_EXTRACT',
+          eventId,
+          'release-test-memory',
+          new Date('2026-07-26T12:10:00+09:00'),
+          mismatched
+        );
+        assert(
+          mismatchResult == null && updateCalls === 0,
+          'A changed payload was claimed.'
+        );
+
+        activeEvents = [
+          event,
+          {
+            eventId:
+              'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            eventType: 'CHAT_REPLY',
+            status: 'PENDING'
+          }
+        ];
+        var ambiguousResult = QueueService.claimEventById(
+          'MEMORY_EXTRACT',
+          eventId,
+          'release-test-memory',
+          new Date('2026-07-26T12:10:00+09:00'),
+          fingerprint
+        );
+        assert(
+          ambiguousResult == null && updateCalls === 0,
+          'A claim proceeded after queue exclusivity changed.'
+        );
+
+        activeEvents = [event];
+        currentCursor = lastMessageId;
+        var cursorRaceResult = QueueService.claimEventById(
+          'MEMORY_EXTRACT',
+          eventId,
+          'release-test-memory',
+          new Date('2026-07-26T12:10:00+09:00'),
+          fingerprint
+        );
+        assert(
+          cursorRaceResult == null && updateCalls === 0,
+          'A claim proceeded after the memory cursor changed.'
+        );
+
+        currentCursor = null;
+        var claimed = QueueService.claimEventById(
+          'MEMORY_EXTRACT',
+          eventId,
+          'release-test-memory',
+          new Date('2026-07-26T12:10:00+09:00'),
+          fingerprint
+        );
+        assert(
+          claimed &&
+            claimed.eventId === eventId &&
+            claimed.status === 'PROCESSING' &&
+            updateCalls === 1,
+          'The unchanged exact event was not claimed.'
+        );
+      });
+    }
+  );
+
+  test(
     'active triggers block release operators before enqueue or claim',
     function() {
       var enqueueCalls = 0;
       var claimCalls = 0;
+      var eventListCalls = 0;
 
       withOverrides({
         ScriptApp: {
@@ -3345,15 +3952,26 @@ function runA6QueueSchedulerTests() {
           claimEventById: function() {
             claimCalls += 1;
           }
+        },
+        SheetRepository: {
+          listEvents: function() {
+            eventListCalls += 1;
+            return [];
+          }
         }
       }, function() {
         expectCode(function() {
           runDiaryReleaseTest();
         }, 'CONFIG_MISSING');
+        expectCode(function() {
+          resumeMemoryReleaseTest();
+        }, 'CONFIG_MISSING');
       });
 
       assert(
-        enqueueCalls === 0 && claimCalls === 0,
+        enqueueCalls === 0 &&
+          claimCalls === 0 &&
+          eventListCalls === 0,
         'An active-trigger release test reached enqueue or claim.'
       );
     }

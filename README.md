@@ -257,6 +257,14 @@ message content, event payloads, IDs, URLs, and email addresses.
 approval/provenance audit across persisted `enforced` event graphs and returns
 only fixed tokens, booleans, and counts.
 
+During trigger-free H5 preparation, `resumeMemoryReleaseTest()` is the
+controlled operator for one already-active, due `RETRY_WAIT`, exact current
+memory batch. It never enqueues a replacement event, requires the current
+cursor-derived batch and the stored event fingerprint to match, and fails
+closed if the target is missing, ambiguous, processing, not yet due, or
+changed. Use it only through the documented recovery branch; it does not
+replace the normal H5 memory acceptance test.
+
 Operational alert email is disabled by default. Enable it only as a separate
 production configuration change:
 

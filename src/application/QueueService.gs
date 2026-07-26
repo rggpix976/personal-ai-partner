@@ -34,6 +34,8 @@ var QueueService = (function() {
   }
 
   function claimEventById(eventType, eventId, workerId, now) {
+    var expectedClaimFingerprint =
+      arguments.length > 4 ? arguments[4] : null;
     Validators.assertEnum(
       eventType,
       APP_CONSTANTS.EVENT_TYPES,
@@ -56,6 +58,34 @@ var QueueService = (function() {
           'STORAGE_DATA_CORRUPTED',
           'The requested release-test queue event is missing or has the wrong type.'
         );
+        if (
+          expectedClaimFingerprint &&
+          !matchesExpectedClaimFingerprint_(
+            event,
+            expectedClaimFingerprint
+          )
+        ) {
+          return null;
+        }
+        if (
+          expectedClaimFingerprint &&
+          expectedClaimFingerprint.requireExclusiveActive &&
+          !isExclusiveActiveClaimTarget_(event.eventId)
+        ) {
+          return null;
+        }
+        if (
+          expectedClaimFingerprint &&
+          Object.prototype.hasOwnProperty.call(
+            expectedClaimFingerprint,
+            'lastMemoryCursor'
+          ) &&
+          !matchesExpectedMemoryCursor_(
+            expectedClaimFingerprint.lastMemoryCursor
+          )
+        ) {
+          return null;
+        }
         if (!isClaimableAt_(event, claimTime)) {
           return null;
         }
@@ -69,6 +99,61 @@ var QueueService = (function() {
         return SheetRepository.getEventById(event.eventId);
       }
     );
+  }
+
+  function matchesExpectedClaimFingerprint_(
+    event,
+    fingerprint
+  ) {
+    var payload = event && event.payload;
+    return Boolean(
+      fingerprint &&
+      payload &&
+      event.status === fingerprint.status &&
+      Number(event.attemptCount) ===
+        fingerprint.attemptCount &&
+      (event.nextAttemptAt || null) ===
+        (fingerprint.nextAttemptAt || null) &&
+      (event.lockedAt || null) ===
+        (fingerprint.lockedAt || null) &&
+      (event.lockedBy || null) ===
+        (fingerprint.lockedBy || null) &&
+      event.dedupeKey === fingerprint.dedupeKey &&
+      payload.firstMessageId === fingerprint.firstMessageId &&
+      payload.lastMessageId === fingerprint.lastMessageId &&
+      Array.isArray(payload.sourceMessageIds) &&
+      Array.isArray(fingerprint.sourceMessageIds) &&
+      JSON.stringify(payload.sourceMessageIds) ===
+        JSON.stringify(fingerprint.sourceMessageIds) &&
+      payload.requestedAt === fingerprint.requestedAt &&
+      payload.characterRuntimeMode ===
+        fingerprint.characterRuntimeMode &&
+      JSON.stringify(payload.characterBinding) ===
+        fingerprint.characterBindingJson
+    );
+  }
+
+  function isExclusiveActiveClaimTarget_(eventId) {
+    var activeStatuses = {
+      PENDING: true,
+      PROCESSING: true,
+      RETRY_WAIT: true
+    };
+    var activeEvents = (SheetRepository.listEvents() || [])
+      .filter(function(event) {
+        return event && activeStatuses[event.status];
+      });
+    return activeEvents.length === 1 &&
+      activeEvents[0].eventId === eventId;
+  }
+
+  function matchesExpectedMemoryCursor_(expectedCursor) {
+    var state = SheetRepository.getUserState();
+    if (!state) {
+      return false;
+    }
+    return (state.last_memory_cursor || null) ===
+      (expectedCursor || null);
   }
 
   function isClaimableAt_(event, claimTime) {
