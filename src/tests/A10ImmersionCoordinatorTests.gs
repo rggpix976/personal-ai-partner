@@ -1122,6 +1122,55 @@ function runA10ImmersionCoordinatorTests() {
     });
   });
 
+  test('empty memory candidates are an approved no-op without verifier or rewrite', function() {
+    withContext('MEMORY_EXTRACTION', null, function(context) {
+      var calls = {
+        generate: 0,
+        rewrite: 0,
+        verifier: 0
+      };
+      var metrics = metricCollector();
+      var artifact = approveArtifact({
+        context: context,
+        surface: 'MEMORY_EXTRACTION',
+        generate: function() {
+          calls.generate += 1;
+          return { candidates: [] };
+        },
+        rewrite: function() {
+          calls.rewrite += 1;
+          return { candidates: [] };
+        },
+        verifierFn: function() {
+          calls.verifier += 1;
+          return {
+            verdict: 'deny',
+            category: 'IMMERSION_INTERNAL_DISCLOSURE',
+            evidenceKeys: []
+          };
+        },
+        metricEmitter: metrics.emit
+      });
+      assert(
+        artifact.source === 'generated' &&
+          artifact.payload.candidates.length === 0,
+        'Empty memory no-op was not approved as generated output.'
+      );
+      assert(
+        calls.generate === 1 &&
+          calls.verifier === 0 &&
+          calls.rewrite === 0,
+        'Empty memory no-op consumed verifier or rewrite budget.'
+      );
+      assert(
+        hasMetric(metrics.events, 'immersion_assessed_total') &&
+          !hasMetric(metrics.events, 'immersion_rewrite_attempt_total') &&
+          !hasMetric(metrics.events, 'immersion_blocked_total'),
+        'Empty memory no-op emitted blocked or rewrite metrics.'
+      );
+    });
+  });
+
   test('scope mismatch fails before generation rewrite verification or metrics', function() {
     withContext('CHAT_TEXT_SYNC', '話そか', function(context) {
       var calls = {
