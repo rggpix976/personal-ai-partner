@@ -588,6 +588,44 @@ MEMORY_CHARACTER_ENFORCEMENT_ENABLED=true
 `TARGET_EVENT_NOT_CLAIMABLE`、`PROCESSING_INCOMPLETE`、
 `status=RETRY_WAIT`、`status=DEAD`、非nullの`errorCode`は停止です。
 
+#### H5準備：記憶イベントが`DEAD`になった場合
+
+人間は追加実行せず、Codexへ引き継ぎます。`event_queue`、payload、dedupe key、
+記憶cursorを手作業で変更しません。
+
+Codexは、修正版の配置後に次の条件をすべて満たす場合だけ、
+`recoverDeadMemoryReleaseTest()`を厳密に1回実行します。
+
+- プロジェクトトリガーが0件。
+- 全イベントの`PENDING`、`PROCESSING`、`RETRY_WAIT`が各0件。
+- 未解決の`MEMORY_EXTRACT`の`DEAD`が1件だけ。
+- 対象のlockがなく、直前`errorCode=CHARACTER_OUTPUT_BLOCKED`。
+- 対象のsource範囲、dedupe、payload、人格binding、現在の記憶cursorが完全一致。
+- `inspectPr9PersistenceSafety()`が`valid=true`、unsafe合計0、`issues=[]`。
+
+成功時の安全な実行結果は次です。元の`DEAD`は監査履歴として残し、同じsource範囲を
+持つ新しい修復イベントだけを処理するため、通常再開とは`enqueued`と`duplicate`が
+異なります。
+
+```text
+eventType=MEMORY_EXTRACT
+enqueued=true
+duplicate=false
+processed=true
+status=DONE
+reason=PROCESSED
+errorCode=null
+```
+
+実行後は、全イベントの`PENDING`、`PROCESSING`、`RETRY_WAIT`が各0件、
+`queue.recentDead.total=0`、`queue.recentDead.byEventType.MEMORY_EXTRACT=0`、
+staleとoverdueが各0件であることを確認します。さらに
+`inspectPr9PersistenceSafety()`が引き続き`valid=true`、unsafe合計0、
+`issues=[]`であることを確認します。
+
+1項目でも不一致、関数の例外終了、`PROCESSING_INCOMPLETE`、非nullの`errorCode`なら、
+再実行せず停止します。すべて合格した場合だけH5準備の通常drainへ戻ります。
+
 判定：`[ ] 合格`　`[ ] 対象外`　`[ ] 停止`
 
 判定：`[ ] 完了`　`[ ] 停止`

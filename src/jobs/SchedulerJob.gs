@@ -88,6 +88,16 @@ function resumeMemoryReleaseTest() {
   return logPr9TestResult_('resumeMemoryReleaseTest', result);
 }
 
+function recoverDeadMemoryReleaseTest() {
+  assertReleaseTestTriggersStopped_();
+  var result =
+    recoverSingleDeadMemoryReleaseTest_();
+  return logPr9TestResult_(
+    'recoverDeadMemoryReleaseTest',
+    result
+  );
+}
+
 function diagnoseMemoryReleaseGeneration() {
   assertReleaseTestTriggersStopped_();
   var result = diagnoseSingleActiveMemoryGeneration_();
@@ -351,6 +361,139 @@ function resumeSingleActiveMemoryReleaseTest_() {
   );
   return buildMemoryResumeResult_(
     true,
+    processing.status === 'DONE',
+    processing.status,
+    processing.reason,
+    processing.errorCode
+  );
+}
+
+function recoverSingleDeadMemoryReleaseTest_() {
+  var events = SheetRepository.listEvents() || [];
+  var activeStatuses = {
+    PENDING: true,
+    PROCESSING: true,
+    RETRY_WAIT: true
+  };
+  var activeEvents = events.filter(function(event) {
+    return event && activeStatuses[event.status];
+  });
+  if (activeEvents.length !== 0) {
+    return buildMemoryRecoveryResult_(
+      false,
+      false,
+      false,
+      null,
+      'ACTIVE_QUEUE_NOT_EMPTY',
+      null
+    );
+  }
+
+  var deadMemoryEvents = events.filter(function(event) {
+    return event &&
+      event.eventType === 'MEMORY_EXTRACT' &&
+      event.status === 'DEAD';
+  });
+  if (deadMemoryEvents.length === 0) {
+    return buildMemoryRecoveryResult_(
+      false,
+      false,
+      false,
+      null,
+      'TARGET_EVENT_MISSING',
+      null
+    );
+  }
+  if (deadMemoryEvents.length !== 1) {
+    return buildMemoryRecoveryResult_(
+      false,
+      false,
+      false,
+      null,
+      'TARGET_EVENT_AMBIGUOUS',
+      null
+    );
+  }
+
+  var event = deadMemoryEvents[0];
+  var state = SheetRepository.getUserState();
+  var selection = state
+    ? selectMemoryExtractionBatch_(state)
+    : null;
+  if (
+    !selection ||
+    !selection.ready ||
+    !memoryResumeEventMatchesSelection_(
+      event,
+      selection
+    ) ||
+    !memoryDeadRecoveryLifecycleIsValid_(event)
+  ) {
+    return buildMemoryRecoveryResult_(
+      false,
+      false,
+      false,
+      'DEAD',
+      'TARGET_EVENT_MISMATCH',
+      safeMemoryResumeErrorCode_(event)
+    );
+  }
+
+  var fingerprint =
+    buildMemoryDeadRecoveryFingerprint_(
+      event,
+      selection,
+      state
+    );
+  var manualRequestId = generateUuidV4();
+  var repairEvent =
+    QueueService.requeueDeadMemoryAsNewEvent(
+      event.eventId,
+      manualRequestId,
+      new Date(),
+      fingerprint
+    );
+  var inserted = Boolean(
+    repairEvent &&
+      repairEvent.payload &&
+      repairEvent.payload.manualRequestId ===
+        manualRequestId
+  );
+  if (
+    !memoryRepairEventMatchesOriginal_(
+      repairEvent,
+      event,
+      selection
+    ) ||
+    repairEvent.status !== 'PENDING'
+  ) {
+    return buildMemoryRecoveryResult_(
+      inserted,
+      !inserted,
+      false,
+      pr9SafeUpperToken_(
+        repairEvent && repairEvent.status
+      ),
+      'TARGET_EVENT_MISMATCH',
+      safeMemoryResumeErrorCode_(repairEvent)
+    );
+  }
+
+  var processing = processReleaseTestEventById_(
+    'MEMORY_EXTRACT',
+    repairEvent.eventId,
+    {
+      expectedClaimFingerprint:
+        buildMemoryResumeFingerprint_(
+          repairEvent,
+          selection,
+          state
+        )
+    }
+  );
+  return buildMemoryRecoveryResult_(
+    inserted,
+    !inserted,
     processing.status === 'DONE',
     processing.status,
     processing.reason,
@@ -650,6 +793,88 @@ function memoryResumeEventIsDue_(event, now) {
   return getIsoTimeMillis(event.nextAttemptAt) <= now.getTime();
 }
 
+function memoryDeadRecoveryLifecycleIsValid_(event) {
+  return Boolean(
+    event &&
+      event.status === 'DEAD' &&
+      Number.isSafeInteger(
+        Number(event.attemptCount)
+      ) &&
+      Number(event.attemptCount) > 0 &&
+      Number(event.attemptCount) <= 5 &&
+      event.nextAttemptAt == null &&
+      event.lockedAt == null &&
+      event.lockedBy == null &&
+      Validators.isIsoDateTimeString(event.completedAt) &&
+      Validators.isIsoDateTimeString(event.updatedAt) &&
+      event.lastError &&
+      event.lastError.code ===
+        'CHARACTER_OUTPUT_BLOCKED'
+  );
+}
+
+function buildMemoryDeadRecoveryFingerprint_(
+  event,
+  selection,
+  state
+) {
+  var fingerprint = buildMemoryResumeFingerprint_(
+    event,
+    selection,
+    state
+  );
+  fingerprint.completedAt = event.completedAt;
+  fingerprint.updatedAt = event.updatedAt;
+  fingerprint.lastErrorCode =
+    'CHARACTER_OUTPUT_BLOCKED';
+  return fingerprint;
+}
+
+function memoryRepairEventMatchesOriginal_(
+  repairEvent,
+  originalEvent,
+  selection
+) {
+  return Boolean(
+    repairEvent &&
+      repairEvent.eventType === 'MEMORY_EXTRACT' &&
+      Validators.isUuidV4(repairEvent.eventId) &&
+      repairEvent.payload &&
+      Validators.isUuidV4(
+        repairEvent.payload.manualRequestId
+      ) &&
+      repairEvent.payload.originalEventId ===
+        originalEvent.eventId &&
+      repairEvent.dedupeKey ===
+        'MEMORY_EXTRACT_REPAIR:' +
+          originalEvent.eventId &&
+      repairEvent.payload.firstMessageId ===
+        selection.firstMessageId &&
+      repairEvent.payload.lastMessageId ===
+        selection.lastMessageId &&
+      JSON.stringify(
+        repairEvent.payload.sourceMessageIds
+      ) === JSON.stringify(
+        selection.sourceMessageIds
+      ) &&
+      repairEvent.payload.requestedAt ===
+        originalEvent.payload.requestedAt &&
+      repairEvent.payload.characterRuntimeMode ===
+        originalEvent.payload.characterRuntimeMode &&
+      JSON.stringify(
+        repairEvent.payload.characterBinding
+      ) === JSON.stringify(
+        originalEvent.payload.characterBinding
+      ) &&
+      Number(repairEvent.attemptCount) === 0 &&
+      Validators.isIsoDateTimeString(
+        repairEvent.nextAttemptAt
+      ) &&
+      repairEvent.lockedAt == null &&
+      repairEvent.lockedBy == null
+  );
+}
+
 function buildMemoryResumeFingerprint_(
   event,
   selection,
@@ -694,6 +919,25 @@ function buildMemoryResumeResult_(
   return {
     eventType: 'MEMORY_EXTRACT',
     enqueued: false,
+    duplicate: Boolean(duplicate),
+    processed: Boolean(processed),
+    status: pr9SafeUpperToken_(status),
+    reason: pr9SafeUpperToken_(reason),
+    errorCode: pr9SafeUpperToken_(errorCode)
+  };
+}
+
+function buildMemoryRecoveryResult_(
+  enqueued,
+  duplicate,
+  processed,
+  status,
+  reason,
+  errorCode
+) {
+  return {
+    eventType: 'MEMORY_EXTRACT',
+    enqueued: Boolean(enqueued),
     duplicate: Boolean(duplicate),
     processed: Boolean(processed),
     status: pr9SafeUpperToken_(status),
@@ -822,6 +1066,7 @@ function buildPr9TestLogPayload_(functionName, result) {
     functionName === 'runDiaryReleaseTest' ||
     functionName === 'runMemoryReleaseTest' ||
     functionName === 'resumeMemoryReleaseTest' ||
+    functionName === 'recoverDeadMemoryReleaseTest' ||
     functionName === 'runProactiveReleaseTest'
   ) {
     return buildPr9ReleaseTestLog_(result);

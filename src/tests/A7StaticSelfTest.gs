@@ -49,6 +49,7 @@ function runA7StaticSelfTest() {
     assert(typeof runDiaryReleaseTest === 'function', 'runDiaryReleaseTest is missing.');
     assert(typeof runMemoryReleaseTest === 'function', 'runMemoryReleaseTest is missing.');
     assert(typeof resumeMemoryReleaseTest === 'function', 'resumeMemoryReleaseTest is missing.');
+    assert(typeof recoverDeadMemoryReleaseTest === 'function', 'recoverDeadMemoryReleaseTest is missing.');
     assert(typeof diagnoseMemoryReleaseGeneration === 'function', 'diagnoseMemoryReleaseGeneration is missing.');
     assert(typeof runProactiveReleaseTest === 'function', 'runProactiveReleaseTest is missing.');
     assert(typeof assessDeadQueueEvent === 'function', 'assessDeadQueueEvent is missing.');
@@ -90,6 +91,7 @@ function runA7StaticSelfTest() {
     assert(hasFunction('QueueService', 'expediteDiaryNarrativeLengthRetries'), 'QueueService.expediteDiaryNarrativeLengthRetries is missing.');
     assert(hasFunction('QueueService', 'requeueDeadAsNewEvent'), 'QueueService.requeueDeadAsNewEvent is missing.');
     assert(hasFunction('QueueService', 'requeueDeadDiaryAsNewEvent'), 'QueueService.requeueDeadDiaryAsNewEvent is missing.');
+    assert(hasFunction('QueueService', 'requeueDeadMemoryAsNewEvent'), 'QueueService.requeueDeadMemoryAsNewEvent is missing.');
     assert(hasFunction('QueueService', 'assessDeadEventRecovery'), 'QueueService.assessDeadEventRecovery is missing.');
     assert(hasFunction('OperationalHealthService', 'inspect'), 'OperationalHealthService.inspect is missing.');
     assert(hasFunction('OperationalHealthService', 'run'), 'OperationalHealthService.run is missing.');

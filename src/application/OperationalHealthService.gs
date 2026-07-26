@@ -58,7 +58,7 @@ var OperationalHealthService = (function() {
       }
 
       if (event.status === 'DEAD' && getEventTerminalTime_(event) >= deadAfter) {
-        if (isResolvedDiaryDead_(event, events)) {
+        if (isResolvedDead_(event, events)) {
           resolvedRecentDeadCount += 1;
           return;
         }
@@ -350,6 +350,57 @@ var OperationalHealthService = (function() {
         candidate.payload &&
         candidate.payload.diaryDate === diaryDate &&
         getEventTerminalTime_(candidate) >= deadTime;
+    });
+  }
+
+  function isResolvedDead_(event, events) {
+    if (isResolvedDiaryDead_(event, events)) {
+      return true;
+    }
+    if (
+      !event ||
+      event.eventType !== 'MEMORY_EXTRACT' ||
+      !Validators.isUuidV4(String(event.eventId || '')) ||
+      !event.payload ||
+      !Array.isArray(event.payload.sourceMessageIds) ||
+      event.payload.characterRuntimeMode !== 'enforced'
+    ) {
+      return false;
+    }
+    var deadTime = getEventTerminalTime_(event);
+    return (events || []).some(function(candidate) {
+      return Boolean(
+        candidate !== event &&
+          candidate.eventType === 'MEMORY_EXTRACT' &&
+          candidate.status === 'DONE' &&
+          candidate.payload &&
+          candidate.payload.originalEventId ===
+            event.eventId &&
+          Validators.isUuidV4(
+            String(
+              candidate.payload.manualRequestId || ''
+            )
+          ) &&
+          candidate.payload.firstMessageId ===
+            event.payload.firstMessageId &&
+          candidate.payload.lastMessageId ===
+            event.payload.lastMessageId &&
+          JSON.stringify(
+            candidate.payload.sourceMessageIds
+          ) === JSON.stringify(
+            event.payload.sourceMessageIds
+          ) &&
+          candidate.payload.requestedAt ===
+            event.payload.requestedAt &&
+          candidate.payload.characterRuntimeMode ===
+            event.payload.characterRuntimeMode &&
+          JSON.stringify(
+            candidate.payload.characterBinding
+          ) === JSON.stringify(
+            event.payload.characterBinding
+          ) &&
+          getEventTerminalTime_(candidate) >= deadTime
+      );
     });
   }
 

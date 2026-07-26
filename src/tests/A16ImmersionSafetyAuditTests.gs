@@ -1086,5 +1086,117 @@ function runA16ImmersionSafetyAuditTests() {
     }
   );
 
+  test(
+    'DONE memory repair may resolve one immutable DEAD origin without persisted candidates',
+    function() {
+      var eventBinding = binding(26);
+      var originEventId =
+        '11111111-1111-4111-8111-111111111111';
+      var repairEventId =
+        '22222222-2222-4222-8222-222222222222';
+      var manualRequestId =
+        '33333333-3333-4333-8333-333333333333';
+      var firstMessageId =
+        '44444444-4444-4444-8444-444444444444';
+      var lastMessageId =
+        '55555555-5555-4555-8555-555555555555';
+      var sourceMessageIds = [
+        firstMessageId,
+        lastMessageId
+      ];
+      var sharedPayload = {
+        firstMessageId: firstMessageId,
+        lastMessageId: lastMessageId,
+        sourceMessageIds: sourceMessageIds,
+        requestedAt: '2026-07-26T12:00:00+09:00'
+      };
+      var origin = enforcedEvent(
+        originEventId,
+        'MEMORY_EXTRACT',
+        eventBinding,
+        sharedPayload,
+        'DEAD'
+      );
+      var repair = enforcedEvent(
+        repairEventId,
+        'MEMORY_EXTRACT',
+        eventBinding,
+        merge(sharedPayload, {
+          manualRequestId: manualRequestId,
+          originalEventId: originEventId
+        }),
+        'DONE'
+      );
+      var result = inspect({
+        events: [origin, repair]
+      });
+
+      assert(
+        result.valid === true &&
+          result.checked.memories === 2 &&
+          result.unsafePersistedOrSent.memories === 0,
+        'A valid no-op memory repair was rejected.'
+      );
+    }
+  );
+
+  test(
+    'memory repair cannot change the DEAD origin source range',
+    function() {
+      var eventBinding = binding(27);
+      var originEventId =
+        '11111111-1111-4111-8111-111111111111';
+      var repairEventId =
+        '22222222-2222-4222-8222-222222222222';
+      var manualRequestId =
+        '33333333-3333-4333-8333-333333333333';
+      var firstMessageId =
+        '44444444-4444-4444-8444-444444444444';
+      var lastMessageId =
+        '55555555-5555-4555-8555-555555555555';
+      var changedMessageId =
+        '66666666-6666-4666-8666-666666666666';
+      var sharedPayload = {
+        firstMessageId: firstMessageId,
+        lastMessageId: lastMessageId,
+        sourceMessageIds: [
+          firstMessageId,
+          lastMessageId
+        ],
+        requestedAt: '2026-07-26T12:00:00+09:00'
+      };
+      var origin = enforcedEvent(
+        originEventId,
+        'MEMORY_EXTRACT',
+        eventBinding,
+        sharedPayload,
+        'DEAD'
+      );
+      var repair = enforcedEvent(
+        repairEventId,
+        'MEMORY_EXTRACT',
+        eventBinding,
+        merge(sharedPayload, {
+          sourceMessageIds: [
+            firstMessageId,
+            changedMessageId
+          ],
+          manualRequestId: manualRequestId,
+          originalEventId: originEventId
+        }),
+        'DONE'
+      );
+      var result = inspect({
+        events: [origin, repair]
+      });
+
+      assert(
+        result.valid === false &&
+          result.unsafePersistedOrSent.memories === 1,
+        'A source-changing memory repair passed.'
+      );
+    }
+  );
+
   return results;
 }
