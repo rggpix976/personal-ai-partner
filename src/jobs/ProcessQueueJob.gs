@@ -52,7 +52,8 @@ function processReleaseTestEventById_(
       eventType,
       eventId,
       workerId,
-      now
+      now,
+      options && options.expectedClaimFingerprint
     );
   } catch (error) {
     var normalized = normalizeError(error);

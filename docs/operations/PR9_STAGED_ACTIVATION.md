@@ -537,6 +537,59 @@ H5は2日に分けて実施します。全イベントを対象にする定期�
 6. `event_queue`シートを再び読み取り専用で集計し、`MEMORY_EXTRACT`の`PENDING`、
    `PROCESSING`、`RETRY_WAIT`が各0件、未解決`DEAD`が0件であることを確認する。
 
+##### 既存の`MEMORY_EXTRACT`を管理された形で再開する（該当時のみ）
+
+H5準備中のexact eventが`RETRY_WAIT`になり、通常の
+`runMemoryReleaseTest`が`duplicate=true`を返した場合だけ使用する。これはH4までの
+未処理batchを片付ける復旧であり、正式なH5-11の代わりにはしない。
+
+1. Webアプリからの送信を止め、全プロジェクトトリガーが0件であることを確認する。
+   `runMemoryReleaseTest`、`processQueueJob`、他のrelease test関数を追加実行せず、
+   `event_queue`と記憶cursorも手作業で変更しない。
+2. `runOperationalHealthCheck`を1回実行し、集計値が次の状態であることを確認する。
+
+   ```text
+   queue.byStatus.PENDING=0
+   queue.byStatus.PROCESSING=0
+   queue.byStatus.RETRY_WAIT=1
+   queue.byEventType.MEMORY_EXTRACT.PENDING=0
+   queue.byEventType.MEMORY_EXTRACT.PROCESSING=0
+   queue.byEventType.MEMORY_EXTRACT.RETRY_WAIT=1
+   queue.recentDead.byEventType.MEMORY_EXTRACT=0
+   queue.staleProcessing.total=0
+   queue.overdue.retryWait=1
+   ```
+
+3. すべて一致した場合だけ`resumeMemoryReleaseTest`を1回実行する。この関数に
+   event ID、payload、dedupe keyを入力しない。
+4. `PR9_TEST_RESULT resumeMemoryReleaseTest`が次の7値であることを確認する。
+
+   ```text
+   eventType=MEMORY_EXTRACT
+   enqueued=false
+   duplicate=true
+   processed=true
+   status=DONE
+   reason=PROCESSED
+   errorCode=null
+   ```
+
+5. 採用された記憶がある場合だけ本文を画面上で確認し、会話にない事実がないことを
+   確認する。本文と各種IDは証跡へ転記しない。
+6. `runOperationalHealthCheck`を再実行し、全イベントの`PENDING`、
+   `PROCESSING`、`RETRY_WAIT`、`queue.recentDead.total`、
+   `queue.staleProcessing.total`、`queue.overdue.pending`、
+   `queue.overdue.retryWait`がすべて0件であることを確認する。
+7. すべて合格した場合だけ通常のH5準備へ戻る。H5-01後の新しいbatchでは、
+   `runMemoryReleaseTest`の通常成功を改めて確認する。
+
+事前集計、手順4、復旧後集計のいずれかが一致しない場合は再実行せず停止する。
+`TARGET_EVENT_MISSING`、`TARGET_EVENT_AMBIGUOUS`、
+`TARGET_EVENT_MISMATCH`、`TARGET_EVENT_PROCESSING`、
+`TARGET_EVENT_NOT_DUE`、`TARGET_EVENT_NOT_CLAIMABLE`、
+`PROCESSING_INCOMPLETE`、`RETRY_WAIT`、`DEAD`、非nullの`errorCode`は
+すべて停止である。
+
 #### 日記の合格条件
 
 - 対象日が`DONE`となり、ドキュメント上のアンカーが1件だけ存在する。
