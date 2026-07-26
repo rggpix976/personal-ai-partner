@@ -99,6 +99,24 @@ var ImmersionGuard = (function() {
         []
       );
     }
+    if (
+      fixed.verdict === 'ALLOW' &&
+      isDeterministicMemoryNoop_(surface, normalizedPayload)
+    ) {
+      // An empty candidate set has no free-generated text, claim, or
+      // persistence authority for the semantic verifier to assess. The
+      // normalized exact-key payload and fixed policy have already failed
+      // closed, so unrelated evidence text cannot cause a false denial.
+      return approve_(
+        normalizedPayload,
+        surface,
+        source,
+        context,
+        fixed,
+        [],
+        options.catalogKey || null
+      );
+    }
     if (fixed.verdict === 'ALLOW' && isReviewedLocalSource_(source)) {
       return approve_(
         normalizedPayload,
@@ -232,6 +250,16 @@ var ImmersionGuard = (function() {
 
   function isReviewedLocalSource_(source) {
     return source === 'canonical' || source === 'fallback';
+  }
+
+  function isDeterministicMemoryNoop_(surface, payload) {
+    return Boolean(
+      surface === 'MEMORY_EXTRACTION' &&
+        payload &&
+        Object.keys(payload).length === 1 &&
+        Array.isArray(payload.candidates) &&
+        payload.candidates.length === 0
+    );
   }
 
   function validateSourceRoute_(source, surface, mode) {
