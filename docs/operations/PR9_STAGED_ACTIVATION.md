@@ -606,6 +606,31 @@ H5準備中のexact eventが`RETRY_WAIT`になり、通常の
 `PROCESSING_INCOMPLETE`、`RETRY_WAIT`、`DEAD`、非nullの`errorCode`は
 すべて停止である。
 
+##### `MEMORY_EXTRACT`が`DEAD`へ到達した場合
+
+通常の`resumeMemoryReleaseTest`は使用しない。コード修正と再配置を終えた後、
+トリガー0件、active queue 0件、未解決の`MEMORY_EXTRACT`の`DEAD`が1件、
+lockなし、直前`errorCode=CHARACTER_OUTPUT_BLOCKED`、source範囲・dedupe・payload・
+人格binding・記憶cursorの完全一致、および永続化安全監査の合格を確認する。
+
+全条件が一致した場合だけ`recoverDeadMemoryReleaseTest`を1回実行する。この関数は
+元の`DEAD`を監査履歴として残し、同じsource範囲を持つ修復イベントを新規作成して
+処理する。成功条件は次の完全一致である。
+
+```text
+eventType=MEMORY_EXTRACT
+enqueued=true
+duplicate=false
+processed=true
+status=DONE
+reason=PROCESSED
+errorCode=null
+```
+
+事後はactive queue、未解決のrecent `DEAD`、stale、overdueがすべて0件であり、
+永続化安全監査が`valid=true`、unsafe合計0、`issues=[]`であることを確認する。
+不一致または失敗時は二度目を実行せず停止する。
+
 #### 日記の合格条件
 
 - 対象日が`DONE`となり、ドキュメント上のアンカーが1件だけ存在する。

@@ -474,6 +474,43 @@ def check_event_contract(results: Results) -> None:
         "Event MEMORY_EXTRACT enforced binding valid",
     )
 
+    memory_repair_payload = dict(enforced_memory_payload)
+    memory_repair_payload["manualRequestId"] = UUID_3
+    memory_repair_payload["originalEventId"] = UUID_4
+    assert_valid(
+        results,
+        validator,
+        base_event("MEMORY_EXTRACT", memory_repair_payload),
+        "Event MEMORY_EXTRACT repair payload valid",
+    )
+
+    incomplete_memory_repair = dict(memory_repair_payload)
+    incomplete_memory_repair.pop("originalEventId")
+    assert_invalid(
+        results,
+        validator,
+        base_event("MEMORY_EXTRACT", incomplete_memory_repair),
+        "Event MEMORY_EXTRACT repair payload requires originalEventId",
+    )
+
+    missing_memory_manual_request = dict(memory_repair_payload)
+    missing_memory_manual_request.pop("manualRequestId")
+    assert_invalid(
+        results,
+        validator,
+        base_event("MEMORY_EXTRACT", missing_memory_manual_request),
+        "Event MEMORY_EXTRACT repair payload requires manualRequestId",
+    )
+
+    invalid_memory_manual_request = dict(memory_repair_payload)
+    invalid_memory_manual_request["manualRequestId"] = "not-a-uuid"
+    assert_invalid(
+        results,
+        validator,
+        base_event("MEMORY_EXTRACT", invalid_memory_manual_request),
+        "Event MEMORY_EXTRACT repair payload requires UUID v4 identifiers",
+    )
+
     missing_memory_mode = dict(samples["MEMORY_EXTRACT"])
     missing_memory_mode.pop("characterRuntimeMode")
     assert_invalid(

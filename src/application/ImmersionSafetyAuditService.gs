@@ -595,6 +595,30 @@ var ImmersionSafetyAuditService = (function() {
   }
 
   function inspectMemoryGraphs_(graph, rows, state) {
+    (graph.all || []).forEach(function(event) {
+      if (event.eventType !== 'MEMORY_EXTRACT') {
+        return;
+      }
+      var hasManualRequestId =
+        event.payload.manualRequestId != null;
+      var hasOriginalEventId =
+        event.payload.originalEventId != null;
+      if (
+        hasManualRequestId !== hasOriginalEventId ||
+        (
+          hasManualRequestId &&
+          !isValidMemoryRepair_(
+            event,
+            graph.byId[
+              String(event.payload.originalEventId)
+            ] || null
+          )
+        )
+      ) {
+        markEventUnsafe_(event, 'memories', state);
+      }
+    });
+
     (rows || []).forEach(function(row) {
       row = row || {};
       var approvalPresent = row.memory_approval_json != null;
@@ -923,6 +947,55 @@ var ImmersionSafetyAuditService = (function() {
         ['MEMORY_EXTRACTION'],
         binding
       );
+  }
+
+  function isValidMemoryRepair_(
+    repairEvent,
+    originEvent
+  ) {
+    if (
+      !repairEvent ||
+      !originEvent ||
+      !repairEvent.payload ||
+      !originEvent.payload
+    ) {
+      return false;
+    }
+    return Boolean(
+      Validators.isUuidV4(
+        String(
+          repairEvent.payload.manualRequestId || ''
+        )
+      ) &&
+        Validators.isUuidV4(
+          String(
+            repairEvent.payload.originalEventId || ''
+          )
+        ) &&
+        String(repairEvent.payload.originalEventId) ===
+          String(originEvent.eventId || '') &&
+        originEvent.eventType === 'MEMORY_EXTRACT' &&
+        originEvent.status === 'DEAD' &&
+        originEvent.payload.characterRuntimeMode ===
+          'enforced' &&
+        repairEvent.payload.characterRuntimeMode ===
+          originEvent.payload.characterRuntimeMode &&
+        repairEvent.payload.firstMessageId ===
+          originEvent.payload.firstMessageId &&
+        repairEvent.payload.lastMessageId ===
+          originEvent.payload.lastMessageId &&
+        JSON.stringify(
+          repairEvent.payload.sourceMessageIds
+        ) === JSON.stringify(
+          originEvent.payload.sourceMessageIds
+        ) &&
+        repairEvent.payload.requestedAt ===
+          originEvent.payload.requestedAt &&
+        bindingsEqual_(
+          repairEvent.payload.characterBinding,
+          originEvent.payload.characterBinding
+        )
+    );
   }
 
   function isUniqueUuidList_(value) {

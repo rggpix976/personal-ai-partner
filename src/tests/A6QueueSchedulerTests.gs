@@ -1939,6 +1939,92 @@ function runA6QueueSchedulerTests() {
     });
   });
 
+  test('OperationalHealthService treats an exact DONE memory repair as resolving an immutable DEAD event', function() {
+    var originEventId =
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    var firstMessageId =
+      '11111111-1111-4111-8111-111111111111';
+    var lastMessageId =
+      '33333333-3333-4333-8333-333333333333';
+    var sourceMessageIds = [
+      firstMessageId,
+      lastMessageId
+    ];
+    var eventBinding = buildValidMemoryResumeBinding();
+    withOverrides({
+      ConfigRepository: {
+        getByKey: function(key) {
+          var values = {
+            OPS_QUEUE_DELAY_GRACE_MINUTES: { value: 20 },
+            QUEUE_STALE_MINUTES: { value: 15 },
+            OPS_DEAD_LOOKBACK_HOURS: { value: 168 }
+          };
+          return values[key] || null;
+        }
+      },
+      SheetRepository: {
+        listEvents: function() {
+          return [{
+            eventId: originEventId,
+            eventType: 'MEMORY_EXTRACT',
+            status: 'DEAD',
+            payload: {
+              firstMessageId: firstMessageId,
+              lastMessageId: lastMessageId,
+              sourceMessageIds: sourceMessageIds,
+              requestedAt:
+                '2026-07-26T12:00:00+09:00',
+              characterRuntimeMode: 'enforced',
+              characterBinding: eventBinding
+            },
+            completedAt:
+              '2026-07-26T14:00:00+09:00',
+            lastError: {
+              code: 'CHARACTER_OUTPUT_BLOCKED',
+              message: 'private detail'
+            }
+          }, {
+            eventId:
+              'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            eventType: 'MEMORY_EXTRACT',
+            status: 'DONE',
+            payload: {
+              firstMessageId: firstMessageId,
+              lastMessageId: lastMessageId,
+              sourceMessageIds: sourceMessageIds.slice(),
+              requestedAt:
+                '2026-07-26T12:00:00+09:00',
+              characterRuntimeMode: 'enforced',
+              characterBinding: eventBinding,
+              manualRequestId:
+                'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+              originalEventId: originEventId
+            },
+            completedAt:
+              '2026-07-26T15:00:00+09:00'
+          }];
+        }
+      }
+    }, function() {
+      var report = OperationalHealthService.inspect(
+        new Date('2026-07-26T16:00:00+09:00'),
+        {
+          required: {
+            processQueueJob: { count: 1 },
+            schedulerJob: { count: 1 }
+          }
+        }
+      );
+      assert(
+        report.status === 'OK' &&
+          report.queue.byStatus.DEAD === 1 &&
+          report.queue.recentDead.total === 0 &&
+          report.queue.recentDead.resolvedTotal === 1,
+        'A completed exact memory repair did not resolve health.'
+      );
+    });
+  });
+
   test('OperationalHealthService rate-limits sanitized reports and keeps email opt-in', function() {
     var propertyValue = null;
     var logCount = 0;
@@ -4619,6 +4705,405 @@ function runA6QueueSchedulerTests() {
           enqueueCalls === 0 &&
           claimCalls === 0,
         'Proactive release testing bypassed readiness.'
+      );
+    }
+  );
+
+  test(
+    'QueueService creates one exact memory repair and preserves the DEAD origin',
+    function() {
+      var originEventId =
+        'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+      var manualRequestId =
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      var firstMessageId =
+        '11111111-1111-4111-8111-111111111111';
+      var lastMessageId =
+        '33333333-3333-4333-8333-333333333333';
+      var sourceMessageIds = [
+        firstMessageId,
+        lastMessageId
+      ];
+      var binding = buildValidMemoryResumeBinding();
+      var origin = {
+        eventId: originEventId,
+        eventType: 'MEMORY_EXTRACT',
+        dedupeKey:
+          'MEMORY_EXTRACT:' +
+          firstMessageId +
+          ':' +
+          lastMessageId,
+        payload: {
+          firstMessageId: firstMessageId,
+          lastMessageId: lastMessageId,
+          sourceMessageIds: sourceMessageIds.slice(),
+          requestedAt: '2026-07-26T12:00:00+09:00',
+          characterRuntimeMode: 'enforced',
+          characterBinding: binding
+        },
+        status: 'DEAD',
+        attemptCount: 5,
+        nextAttemptAt: null,
+        lockedAt: null,
+        lockedBy: null,
+        completedAt: '2026-07-26T14:00:00+09:00',
+        updatedAt: '2026-07-26T14:00:00+09:00',
+        lastError: {
+          code: 'CHARACTER_OUTPUT_BLOCKED',
+          message: 'private'
+        }
+      };
+      var inserted = [];
+      var fingerprint = {
+        lastMemoryCursor: null,
+        status: 'DEAD',
+        attemptCount: 5,
+        nextAttemptAt: null,
+        lockedAt: null,
+        lockedBy: null,
+        dedupeKey: origin.dedupeKey,
+        firstMessageId: firstMessageId,
+        lastMessageId: lastMessageId,
+        sourceMessageIds: sourceMessageIds.slice(),
+        requestedAt: origin.payload.requestedAt,
+        characterRuntimeMode: 'enforced',
+        characterBindingJson: JSON.stringify(binding),
+        completedAt: origin.completedAt,
+        updatedAt: origin.updatedAt,
+        lastErrorCode: 'CHARACTER_OUTPUT_BLOCKED'
+      };
+      var repair = null;
+
+      withOverrides({
+        LockManager: {
+          withScriptLock: function(_, callback) {
+            return callback();
+          }
+        },
+        SheetRepository: {
+          getEventById: function(eventId) {
+            return eventId === originEventId
+              ? origin
+              : null;
+          },
+          listEvents: function() {
+            return [origin];
+          },
+          getUserState: function() {
+            return {
+              last_memory_cursor: null
+            };
+          },
+          getEventByDedupeKey: function() {
+            return null;
+          },
+          insertEvent: function(event) {
+            inserted.push(event);
+          }
+        }
+      }, function() {
+        repair =
+          QueueService.requeueDeadMemoryAsNewEvent(
+            originEventId,
+            manualRequestId,
+            new Date(
+              '2026-07-26T15:00:00+09:00'
+            ),
+            fingerprint
+          );
+      });
+
+      assert(
+        inserted.length === 1 &&
+          repair === inserted[0] &&
+          repair.status === 'PENDING' &&
+          repair.attemptCount === 0 &&
+          repair.dedupeKey ===
+            'MEMORY_EXTRACT_REPAIR:' +
+              originEventId &&
+          repair.payload.manualRequestId ===
+            manualRequestId &&
+          repair.payload.originalEventId ===
+            originEventId &&
+          JSON.stringify(
+            repair.payload.sourceMessageIds
+          ) === JSON.stringify(sourceMessageIds) &&
+          origin.status === 'DEAD' &&
+          origin.attemptCount === 5,
+        'The exact immutable memory repair was not created.'
+      );
+    }
+  );
+
+  test(
+    'recoverDeadMemoryReleaseTest repairs and processes only the exact DEAD batch',
+    function() {
+      var originEventId =
+        'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+      var repairEventId =
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      var firstMessageId =
+        '11111111-1111-4111-8111-111111111111';
+      var lastMessageId =
+        '33333333-3333-4333-8333-333333333333';
+      var sourceMessageIds = [
+        firstMessageId,
+        lastMessageId
+      ];
+      var binding = buildValidMemoryResumeBinding();
+      var origin = {
+        eventId: originEventId,
+        eventType: 'MEMORY_EXTRACT',
+        dedupeKey:
+          'MEMORY_EXTRACT:' +
+          firstMessageId +
+          ':' +
+          lastMessageId,
+        payload: {
+          firstMessageId: firstMessageId,
+          lastMessageId: lastMessageId,
+          sourceMessageIds: sourceMessageIds.slice(),
+          requestedAt: '2026-07-26T12:00:00+09:00',
+          characterRuntimeMode: 'enforced',
+          characterBinding: binding
+        },
+        status: 'DEAD',
+        attemptCount: 5,
+        nextAttemptAt: null,
+        lockedAt: null,
+        lockedBy: null,
+        completedAt: '2026-07-26T14:00:00+09:00',
+        updatedAt: '2026-07-26T14:00:00+09:00',
+        lastError: {
+          code: 'CHARACTER_OUTPUT_BLOCKED'
+        }
+      };
+      var selection = {
+        ready: true,
+        messageCount: sourceMessageIds.length,
+        firstMessageId: firstMessageId,
+        lastMessageId: lastMessageId,
+        sourceMessageIds: sourceMessageIds.slice()
+      };
+      var requeueCalls = 0;
+      var processCalls = 0;
+      var result = null;
+
+      withOverrides({
+        console: {
+          log: function() {}
+        },
+        ScriptApp: {
+          getProjectTriggers: function() {
+            return [];
+          }
+        },
+        SheetRepository: {
+          listEvents: function() {
+            return [origin];
+          },
+          getUserState: function() {
+            return {
+              last_memory_cursor: null
+            };
+          }
+        },
+        selectMemoryExtractionBatch_: function() {
+          return selection;
+        },
+        QueueService: {
+          requeueDeadMemoryAsNewEvent:
+            function(
+              eventId,
+              manualRequestId,
+              _,
+              fingerprint
+            ) {
+              requeueCalls += 1;
+              assert(
+                eventId === originEventId &&
+                  Validators.isUuidV4(
+                    manualRequestId
+                  ) &&
+                  fingerprint.status === 'DEAD' &&
+                  fingerprint.attemptCount === 5 &&
+                  fingerprint.lastErrorCode ===
+                    'CHARACTER_OUTPUT_BLOCKED',
+                'The DEAD recovery fingerprint changed.'
+              );
+              return {
+                eventId: repairEventId,
+                eventType: 'MEMORY_EXTRACT',
+                dedupeKey:
+                  'MEMORY_EXTRACT_REPAIR:' +
+                  originEventId,
+                payload: {
+                  firstMessageId: firstMessageId,
+                  lastMessageId: lastMessageId,
+                  sourceMessageIds:
+                    sourceMessageIds.slice(),
+                  requestedAt:
+                    origin.payload.requestedAt,
+                  characterRuntimeMode: 'enforced',
+                  characterBinding: binding,
+                  manualRequestId: manualRequestId,
+                  originalEventId: originEventId
+                },
+                status: 'PENDING',
+                attemptCount: 0,
+                nextAttemptAt:
+                  '2026-07-26T15:00:00+09:00',
+                lockedAt: null,
+                lockedBy: null
+              };
+            }
+        },
+        processReleaseTestEventById_: function(
+          eventType,
+          eventId,
+          options
+        ) {
+          processCalls += 1;
+          assert(
+            eventType === 'MEMORY_EXTRACT' &&
+              eventId === repairEventId &&
+              options.expectedClaimFingerprint
+                .lastMemoryCursor == null &&
+              options.expectedClaimFingerprint.status ===
+                'PENDING',
+            'The repair claim was not exact.'
+          );
+          return {
+            status: 'DONE',
+            reason: 'PROCESSED',
+            errorCode: null
+          };
+        }
+      }, function() {
+        result = recoverDeadMemoryReleaseTest();
+      });
+
+      assert(
+        requeueCalls === 1 &&
+          processCalls === 1 &&
+          result.enqueued === true &&
+          result.duplicate === false &&
+          result.processed === true &&
+          result.status === 'DONE' &&
+          result.reason === 'PROCESSED' &&
+          result.errorCode == null,
+        'The exact DEAD memory repair did not complete.'
+      );
+    }
+  );
+
+  test(
+    'recoverDeadMemoryReleaseTest fails closed before mutation',
+    function() {
+      var mutationCalls = 0;
+      var activeResult = null;
+      var mismatchResult = null;
+      var dead = {
+        eventId:
+          'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        eventType: 'MEMORY_EXTRACT',
+        status: 'DEAD',
+        attemptCount: 0,
+        nextAttemptAt: null,
+        lockedAt: null,
+        lockedBy: null,
+        completedAt:
+          '2026-07-26T14:00:00+09:00',
+        updatedAt:
+          '2026-07-26T14:00:00+09:00',
+        dedupeKey:
+          'MEMORY_EXTRACT:' +
+          '11111111-1111-4111-8111-111111111111:' +
+          '33333333-3333-4333-8333-333333333333',
+        payload: {
+          firstMessageId:
+            '11111111-1111-4111-8111-111111111111',
+          lastMessageId:
+            '33333333-3333-4333-8333-333333333333',
+          sourceMessageIds: [
+            '11111111-1111-4111-8111-111111111111',
+            '33333333-3333-4333-8333-333333333333'
+          ],
+          requestedAt:
+            '2026-07-26T12:00:00+09:00',
+          characterRuntimeMode: 'enforced',
+          characterBinding:
+            buildValidMemoryResumeBinding()
+        },
+        lastError: {
+          code: 'CHARACTER_OUTPUT_BLOCKED'
+        }
+      };
+      var active = {
+        eventId:
+          'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        eventType: 'CHAT_REPLY',
+        status: 'PENDING'
+      };
+      var events = [dead, active];
+
+      withOverrides({
+        console: {
+          log: function() {}
+        },
+        ScriptApp: {
+          getProjectTriggers: function() {
+            return [];
+          }
+        },
+        SheetRepository: {
+          listEvents: function() {
+            return events;
+          },
+          getUserState: function() {
+            return {
+              last_memory_cursor: null
+            };
+          }
+        },
+        selectMemoryExtractionBatch_: function() {
+          return {
+            ready: true,
+            messageCount: 2,
+            firstMessageId:
+              dead.payload.firstMessageId,
+            lastMessageId:
+              dead.payload.lastMessageId,
+            sourceMessageIds:
+              dead.payload.sourceMessageIds.slice()
+          };
+        },
+        QueueService: {
+          requeueDeadMemoryAsNewEvent: function() {
+            mutationCalls += 1;
+          }
+        },
+        processReleaseTestEventById_: function() {
+          mutationCalls += 1;
+        }
+      }, function() {
+        activeResult =
+          recoverDeadMemoryReleaseTest();
+        events = [dead];
+        mismatchResult =
+          recoverDeadMemoryReleaseTest();
+      });
+
+      assert(
+        mutationCalls === 0 &&
+          activeResult.reason ===
+            'ACTIVE_QUEUE_NOT_EMPTY' &&
+          mismatchResult.reason ===
+            'TARGET_EVENT_MISMATCH' &&
+          mismatchResult.status === 'DEAD' &&
+          mismatchResult.errorCode ===
+            'CHARACTER_OUTPUT_BLOCKED',
+        'An unsafe DEAD recovery reached mutation.'
       );
     }
   );

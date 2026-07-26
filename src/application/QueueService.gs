@@ -416,6 +416,124 @@ var QueueService = (function() {
     });
   }
 
+  function requeueDeadMemoryAsNewEvent(
+    eventId,
+    manualRequestId,
+    now,
+    expectedFingerprint
+  ) {
+    return LockManager.withScriptLock(
+      'queue-requeue-dead-memory',
+      function() {
+        var event = SheetRepository.getEventById(eventId);
+        ensure(
+          event,
+          'CONFIG_MISSING',
+          'Event was not found.'
+        );
+        ensure(
+          event.status === 'DEAD' &&
+            event.eventType === 'MEMORY_EXTRACT',
+          'VALIDATION_REQUEST_INVALID',
+          'Memory recovery requires a DEAD MEMORY_EXTRACT event.'
+        );
+        Validators.assertUuidV4(
+          manualRequestId,
+          'manualRequestId'
+        );
+        ensure(
+          expectedFingerprint &&
+            matchesExpectedDeadMemoryFingerprint_(
+              event,
+              expectedFingerprint
+            ),
+          'VALIDATION_REQUEST_INVALID',
+          'The DEAD memory event changed before recovery.'
+        );
+        ensure(
+          !hasActiveEvents_(),
+          'VALIDATION_REQUEST_INVALID',
+          'Memory recovery requires an otherwise idle queue.'
+        );
+        ensure(
+          matchesExpectedMemoryCursor_(
+            expectedFingerprint.lastMemoryCursor
+          ),
+          'VALIDATION_REQUEST_INVALID',
+          'The memory cursor changed before recovery.'
+        );
+
+        var repairDedupeKey =
+          'MEMORY_EXTRACT_REPAIR:' + event.eventId;
+        var existingRepair =
+          SheetRepository.getEventByDedupeKey(
+            repairDedupeKey
+          );
+        if (existingRepair) {
+          return existingRepair;
+        }
+
+        var nowIso = normalizeNow_(now);
+        var nextEvent = normalizeEventForInsert_({
+          eventType: 'MEMORY_EXTRACT',
+          dedupeKey: repairDedupeKey,
+          payload: mergePayload_(event.payload, {
+            manualRequestId: manualRequestId,
+            originalEventId: event.eventId
+          }),
+          status: 'PENDING',
+          attemptCount: 0,
+          nextAttemptAt: nowIso,
+          createdAt: nowIso,
+          updatedAt: nowIso
+        });
+        SheetRepository.insertEvent(nextEvent);
+        return nextEvent;
+      }
+    );
+  }
+
+  function matchesExpectedDeadMemoryFingerprint_(
+    event,
+    fingerprint
+  ) {
+    return Boolean(
+      matchesExpectedClaimFingerprint_(
+        event,
+        fingerprint
+      ) &&
+        event.status === 'DEAD' &&
+        Number.isSafeInteger(
+          Number(event.attemptCount)
+        ) &&
+        Number(event.attemptCount) > 0 &&
+        Number(event.attemptCount) <= 5 &&
+        event.nextAttemptAt == null &&
+        event.lockedAt == null &&
+        event.lockedBy == null &&
+        (event.completedAt || null) ===
+          (fingerprint.completedAt || null) &&
+        (event.updatedAt || null) ===
+          (fingerprint.updatedAt || null) &&
+        event.lastError &&
+        event.lastError.code ===
+          fingerprint.lastErrorCode
+    );
+  }
+
+  function hasActiveEvents_() {
+    var activeStatuses = {
+      PENDING: true,
+      PROCESSING: true,
+      RETRY_WAIT: true
+    };
+    return (SheetRepository.listEvents() || []).some(
+      function(event) {
+        return event && activeStatuses[event.status];
+      }
+    );
+  }
+
   function assessDeadEventRecovery(eventId) {
     var event = SheetRepository.getEventById(eventId);
     ensure(event, 'CONFIG_MISSING', 'Event was not found.');
@@ -577,6 +695,26 @@ var QueueService = (function() {
       return chatPayload;
     }
     if (eventType === 'MEMORY_EXTRACT') {
+      var hasMemoryManualRequestId =
+        payload.manualRequestId != null;
+      var hasMemoryOriginalEventId =
+        payload.originalEventId != null;
+      ensure(
+        hasMemoryManualRequestId ===
+          hasMemoryOriginalEventId,
+        'VALIDATION_REQUEST_INVALID',
+        'MEMORY_EXTRACT repair ids must be provided together.'
+      );
+      if (hasMemoryManualRequestId) {
+        Validators.assertUuidV4(
+          payload.manualRequestId,
+          'MEMORY_EXTRACT payload.manualRequestId'
+        );
+        Validators.assertUuidV4(
+          payload.originalEventId,
+          'MEMORY_EXTRACT payload.originalEventId'
+        );
+      }
       var memoryPayload = {
         firstMessageId: payload.firstMessageId,
         lastMessageId: payload.lastMessageId,
@@ -606,6 +744,12 @@ var QueueService = (function() {
           'VALIDATION_REQUEST_INVALID',
           'Legacy MEMORY_EXTRACT payload must not contain a character binding.'
         );
+      }
+      if (hasMemoryManualRequestId) {
+        memoryPayload.manualRequestId =
+          payload.manualRequestId;
+        memoryPayload.originalEventId =
+          payload.originalEventId;
       }
       return memoryPayload;
     }
@@ -1102,6 +1246,8 @@ var QueueService = (function() {
     expediteDiaryNarrativeLengthRetries: expediteDiaryNarrativeLengthRetries,
     requeueDeadAsNewEvent: requeueDeadAsNewEvent,
     requeueDeadDiaryAsNewEvent: requeueDeadDiaryAsNewEvent,
+    requeueDeadMemoryAsNewEvent:
+      requeueDeadMemoryAsNewEvent,
     assessDeadEventRecovery: assessDeadEventRecovery,
     __test: {
       buildDedupeKey: buildDedupeKey_,
