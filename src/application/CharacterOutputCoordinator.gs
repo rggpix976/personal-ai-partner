@@ -14,6 +14,14 @@ var CharacterOutputCoordinator = (function() {
     'adminRequest',
     'capabilityUnavailable'
   ]);
+  var SAFE_MEMORY_GENERATION_ERROR_CODES = Object.freeze([
+    'CONFIG_MISSING',
+    'GEMINI_RATE_LIMIT',
+    'GEMINI_AUTH_FAILED',
+    'GEMINI_MODEL_UNAVAILABLE',
+    'GEMINI_BAD_RESPONSE',
+    'GEMINI_TEMPORARY_FAILURE'
+  ]);
 
   function approve(options) {
     validateOptions_(options);
@@ -109,7 +117,12 @@ var CharacterOutputCoordinator = (function() {
           surface: surface,
           mode: mode
         }));
-      } catch (ignored) {
+      } catch (generationError) {
+        var safeMemoryError =
+          rebuildSafeMemoryGenerationError_(surface, generationError);
+        if (safeMemoryError) {
+          throw safeMemoryError;
+        }
         return fallbackOrFail_(
           classified,
           surface,
@@ -262,6 +275,28 @@ var CharacterOutputCoordinator = (function() {
     return approvalResult_(
       ApprovedCharacterArtifactService.issue(decision, context),
       context
+    );
+  }
+
+  function rebuildSafeMemoryGenerationError_(surface, error) {
+    if (surface !== 'MEMORY_EXTRACTION') {
+      return null;
+    }
+    var code = null;
+    try {
+      var candidateCode = error && error.code;
+      code = typeof candidateCode === 'string'
+        ? candidateCode
+        : null;
+    } catch (ignored) {
+      return null;
+    }
+    if (SAFE_MEMORY_GENERATION_ERROR_CODES.indexOf(code) === -1) {
+      return null;
+    }
+    return createAppError(
+      code,
+      'Memory generation failed before guard assessment.'
     );
   }
 

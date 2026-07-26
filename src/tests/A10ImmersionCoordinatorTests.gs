@@ -475,6 +475,219 @@ function runA10ImmersionCoordinatorTests() {
     });
   });
 
+  test('memory generation preserves only allowlisted safe error codes', function() {
+    withContext('MEMORY_EXTRACTION', null, function(context) {
+      [
+        'CONFIG_MISSING',
+        'GEMINI_RATE_LIMIT',
+        'GEMINI_AUTH_FAILED',
+        'GEMINI_MODEL_UNAVAILABLE',
+        'GEMINI_BAD_RESPONSE',
+        'GEMINI_TEMPORARY_FAILURE'
+      ].forEach(function(code) {
+        var privateMarker = 'PRIVATE-MEMORY-GENERATION-' + code;
+        var definition = APP_ERROR_DEFINITIONS[code];
+        var apiCalls = 0;
+        var metrics = metricCollector();
+        withGlobal('GeminiClient', {
+          generateStructured: function() {
+            apiCalls += 1;
+            throw createAppError(
+              code,
+              privateMarker,
+              {
+                privatePayload: privateMarker
+              },
+              {
+                userMessage: privateMarker,
+                retryable: !definition.retryable,
+                retryStrategy:
+                  definition.retryStrategy === 'NONE'
+                    ? 'COMMON_BACKOFF'
+                    : 'NONE',
+                cause: new Error(privateMarker)
+              }
+            );
+          }
+        }, function() {
+          var session = CharacterMemoryGeminiAdapter.createSession({
+            allowedSourceMessageIds: [
+              '11111111-1111-4111-8111-111111111111'
+            ]
+          });
+          var verifierCalls = 0;
+          var error = expectCode(function() {
+            CharacterOutputCoordinator.approve({
+              context: context,
+              surface: 'MEMORY_EXTRACTION',
+              generate: session.generate,
+              rewrite: session.rewrite,
+              verifierFn: function() {
+                verifierCalls += 1;
+                return {
+                  verdict: 'allow',
+                  category: null,
+                  evidenceKeys: []
+                };
+              },
+              metricEmitter: metrics.emit
+            });
+          }, code);
+          var serialized = JSON.stringify(error.toLogObject());
+          assert(
+            apiCalls === 1 && verifierCalls === 0,
+            code + ' consumed rewrite or verifier budget.'
+          );
+          assert(
+            error.message ===
+              'Memory generation failed before guard assessment.' &&
+              error.details === null &&
+              error.cause === null,
+            code + ' retained private generation error fields.'
+          );
+          assert(
+            error.retryable === definition.retryable &&
+              error.retryStrategy === definition.retryStrategy &&
+              error.httpStatus === definition.httpStatus,
+            code + ' inherited untrusted retry metadata.'
+          );
+          assert(
+            serialized.indexOf(privateMarker) === -1 &&
+              JSON.stringify(metrics.events)
+                .indexOf(privateMarker) === -1,
+            code + ' leaked private generation details.'
+          );
+          assert(
+            metrics.events.length === 0,
+            code + ' was misreported as a guard decision.'
+          );
+        });
+      });
+    });
+  });
+
+  test('unknown memory generation failures remain fail closed', function() {
+    withContext('MEMORY_EXTRACTION', null, function(context) {
+      var privateMarker = 'PRIVATE-UNKNOWN-MEMORY-GENERATION';
+      var throwingCode = {};
+      Object.defineProperty(throwingCode, 'code', {
+        get: function() {
+          throw new Error(privateMarker);
+        }
+      });
+      [
+        new Error(privateMarker),
+        createAppError(
+          'VALIDATION_REQUEST_INVALID',
+          privateMarker,
+          { privatePayload: privateMarker }
+        ),
+        throwingCode
+      ].forEach(function(generationError) {
+        var rewriteCalls = 0;
+        var verifierCalls = 0;
+        var metrics = metricCollector();
+        var error = expectCode(function() {
+          CharacterOutputCoordinator.approve({
+            context: context,
+            surface: 'MEMORY_EXTRACTION',
+            generate: function() {
+              throw generationError;
+            },
+            rewrite: function() {
+              rewriteCalls += 1;
+            },
+            verifierFn: function() {
+              verifierCalls += 1;
+            },
+            metricEmitter: metrics.emit
+          });
+        }, 'CHARACTER_OUTPUT_BLOCKED');
+        assert(
+          rewriteCalls === 0 && verifierCalls === 0,
+          'Unknown memory failure reached rewrite or verifier.'
+        );
+        assert(
+          JSON.stringify(error.toLogObject()).indexOf(privateMarker) === -1 &&
+            JSON.stringify(metrics.events).indexOf(privateMarker) === -1,
+          'Unknown memory failure leaked private details.'
+        );
+        assert(
+          hasMetric(metrics.events, 'immersion_fail_closed_total'),
+          'Unknown memory failure did not fail closed.'
+        );
+      });
+    });
+  });
+
+  test('memory-only error propagation does not change chat or proactive failures', function() {
+    var privateMarker = 'PRIVATE-NON-MEMORY-GENERATION';
+    function providerError() {
+      return createAppError(
+        'GEMINI_AUTH_FAILED',
+        privateMarker,
+        { privatePayload: privateMarker },
+        { cause: new Error(privateMarker) }
+      );
+    }
+
+    withContext('CHAT_TEXT_SYNC', '話して', function(context) {
+      var chatMetrics = metricCollector();
+      var artifact = approveArtifact({
+        context: context,
+        surface: 'CHAT_TEXT_SYNC',
+        generate: function() {
+          throw providerError();
+        },
+        metricEmitter: chatMetrics.emit
+      });
+      assert(
+        artifact.source === 'fallback',
+        'Allowlisted provider error escaped the chat fallback.'
+      );
+      assert(
+        JSON.stringify(artifact).indexOf(privateMarker) === -1 &&
+          JSON.stringify(chatMetrics.events).indexOf(privateMarker) === -1,
+        'Chat failure leaked private provider details.'
+      );
+    });
+
+    withContext('PROACTIVE_AI', null, function(context) {
+      var proactiveMetrics = metricCollector();
+      var rewriteCalls = 0;
+      var error = expectCode(function() {
+        CharacterOutputCoordinator.approve({
+          context: context,
+          surface: 'PROACTIVE_AI',
+          generate: function() {
+            throw providerError();
+          },
+          rewrite: function() {
+            rewriteCalls += 1;
+          },
+          metricEmitter: proactiveMetrics.emit
+        });
+      }, 'CHARACTER_OUTPUT_BLOCKED');
+      assert(
+        rewriteCalls === 0,
+        'Allowlisted proactive provider error reached rewrite.'
+      );
+      assert(
+        hasMetric(
+          proactiveMetrics.events,
+          'immersion_fail_closed_total'
+        ),
+        'Proactive provider failure did not fail closed.'
+      );
+      assert(
+        JSON.stringify(error.toLogObject()).indexOf(privateMarker) === -1 &&
+          JSON.stringify(proactiveMetrics.events)
+            .indexOf(privateMarker) === -1,
+        'Proactive failure leaked private provider details.'
+      );
+    });
+  });
+
   test('proactive generation failure has no fixed message and fails closed', function() {
     withContext('PROACTIVE_AI', null, function(context) {
       var privateError = 'PRIVATE-PROACTIVE-PROVIDER-ERROR';

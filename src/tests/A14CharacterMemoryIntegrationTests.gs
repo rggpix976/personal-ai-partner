@@ -325,6 +325,135 @@ function runA14CharacterMemoryIntegrationTests() {
     );
   });
 
+  test('enforced memory preserves coordinator failures without reaching the sink', function() {
+    [
+      'CONFIG_MISSING',
+      'GEMINI_RATE_LIMIT',
+      'GEMINI_AUTH_FAILED',
+      'GEMINI_MODEL_UNAVAILABLE',
+      'GEMINI_BAD_RESPONSE',
+      'GEMINI_TEMPORARY_FAILURE',
+      'CHARACTER_OUTPUT_BLOCKED'
+    ].forEach(function(code) {
+      var queuePayload = payload();
+      var leaseToken = 'queue-lease:v1:memory-failure';
+      var sinkCalls = 0;
+      var writeCalls = 0;
+      var usageCalls = 0;
+      var error = null;
+      withGlobals({
+        SheetRepository: {
+          getEventById: function() {
+            return {
+              eventId: eventId(),
+              eventType: 'MEMORY_EXTRACT',
+              payload: queuePayload,
+              status: 'PROCESSING',
+              lockedBy: leaseToken
+            };
+          },
+          assertMemoryProvenanceColumns: function() {
+            return true;
+          },
+          listActiveMemories: function() {
+            return [];
+          },
+          listMessagesByIds: function() {
+            return [{
+              messageId: sourceMessageId(),
+              role: 'user',
+              messageType: 'text',
+              text: 'approved source',
+              status: 'accepted'
+            }];
+          },
+          upsertMemory: function() {
+            writeCalls += 1;
+          },
+          incrementUsageDaily: function() {
+            usageCalls += 1;
+          }
+        },
+        CharacterMemoryContextService: {
+          acceptedSourceMessageIds: function() {
+            return [sourceMessageId()];
+          },
+          build: function() {
+            return generationView();
+          },
+          assertBindingMatchesContext: function() {
+            return true;
+          },
+          classificationSignals: function() {
+            return {
+              safetyRequired: false,
+              adminRequest: false,
+              capabilityUnavailable: false
+            };
+          }
+        },
+        CharacterMemoryGeminiAdapter: {
+          createSession: function() {
+            return {
+              generate: function() {
+                throw new Error('generate should be owned by coordinator');
+              },
+              rewrite: function() {
+                throw new Error('rewrite should not run');
+              },
+              verify: function() {
+                throw new Error('verify should not run');
+              },
+              emitMetric: function() {},
+              getUsage: function() {
+                return {
+                  apiCalls: 1,
+                  imageCalls: 0,
+                  inputTokens: 0,
+                  outputTokens: 0
+                };
+              }
+            };
+          }
+        },
+        CharacterOutputCoordinator: {
+          approve: function() {
+            throw createAppError(code, 'controlled memory failure');
+          }
+        },
+        CharacterSinkAdapter: {
+          deliver: function() {
+            sinkCalls += 1;
+          }
+        },
+        AppLogger: {
+          writeDebugLog: function() {}
+        }
+      }, function() {
+        try {
+          MemoryService.extract(queuePayload, {
+            eventId: eventId(),
+            leaseToken: leaseToken
+          });
+        } catch (caught) {
+          error = caught;
+        }
+      });
+      assert(
+        error && error.code === code,
+        code + ' changed at the MemoryService boundary.'
+      );
+      assert(
+        sinkCalls === 0 && writeCalls === 0,
+        code + ' reached the memory sink.'
+      );
+      assert(
+        usageCalls === 1,
+        code + ' did not record its single generation call.'
+      );
+    });
+  });
+
   test('enforced memory writes only the approved candidate with provenance', function() {
     var queuePayload = payload();
     var leaseToken = 'queue-lease:v1:memory-test';
