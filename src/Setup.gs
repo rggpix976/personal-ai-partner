@@ -85,20 +85,25 @@ function validatePostDeployProperties() {
 }
 
 function assertPostDeployWebAppUrl_(configuredUrl, deployedUrl) {
-  var webAppUrlPattern =
+  var configuredWebAppUrlPattern =
     /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/;
+  var runtimeWebAppUrlPattern =
+    /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/(?:exec|dev)$/;
+  var configuredValue = String(configuredUrl || '');
+  var deployedValue = String(deployedUrl || '');
   ensure(
-    webAppUrlPattern.test(String(configuredUrl || '')),
+    configuredWebAppUrlPattern.test(configuredValue),
     'CONFIG_MISSING',
     'WEB_APP_URL must be an exact Apps Script Web App /exec URL.'
   );
   ensure(
-    webAppUrlPattern.test(String(deployedUrl || '')),
+    runtimeWebAppUrlPattern.test(deployedValue),
     'CONFIG_MISSING',
-    'The Apps Script project does not expose a deployed Web App /exec URL.'
+    'The Apps Script project does not expose a deployed Web App URL.'
   );
+  var normalizedDeployedUrl = deployedValue.replace(/\/dev$/, '/exec');
   ensure(
-    configuredUrl === deployedUrl,
+    configuredValue === normalizedDeployedUrl,
     'CONFIG_MISSING',
     'WEB_APP_URL must exactly match the deployed Web App URL.'
   );

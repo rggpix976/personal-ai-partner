@@ -106,12 +106,33 @@ function runA2PlatformTests() {
     );
   });
 
+  test('post-deploy validation normalizes the editor development URL', function() {
+    assert(
+      assertPostDeployWebAppUrl_(
+        'https://script.google.com/macros/s/AKfycbw_test-123/exec',
+        'https://script.google.com/macros/s/AKfycbw_test-123/dev'
+      ) === true,
+      'The same Web App development URL should validate in the editor.'
+    );
+  });
+
   expectThrows(
     'post-deploy validation rejects a library or unrelated exec URL',
     function() {
       assertPostDeployWebAppUrl_(
         'https://example.com/not-a-web-app/exec',
         'https://script.google.com/macros/s/AKfycbw_test-123/exec'
+      );
+    },
+    'CONFIG_MISSING'
+  );
+
+  expectThrows(
+    'post-deploy validation rejects a configured development URL',
+    function() {
+      assertPostDeployWebAppUrl_(
+        'https://script.google.com/macros/s/AKfycbw_test-123/dev',
+        'https://script.google.com/macros/s/AKfycbw_test-123/dev'
       );
     },
     'CONFIG_MISSING'
