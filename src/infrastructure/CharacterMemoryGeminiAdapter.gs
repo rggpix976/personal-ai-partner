@@ -121,16 +121,13 @@ var CharacterMemoryGeminiAdapter = (function() {
       usage.apiCalls += 1;
       var response;
       try {
+        // Candidate constraints are enforced below after JSON parsing. A
+        // per-event response schema can exceed Gemini's complexity limit.
         response = GeminiClient.generateStructured(
           request,
-          schemaName,
           schemaName === 'character-memory-candidates'
-            ? {
-              allowedSourceMessageIds: allowedSourceIds.slice(),
-              allowedExistingMemoryIds:
-                Object.keys(allowedExistingMemorySet)
-            }
-            : undefined
+            ? null
+            : schemaName
         );
       } catch (error) {
         throw sanitizeGeminiError_(error);

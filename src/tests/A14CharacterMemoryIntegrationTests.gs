@@ -245,10 +245,9 @@ function runA14CharacterMemoryIntegrationTests() {
     );
   });
 
-  test('memory adapter binds the provider schema to current evidence', function() {
-    var capturedOptions = null;
-    var existingMemoryId =
-      '33333333-3333-4333-8333-333333333333';
+  test('memory adapter uses JSON mode before strict local grounding', function() {
+    var capturedSchemaName = 'unset';
+    var capturedOptions = 'unset';
     withGlobals({
       GeminiClient: {
         generateStructured: function(
@@ -256,6 +255,7 @@ function runA14CharacterMemoryIntegrationTests() {
           schemaName,
           schemaOptions
         ) {
+          capturedSchemaName = schemaName;
           capturedOptions = schemaOptions;
           return {
             data: {
@@ -269,26 +269,15 @@ function runA14CharacterMemoryIntegrationTests() {
         allowedSourceMessageIds: [sourceMessageId()]
       });
       session.generate({
-        context: generationView([{
-          memoryId: existingMemoryId,
-          category: 'preference',
-          normalizedKey: 'favorite.drink',
-          content: 'approved existing memory',
-          confidence: 0.9
-        }]),
+        context: generationView(),
         surface: 'MEMORY_EXTRACTION',
         mode: 'CHARACTER'
       });
     });
     assert(
-      capturedOptions &&
-        JSON.stringify(
-          capturedOptions.allowedSourceMessageIds
-        ) === JSON.stringify([sourceMessageId()]) &&
-        JSON.stringify(
-          capturedOptions.allowedExistingMemoryIds
-        ) === JSON.stringify([existingMemoryId]),
-      'Memory provider schema was not bound to current evidence.'
+      capturedSchemaName === null &&
+        capturedOptions === undefined,
+      'Memory generation did not use schema-less JSON mode.'
     );
   });
 
@@ -385,7 +374,7 @@ function runA14CharacterMemoryIntegrationTests() {
       GeminiClient: {
         generateStructured: function(request, schemaName) {
           calls += 1;
-          if (schemaName === 'character-memory-candidates') {
+          if (schemaName === null) {
             return {
               data: {
                 candidates: [candidate()]

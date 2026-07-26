@@ -9,11 +9,8 @@ var GeminiClient = (function() {
     return generateContent_(request, request && request.image ? request.image : null);
   }
 
-  function generateStructured(request, schemaName, schemaOptions) {
-    var responseJsonSchema = getStructuredResponseSchema_(
-      schemaName,
-      schemaOptions
-    );
+  function generateStructured(request, schemaName) {
+    var responseJsonSchema = getStructuredResponseSchema_(schemaName);
     var response = generateContent_(request, request && request.image ? request.image : null, {
       responseMimeType: 'application/json',
       responseJsonSchema: responseJsonSchema
@@ -80,13 +77,13 @@ var GeminiClient = (function() {
     return body;
   }
 
-  function getStructuredResponseSchema_(schemaName, schemaOptions) {
+  function getStructuredResponseSchema_(schemaName) {
     return sanitizeStructuredResponseSchema_(
-      buildStructuredResponseSchema_(schemaName, schemaOptions)
+      buildStructuredResponseSchema_(schemaName)
     );
   }
 
-  function buildStructuredResponseSchema_(schemaName, schemaOptions) {
+  function buildStructuredResponseSchema_(schemaName) {
     if (schemaName === 'character-chat-image') {
       return {
         type: 'object',
@@ -158,26 +155,6 @@ var GeminiClient = (function() {
           'category',
           'evidenceKeys'
         ]
-      };
-    }
-
-    if (schemaName === 'character-memory-candidates') {
-      var memorySchemaOptions = normalizeMemorySchemaOptions_(
-        schemaOptions
-      );
-      return {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          candidates: {
-            type: 'array',
-            maxItems: 20,
-            items: buildMemoryCandidateSchema_(
-              memorySchemaOptions
-            )
-          }
-        },
-        required: ['candidates']
       };
     }
 
@@ -260,101 +237,6 @@ var GeminiClient = (function() {
     return null;
   }
 
-  function normalizeMemorySchemaOptions_(options) {
-    ensure(
-      isPlainObject_(options) &&
-        hasExactKeys_(
-          options,
-          [
-            'allowedSourceMessageIds',
-            'allowedExistingMemoryIds'
-          ]
-        ) &&
-        isUuidList_(
-          options.allowedSourceMessageIds,
-          100,
-          false
-        ) &&
-        isUuidList_(
-          options.allowedExistingMemoryIds,
-          100,
-          true
-        ),
-      'VALIDATION_REQUEST_INVALID',
-      'Character memory response schema options are invalid.'
-    );
-    return {
-      allowedSourceMessageIds:
-        options.allowedSourceMessageIds.slice(),
-      allowedExistingMemoryIds:
-        options.allowedExistingMemoryIds.slice()
-    };
-  }
-
-  function buildMemoryCandidateSchema_(options) {
-    // Keep this provider schema flat: Gemini may reject large/deep schemas.
-    // normalizeCandidate_ still enforces action-specific exact keys locally.
-    var actions = ['create', 'ignore'];
-    if (options.allowedExistingMemoryIds.length > 0) {
-      actions.push('confirm');
-      actions.push('update');
-    }
-    var properties = {
-      action: {
-        type: 'string',
-        enum: actions
-      },
-      category: {
-        type: 'string',
-        enum: APP_CONSTANTS.MEMORY_CATEGORIES.slice()
-      },
-      normalizedKey: {
-        type: 'string'
-      },
-      content: {
-        type: 'string'
-      },
-      confidence: {
-        type: 'number',
-        minimum: 0,
-        maximum: 1
-      },
-      sourceMessageIds: {
-        type: 'array',
-        minItems: 1,
-        maxItems: 100,
-        items: {
-          type: 'string',
-          enum: options.allowedSourceMessageIds.slice()
-        }
-      },
-      reason: {
-        type: 'string'
-      }
-    };
-    var required = [
-      'action',
-      'category',
-      'normalizedKey',
-      'content',
-      'confidence',
-      'sourceMessageIds',
-      'reason'
-    ];
-    if (options.allowedExistingMemoryIds.length > 0) {
-      properties.existingMemoryId = {
-        type: 'string',
-        enum: options.allowedExistingMemoryIds.slice()
-      };
-    }
-    return {
-      type: 'object',
-      additionalProperties: false,
-      properties: properties,
-      required: required
-    };
-  }
-
   function sanitizeStructuredResponseSchema_(value) {
     if (Array.isArray(value)) {
       return value.map(sanitizeStructuredResponseSchema_);
@@ -376,43 +258,6 @@ var GeminiClient = (function() {
       );
     });
     return result;
-  }
-
-  function isUuidList_(value, maxItems, allowEmpty) {
-    if (
-      !Array.isArray(value) ||
-      value.length > maxItems ||
-      (!allowEmpty && value.length === 0)
-    ) {
-      return false;
-    }
-    var seen = {};
-    return value.every(function(id) {
-      if (!Validators.isUuidV4(id) || seen[id]) {
-        return false;
-      }
-      seen[id] = true;
-      return true;
-    });
-  }
-
-  function hasExactKeys_(value, expectedKeys) {
-    if (!isPlainObject_(value)) {
-      return false;
-    }
-    var keys = Object.keys(value);
-    return keys.length === expectedKeys.length &&
-      expectedKeys.every(function(key) {
-        return Object.prototype.hasOwnProperty.call(value, key);
-      });
-  }
-
-  function isPlainObject_(value) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      return false;
-    }
-    var prototype = Object.getPrototypeOf(value);
-    return prototype === Object.prototype || prototype === null;
   }
 
   function safeStageDetails_(stage) {
