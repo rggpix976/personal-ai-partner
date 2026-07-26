@@ -110,9 +110,9 @@ function runA2PlatformTests() {
     assert(
       assertPostDeployWebAppUrl_(
         'https://script.google.com/macros/s/AKfycbw_test-123/exec',
-        'https://script.google.com/macros/s/AKfycbw_test-123/dev'
+        'https://script.google.com/macros/s/AKfycbw_editor-456/dev'
       ) === true,
-      'The same Web App development URL should validate in the editor.'
+      'An editor development URL may use a different deployment identity.'
     );
   });
 

@@ -77,9 +77,13 @@ function validatePostDeployProperties() {
   var configuredUrl = String(
     properties[APP_CONSTANTS.PROPERTY_KEYS.WEB_APP_URL] || ''
   );
-  var deployedUrl = String(
-    ScriptApp.getService().getUrl() || ''
+  var webAppService = ScriptApp.getService();
+  ensure(
+    webAppService.isEnabled(),
+    'CONFIG_MISSING',
+    'The Apps Script project is not enabled as a Web App.'
   );
+  var deployedUrl = String(webAppService.getUrl() || '');
   assertPostDeployWebAppUrl_(configuredUrl, deployedUrl);
   return true;
 }
@@ -101,12 +105,13 @@ function assertPostDeployWebAppUrl_(configuredUrl, deployedUrl) {
     'CONFIG_MISSING',
     'The Apps Script project does not expose a deployed Web App URL.'
   );
-  var normalizedDeployedUrl = deployedValue.replace(/\/dev$/, '/exec');
-  ensure(
-    configuredValue === normalizedDeployedUrl,
-    'CONFIG_MISSING',
-    'WEB_APP_URL must exactly match the deployed Web App URL.'
-  );
+  if (/\/exec$/.test(deployedValue)) {
+    ensure(
+      configuredValue === deployedValue,
+      'CONFIG_MISSING',
+      'WEB_APP_URL must exactly match the deployed Web App URL.'
+    );
+  }
   return true;
 }
 
