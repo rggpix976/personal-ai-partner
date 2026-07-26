@@ -2020,6 +2020,17 @@ function runA6QueueSchedulerTests() {
 
   test('proactive evaluation enforces quiet hours, max per day, cooldown, and mail quota', function() {
     withOverrides({
+      PropertiesService: {
+        getScriptProperties: function() {
+          return {
+            getProperty: function(key) {
+              return key === APP_CONSTANTS.PROPERTY_KEYS.APP_ENV
+                ? 'prod'
+                : null;
+            }
+          };
+        }
+      },
       SheetRepository: {
         ensureDefaultUserState: function() {},
         getUserState: function() {
