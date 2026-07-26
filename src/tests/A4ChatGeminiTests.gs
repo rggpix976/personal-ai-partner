@@ -244,7 +244,7 @@ function runA4ChatGeminiTests() {
     });
   });
 
-  test('Gemini memory schema binds actions to exact source and memory ids', function() {
+  test('Gemini memory schema stays compact and binds provider ids', function() {
     var sourceIds = [
       '11111111-1111-4111-8111-111111111111',
       '22222222-2222-4222-8222-222222222222'
@@ -259,34 +259,27 @@ function runA4ChatGeminiTests() {
           allowedExistingMemoryIds: [memoryId]
         }
       );
-    var branches =
-      schema.properties.candidates.items.anyOf;
-    var byAction = {};
-    branches.forEach(function(branch) {
-      byAction[branch.properties.action.enum[0]] = branch;
-    });
+    var candidateSchema = schema.properties.candidates.items;
     assert(
-      branches.length === 4 &&
-        byAction.create &&
-        byAction.ignore &&
-        byAction.confirm &&
-        byAction.update,
-      'Memory action branches are incomplete.'
+      candidateSchema.anyOf === undefined &&
+        candidateSchema.type === 'object' &&
+        candidateSchema.additionalProperties === false,
+      'Memory schema must avoid provider-rejected branch expansion.'
     );
     assert(
       JSON.stringify(
-        byAction.create.properties.sourceMessageIds.items.enum
+        candidateSchema.properties.sourceMessageIds.items.enum
       ) === JSON.stringify(sourceIds) &&
-        byAction.create.properties.existingMemoryId === undefined &&
-        byAction.create.required.indexOf('existingMemoryId') === -1,
-      'Create memory schema does not enforce exact provenance.'
+        JSON.stringify(candidateSchema.properties.action.enum) ===
+          JSON.stringify(['create', 'ignore', 'confirm', 'update']),
+      'Memory schema does not constrain actions and provenance.'
     );
     assert(
       JSON.stringify(
-        byAction.confirm.properties.existingMemoryId.enum
+        candidateSchema.properties.existingMemoryId.enum
       ) === JSON.stringify([memoryId]) &&
-        byAction.confirm.required.indexOf('existingMemoryId') !== -1,
-      'Confirm memory schema does not enforce an approved memory id.'
+        candidateSchema.required.indexOf('existingMemoryId') === -1,
+      'Memory schema must expose only approved optional memory ids.'
     );
 
     var noExisting = GeminiClient.__test
@@ -297,11 +290,11 @@ function runA4ChatGeminiTests() {
           allowedExistingMemoryIds: []
         }
       )
-      .properties.candidates.items.anyOf;
+      .properties.candidates.items;
     assert(
-      JSON.stringify(noExisting.map(function(branch) {
-        return branch.properties.action.enum[0];
-      })) === JSON.stringify(['create', 'ignore']),
+      JSON.stringify(noExisting.properties.action.enum) ===
+        JSON.stringify(['create', 'ignore']) &&
+        noExisting.properties.existingMemoryId === undefined,
       'Memory schema offered existing-memory actions without an id.'
     );
   });

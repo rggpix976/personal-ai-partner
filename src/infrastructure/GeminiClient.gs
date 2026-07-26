@@ -292,48 +292,17 @@ var GeminiClient = (function() {
   }
 
   function buildMemoryCandidateSchema_(options) {
-    var branches = [
-      buildMemoryCandidateActionSchema_(
-        'create',
-        options,
-        false
-      ),
-      buildMemoryCandidateActionSchema_(
-        'ignore',
-        options,
-        false
-      )
-    ];
+    // Keep this provider schema flat: Gemini may reject large/deep schemas.
+    // normalizeCandidate_ still enforces action-specific exact keys locally.
+    var actions = ['create', 'ignore'];
     if (options.allowedExistingMemoryIds.length > 0) {
-      branches.push(
-        buildMemoryCandidateActionSchema_(
-          'confirm',
-          options,
-          true
-        )
-      );
-      branches.push(
-        buildMemoryCandidateActionSchema_(
-          'update',
-          options,
-          true
-        )
-      );
+      actions.push('confirm');
+      actions.push('update');
     }
-    return {
-      anyOf: branches
-    };
-  }
-
-  function buildMemoryCandidateActionSchema_(
-    action,
-    options,
-    requiresExisting
-  ) {
     var properties = {
       action: {
         type: 'string',
-        enum: [action]
+        enum: actions
       },
       category: {
         type: 'string',
@@ -372,12 +341,11 @@ var GeminiClient = (function() {
       'sourceMessageIds',
       'reason'
     ];
-    if (requiresExisting) {
+    if (options.allowedExistingMemoryIds.length > 0) {
       properties.existingMemoryId = {
         type: 'string',
         enum: options.allowedExistingMemoryIds.slice()
       };
-      required.push('existingMemoryId');
     }
     return {
       type: 'object',
