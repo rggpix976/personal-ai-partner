@@ -126,6 +126,7 @@ ProactiveMessageService.evaluateLocalConditions(now)
 ProactiveMessageService.evaluateByAi(input)
 ProactiveMessageService.prepareDispatch(eventPayload, now, {eventId, leaseToken})
 ProactiveMessageService.send(message)
+ProactiveMessageService.inspectPolicy(now)
 ```
 
 PR 5はこのserviceへ、既存production互換の `legacy` 経路と、CharacterPackを使う
@@ -198,7 +199,9 @@ Authorization tokenなどの秘密値をevent行へ保存しない。
 
 `PROACTIVE_SEND` の新規payloadはruntime modeを必須とし、`enforced` ではexact
 character bindingを必須、`legacy` ではbindingを禁止する。queue payloadへ
-subject/bodyを持ち込まない。mode欠落を許すのは既存historical rowのruntime
+subject/bodyを持ち込まない。また、enqueue時の `APP_ENV`、frequency、policy modeを
+exact `policyBinding` として必須保存する。dispatch前にcurrent policyと一致しなければ
+送信しない。mode欠落を許すのは既存historical rowのruntime
 compatibilityだけであり、新規eventのmachine contractでは拒否する。proactive workerは
 generation前とmarker/mail sink直前にleaseを再確認し、stale workerによるgeneration、
 marker mutation、mail sendを防ぐ。
@@ -215,6 +218,16 @@ OperationalHealthService.run(now, triggerHealth)
 ```
 
 `inspect` はキューと必須トリガーの状態を集約し、`OK`、`DEGRADED`、`CRITICAL` のいずれかを返す。出力と通知には集計件数と管理されたエラーコードだけを含め、本文、payload、各種ID、URL、メールアドレスを含めない。
+
+```javascript
+ImmersionSafetyAuditService.inspect()
+```
+
+`ImmersionSafetyAuditService.inspect`は、保存済みの全`enforced`イベントと会話、
+画像summary、自発marker、日記、記憶の承認・由来を読み取り専用で突合する。
+出力は固定token、boolean、件数だけとし、本文、各種ID、URL、メールアドレス、
+時刻、profile revisionを返さない。構造監査であり、文章の意味・口調の人間確認を
+代替しない。
 
 ## 3.9 Repository
 
@@ -368,6 +381,7 @@ Spreadsheetの手動編集は公式な同時writerとして扱わない。
 
 `saveSettingsAtomically` はV2 profile/revisionに加えてproactive frequencyと
 quiet hoursを同じScriptLock、CAS、単一range write、flush、read-backで保存する。
+quiet hoursの開始と終了は異なる時刻を必須とし、無効区間は保存しない。
 runtime/profile modeやCharacterPack authorityは変更しない。
 
 ## 3.12.1 `CharacterSettingsService`

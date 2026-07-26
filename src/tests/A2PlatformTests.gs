@@ -1244,6 +1244,10 @@ function runA2PlatformTests() {
     );
     assert(entries.PROACTIVE_FREQUENCY.value === 'normal', 'Frequency must default to normal.');
     assert(
+      entries.PROACTIVE_POLICY_MODE.value === 'probability',
+      'Proactive policy must default to probability mode.'
+    );
+    assert(
       entries.DIARY_CHARACTER_ENFORCEMENT_ENABLED.value === 'false' &&
         entries.DIARY_CHARACTER_ENFORCEMENT_ENABLED.type === 'bool',
       'Diary character enforcement must default to disabled.'

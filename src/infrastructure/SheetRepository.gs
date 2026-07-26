@@ -1177,6 +1177,22 @@ var SheetRepository = (function() {
     );
   }
 
+  function listClaimableEventsByType(eventType, limit, now) {
+    Validators.assertEnum(
+      eventType,
+      APP_CONSTANTS.EVENT_TYPES,
+      'eventType'
+    );
+    return selectClaimableEvents_(
+      getRows(APP_CONSTANTS.SHEETS.EVENT_QUEUE)
+        .filter(function(row) {
+          return row.event_type === eventType;
+        }),
+      limit,
+      now
+    );
+  }
+
   function updateEvent(eventId, patch) {
     return updateRowByKey(
       APP_CONSTANTS.SHEETS.EVENT_QUEUE,
@@ -1794,6 +1810,7 @@ var SheetRepository = (function() {
     updateUserState: updateUserState,
     insertEvent: insertEvent,
     listClaimableEvents: listClaimableEvents,
+    listClaimableEventsByType: listClaimableEventsByType,
     updateEvent: updateEvent,
     getEventById: getEventById,
     getEventByDedupeKey: getEventByDedupeKey,

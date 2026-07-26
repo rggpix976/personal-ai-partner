@@ -1,25 +1,105 @@
 var ProactiveMessageService = (function() {
   var issuedDispatches_ = new WeakMap();
   var DEFAULTS = Object.freeze({
-    silenceCeilingMinutes: 720,
-    probabilityCurve: 1.3,
-    dayStart: '10:00',
-    eveningStart: '18:00',
-    morningWeight: 0.7,
-    dayWeight: 1.0,
-    eveningWeight: 1.2,
-    recheckMinutes: 60,
     messageMinChars: 20,
     messageMaxChars: 220,
     recentMessageLimit: 12,
     memoryLimit: 8
   });
+  var TIMING_PROFILES = Object.freeze({
+    test: Object.freeze({
+      recheckMinutes: 5,
+      frequencies: Object.freeze({
+        off: null,
+        low: Object.freeze({
+          silenceFloorMinutes: 60,
+          silenceCeilingMinutes: 120
+        }),
+        normal: Object.freeze({
+          silenceFloorMinutes: 15,
+          silenceCeilingMinutes: 30
+        }),
+        high: Object.freeze({
+          silenceFloorMinutes: 5,
+          silenceCeilingMinutes: 10
+        })
+      })
+    }),
+    prod: Object.freeze({
+      recheckMinutes: 60,
+      frequencies: Object.freeze({
+        off: null,
+        low: Object.freeze({
+          silenceFloorMinutes: 480,
+          silenceCeilingMinutes: 720
+        }),
+        normal: Object.freeze({
+          silenceFloorMinutes: 240,
+          silenceCeilingMinutes: 720
+        }),
+        high: Object.freeze({
+          silenceFloorMinutes: 120,
+          silenceCeilingMinutes: 720
+        })
+      })
+    })
+  });
 
-  function evaluateLocalConditions(now) {
+  function evaluateLocalConditions(now, options) {
     var warnings = [];
     var nowDate = normalizeDate_(now);
+    options = options || {};
 
     try {
+      var timingPolicy = resolveTimingPolicy_();
+      if (
+        timingPolicy.environment === 'test' &&
+        options.allowTestProfile !== true
+      ) {
+        return buildEvaluation_(
+          false,
+          'PROACTIVE_TEST_PROFILE_MANUAL_ONLY',
+          null,
+          null,
+          warnings,
+          null,
+          {
+            timingPolicy: timingPolicy
+          }
+        );
+      }
+      if (!timingPolicy.enabled) {
+        return buildEvaluation_(
+          false,
+          'PROACTIVE_FREQUENCY_OFF',
+          null,
+          null,
+          warnings,
+          null,
+          {
+            timingPolicy: timingPolicy
+          }
+        );
+      }
+      var policyInspection = inspectPolicy(nowDate);
+      var policyReady = timingPolicy.environment === 'test'
+        ? policyInspection.manualTestAllowed
+        : policyInspection.automaticTriggersAllowed;
+      if (!policyInspection.valid || !policyReady) {
+        return buildEvaluation_(
+          false,
+          timingPolicy.environment === 'test'
+            ? 'PROACTIVE_TEST_POLICY_NOT_READY'
+            : 'PROACTIVE_PRODUCTION_POLICY_NOT_READY',
+          null,
+          null,
+          policyInspection.issues || warnings,
+          null,
+          {
+            timingPolicy: timingPolicy
+          }
+        );
+      }
       var nowIso = toIsoStringInTokyo(nowDate);
       var state = SheetRepository.ensureDefaultUserState();
       state = SheetRepository.getUserState() || state;
@@ -28,7 +108,8 @@ var ProactiveMessageService = (function() {
       var hardGate = evaluateHardGates_(state, nowDate, {
         checkSilence: true,
         checkNextCheck: true,
-        checkQuota: true
+        checkQuota: true,
+        timingPolicy: timingPolicy
       });
       if (!hardGate.eligible) {
         return buildEvaluation_(false, hardGate.reason, null, null, warnings, null, hardGate);
@@ -41,27 +122,21 @@ var ProactiveMessageService = (function() {
         0,
         (nowDate.getTime() - getIsoTimeMillis(state.last_user_message_at)) / 60000
       );
-      var recheckMinutes = Math.max(
-        1,
-        getConfigInt_('PROACTIVE_RECHECK_MINUTES', DEFAULTS.recheckMinutes)
-      );
+      var recheckMinutes = timingPolicy.recheckMinutes;
       var decisionSlot = buildDecisionSlot_(nowDate, recheckMinutes);
       var timeWeight = getTimeWeight_(nowDate);
-      var policyMode = getConfigString_('PROACTIVE_POLICY_MODE', 'threshold').toLowerCase();
+      var policyMode = timingPolicy.mode;
       var probability = 1;
       var sample = 0;
 
       if (policyMode === 'probability') {
-        var silenceFloor = Number(
-          requireConfig_('SILENCE_MINUTES')
-        );
-        var silenceCeiling = getConfigInt_(
-          'PROACTIVE_SILENCE_CEILING_MINUTES',
-          DEFAULTS.silenceCeilingMinutes
-        );
-        var curvePower = getConfigFloat_(
-          'PROACTIVE_PROBABILITY_CURVE',
-          DEFAULTS.probabilityCurve
+        var silenceFloor = timingPolicy.silenceFloorMinutes;
+        var silenceCeiling = timingPolicy.silenceCeilingMinutes;
+        var curvePower = Number(
+          requireConfig_(
+            'PROACTIVE_PROBABILITY_CURVE',
+            'float'
+          )
         );
         ensure(
           isFinite(silenceFloor) && silenceFloor >= 0,
@@ -137,7 +212,8 @@ var ProactiveMessageService = (function() {
         reason: policyMode === 'probability'
           ? 'deterministic_probability_hit'
           : 'local_silence_threshold',
-        characterRuntimeMode: runtime.mode
+        characterRuntimeMode: runtime.mode,
+        policyBinding: buildPolicyBinding_(timingPolicy)
       };
       if (runtime.mode === 'enforced') {
         payload.characterBinding = runtime.binding;
@@ -176,6 +252,7 @@ var ProactiveMessageService = (function() {
   function prepareDispatch(eventPayload, now, options) {
     var payload = normalizeDecisionPayload_(eventPayload, now);
     var queueClaim = normalizeQueueClaim_(options);
+    var timingPolicy = resolveTimingPolicy_();
     ensure(
       payload.characterRuntimeMode !== 'enforced' || queueClaim != null,
       'CHARACTER_ARTIFACT_INVALID',
@@ -184,6 +261,66 @@ var ProactiveMessageService = (function() {
     assertQueueClaimCurrent_(queueClaim, payload);
     var nowDate = normalizeDate_(now);
     var nowIso = toIsoStringInTokyo(nowDate);
+
+    if (
+      timingPolicy.environment === 'test' &&
+      (!options || options.allowTestProfile !== true)
+    ) {
+      return buildDispatchResult_(
+        false,
+        'PROACTIVE_TEST_PROFILE_MANUAL_ONLY',
+        null,
+        nowIso
+      );
+    }
+
+    if (!timingPolicy.enabled) {
+      return buildDispatchResult_(
+        false,
+        'PROACTIVE_FREQUENCY_OFF',
+        null,
+        nowIso
+      );
+    }
+
+    var policyInspection = inspectPolicy(nowDate);
+    var policyReady = timingPolicy.environment === 'test'
+      ? policyInspection.manualTestAllowed
+      : policyInspection.automaticTriggersAllowed;
+    if (!policyInspection.valid || !policyReady) {
+      return buildDispatchResult_(
+        false,
+        timingPolicy.environment === 'test'
+          ? 'PROACTIVE_TEST_POLICY_NOT_READY'
+          : 'PROACTIVE_PRODUCTION_POLICY_NOT_READY',
+        null,
+        nowIso
+      );
+    }
+
+    if (!payload.policyBinding) {
+      return buildDispatchResult_(
+        false,
+        'PROACTIVE_POLICY_BINDING_MISSING',
+        null,
+        nowIso
+      );
+    }
+
+    if (
+      !policyBindingsEqual_(
+        payload.policyBinding,
+        buildPolicyBinding_(timingPolicy)
+      )
+    ) {
+      return buildDispatchResult_(
+        false,
+        'PROACTIVE_POLICY_CHANGED',
+        null,
+        nowIso
+      );
+    }
+
     var state = SheetRepository.ensureDefaultUserState();
     state = SheetRepository.getUserState() || state;
     ensure(state, 'CONFIG_MISSING', 'user_state row is missing.');
@@ -287,9 +424,10 @@ var ProactiveMessageService = (function() {
     }
 
     var hardGate = evaluateHardGates_(state, nowDate, {
-      checkSilence: false,
+      checkSilence: true,
       checkNextCheck: false,
-      checkQuota: true
+      checkQuota: true,
+      timingPolicy: timingPolicy
     });
     if (!hardGate.eligible) {
       return buildDispatchResult_(false, hardGate.reason, null, nowIso);
@@ -667,7 +805,10 @@ var ProactiveMessageService = (function() {
       elapsedMinutes: payload.elapsedMinutes,
       timeWeight: payload.timeWeight,
       reason: payload.reason,
-      characterRuntimeMode: payload.characterRuntimeMode
+      characterRuntimeMode: payload.characterRuntimeMode,
+      policyBinding: payload.policyBinding
+        ? Object.freeze(normalizePolicyBinding_(payload.policyBinding))
+        : null
     };
     if (payload.characterRuntimeMode === 'enforced') {
       snapshot.characterBinding = Object.freeze(
@@ -736,6 +877,17 @@ var ProactiveMessageService = (function() {
 
   function sendNormalized_(payload, dispatch, approvedArtifact) {
     var attemptAt = payload.sentAt || toIsoStringInTokyo(new Date());
+    var initialGate = assessFinalDelivery_(
+      dispatch.queuePayload,
+      new Date()
+    );
+    if (!initialGate.allowed) {
+      return handleFinalDeliveryBlock_(
+        payload,
+        attemptAt,
+        initialGate
+      );
+    }
     var ownerEmail = PropertiesService.getScriptProperties().getProperty(
       APP_CONSTANTS.PROPERTY_KEYS.OWNER_EMAIL
     );
@@ -747,6 +899,17 @@ var ProactiveMessageService = (function() {
       dispatch,
       approvedArtifact
     );
+
+    if (claim.action === 'policy_blocked') {
+      return handleFinalDeliveryBlock_(
+        payload,
+        attemptAt,
+        {
+          allowed: false,
+          reason: claim.reason
+        }
+      );
+    }
 
     if (claim.action === 'completed') {
       LockManager.withScriptLock(
@@ -780,6 +943,28 @@ var ProactiveMessageService = (function() {
     }
 
     try {
+      var mailGate = assessFinalDelivery_(
+        dispatch.queuePayload,
+        new Date()
+      );
+      if (!mailGate.allowed) {
+        var blockedError = createAppError(
+          mailGate.reason === 'MAIL_QUOTA_EXHAUSTED'
+            ? 'MAIL_QUOTA_EXHAUSTED'
+            : 'CONFIG_MISSING',
+          'Proactive delivery was stopped by the final delivery gate.',
+          { reason: mailGate.reason }
+        );
+        markDeliveryFailed_(
+          claim.marker.messageId,
+          blockedError
+        );
+        return handleFinalDeliveryBlock_(
+          payload,
+          attemptAt,
+          mailGate
+        );
+      }
       GmailNotifier.send(
         ownerEmail,
         payload.subject,
@@ -822,6 +1007,18 @@ var ProactiveMessageService = (function() {
             dispatch.queueClaim,
             dispatch.queuePayload
           );
+        }
+        var finalGate = assessFinalDelivery_(
+          dispatch.queuePayload,
+          new Date()
+        );
+        if (!finalGate.allowed) {
+          return {
+            action: 'policy_blocked',
+            reason: finalGate.reason,
+            marker: null,
+            body: null
+          };
         }
         var existing = findExistingMarker_(
           payload.dedupeKey,
@@ -929,6 +1126,118 @@ var ProactiveMessageService = (function() {
     );
   }
 
+  function handleFinalDeliveryBlock_(
+    payload,
+    attemptAt,
+    decision
+  ) {
+    if (decision.reason === 'MAIL_QUOTA_EXHAUSTED') {
+      throw createAppError(
+        'MAIL_QUOTA_EXHAUSTED',
+        'Mail quota is exhausted for proactive delivery.'
+      );
+    }
+    return {
+      sent: false,
+      duplicate: false,
+      skipped: true,
+      reason: decision.reason,
+      dedupeKey: payload.dedupeKey,
+      markerStatus: null,
+      createdAt: attemptAt
+    };
+  }
+
+  function assessFinalDelivery_(queuePayload, now) {
+    try {
+      if (!queuePayload || !queuePayload.policyBinding) {
+        return {
+          allowed: false,
+          reason: 'PROACTIVE_POLICY_BINDING_MISSING'
+        };
+      }
+      var policyBinding = normalizePolicyBinding_(
+        queuePayload.policyBinding
+      );
+      var timingPolicy = resolveTimingPolicy_();
+      if (!timingPolicy.enabled) {
+        return {
+          allowed: false,
+          reason: 'PROACTIVE_FREQUENCY_OFF'
+        };
+      }
+      if (
+        !policyBindingsEqual_(
+          policyBinding,
+          buildPolicyBinding_(timingPolicy)
+        )
+      ) {
+        return {
+          allowed: false,
+          reason: 'PROACTIVE_POLICY_CHANGED'
+        };
+      }
+      var nowDate = normalizeDate_(now);
+      var inspection = inspectPolicy(nowDate);
+      var approved = policyBinding.environment === 'test'
+        ? inspection.manualTestAllowed
+        : inspection.automaticTriggersAllowed;
+      if (!inspection.valid || !approved) {
+        return {
+          allowed: false,
+          reason: policyBinding.environment === 'test'
+            ? 'PROACTIVE_TEST_POLICY_NOT_READY'
+            : 'PROACTIVE_PRODUCTION_POLICY_NOT_READY'
+        };
+      }
+      if (
+        queuePayload.targetDate <
+          formatDateInTokyo(nowDate)
+      ) {
+        return {
+          allowed: false,
+          reason: 'TARGET_DATE_EXPIRED'
+        };
+      }
+      var state = SheetRepository.getUserState();
+      if (!state) {
+        return {
+          allowed: false,
+          reason: 'PROACTIVE_STATE_MISSING'
+        };
+      }
+      if (
+        state.last_user_message_at &&
+        getIsoTimeMillis(state.last_user_message_at) >
+          getIsoTimeMillis(queuePayload.requestedAt)
+      ) {
+        return {
+          allowed: false,
+          reason: 'USER_ACTIVITY_AFTER_ENQUEUE'
+        };
+      }
+      var hardGate = evaluateHardGates_(
+        state,
+        nowDate,
+        {
+          checkSilence: true,
+          checkNextCheck: false,
+          checkQuota: true,
+          timingPolicy: timingPolicy
+        }
+      );
+      return {
+        allowed: hardGate.eligible,
+        reason: hardGate.reason
+      };
+    } catch (error) {
+      return {
+        allowed: false,
+        reason: normalizeError(error).code
+      };
+    }
+  }
+
   function markDeliveryFailed_(messageId, error) {
     return LockManager.withScriptLock(
       'proactive-delivery-fail-' + messageId,
@@ -1022,13 +1331,7 @@ var ProactiveMessageService = (function() {
   function advanceNextCheckOnly_(nowIso) {
     var state = SheetRepository.ensureDefaultUserState();
     state = SheetRepository.getUserState() || state;
-    var recheckMinutes = Math.max(
-      1,
-      getConfigInt_(
-        'PROACTIVE_RECHECK_MINUTES',
-        DEFAULTS.recheckMinutes
-      )
-    );
+    var recheckMinutes = resolveTimingPolicy_().recheckMinutes;
     var nextCheck = toIsoStringInTokyo(
       new Date(
         parseIsoToDate(nowIso).getTime() +
@@ -1188,13 +1491,22 @@ var ProactiveMessageService = (function() {
   function evaluateHardGates_(state, nowDate, options) {
     options = options || {};
 
-    var quietStart = requireConfig_('QUIET_START');
-    var quietEnd = requireConfig_('QUIET_END');
-    var silenceMinutes = Number(requireConfig_('SILENCE_MINUTES'));
+    var quietStart = requireConfig_('QUIET_START', 'time');
+    var quietEnd = requireConfig_('QUIET_END', 'time');
+    var timingPolicy = options.timingPolicy || resolveTimingPolicy_();
+    if (!timingPolicy.enabled) {
+      return {
+        eligible: false,
+        reason: 'PROACTIVE_FREQUENCY_OFF'
+      };
+    }
+    var silenceMinutes = timingPolicy.silenceFloorMinutes;
     var cooldownMinutes = Number(
-      requireConfig_('PROACTIVE_COOLDOWN_MINUTES')
+      requireConfig_('PROACTIVE_COOLDOWN_MINUTES', 'int')
     );
-    var maxPerDay = Number(requireConfig_('PROACTIVE_MAX_PER_DAY'));
+    var maxPerDay = Number(
+      requireConfig_('PROACTIVE_MAX_PER_DAY', 'int')
+    );
 
     if (isQuietHours_(nowDate, quietStart, quietEnd)) {
       return {
@@ -1294,13 +1606,7 @@ var ProactiveMessageService = (function() {
       eventPayload.decisionSlot ||
       buildDecisionSlot_(
         parseIsoToDate(requestedAt),
-        Math.max(
-          1,
-          getConfigInt_(
-            'PROACTIVE_RECHECK_MINUTES',
-            DEFAULTS.recheckMinutes
-          )
-        )
+        resolveTimingPolicy_().recheckMinutes
       )
     );
     var expectedMessageDedupeKey = buildMessageDedupeKey_(
@@ -1326,6 +1632,9 @@ var ProactiveMessageService = (function() {
     var characterRuntimeMode = eventPayload.characterRuntimeMode == null
       ? 'legacy'
       : String(eventPayload.characterRuntimeMode);
+    var policyBinding = eventPayload.policyBinding == null
+      ? null
+      : normalizePolicyBinding_(eventPayload.policyBinding);
 
     ensure(
       Validators.isDateString(targetDate),
@@ -1396,7 +1705,8 @@ var ProactiveMessageService = (function() {
       elapsedMinutes: elapsedMinutes,
       timeWeight: timeWeight,
       reason: eventPayload.reason || null,
-      characterRuntimeMode: characterRuntimeMode
+      characterRuntimeMode: characterRuntimeMode,
+      policyBinding: policyBinding
     };
     if (characterRuntimeMode === 'enforced') {
       normalizedPayload.characterBinding = normalizeCharacterBinding_(
@@ -1905,6 +2215,428 @@ var ProactiveMessageService = (function() {
     );
   }
 
+  function resolveTimingPolicy_() {
+    var environment = readAppEnvironment_();
+    var frequency = readProactiveFrequency_();
+    var mode = String(
+      requireConfig_('PROACTIVE_POLICY_MODE', 'string')
+    ).toLowerCase();
+    ensure(
+      mode === 'probability' || mode === 'threshold',
+      'CONFIG_MISSING',
+      'PROACTIVE_POLICY_MODE must be probability or threshold.'
+    );
+
+    var recheckMinutes;
+    var silenceFloorMinutes = null;
+    var silenceCeilingMinutes = null;
+    var profile;
+
+    if (environment === 'test') {
+      profile = TIMING_PROFILES.test;
+      recheckMinutes = profile.recheckMinutes;
+      if (frequency !== 'off') {
+        silenceFloorMinutes =
+          profile.frequencies[frequency].silenceFloorMinutes;
+        silenceCeilingMinutes =
+          profile.frequencies[frequency].silenceCeilingMinutes;
+      }
+    } else {
+      var baseSilenceMinutes = Number(
+        requireConfig_('SILENCE_MINUTES', 'int')
+      );
+      var productionCeilingMinutes = Number(
+        requireConfig_(
+          'PROACTIVE_SILENCE_CEILING_MINUTES',
+          'int'
+        )
+      );
+      recheckMinutes = Number(
+        requireConfig_('PROACTIVE_RECHECK_MINUTES', 'int')
+      );
+      ensure(
+        isFinite(baseSilenceMinutes) && baseSilenceMinutes >= 0,
+        'CONFIG_MISSING',
+        'SILENCE_MINUTES must be a non-negative number.'
+      );
+      ensure(
+        isFinite(productionCeilingMinutes) &&
+          productionCeilingMinutes > baseSilenceMinutes * 2,
+        'CONFIG_MISSING',
+        'PROACTIVE_SILENCE_CEILING_MINUTES must exceed every production silence floor.'
+      );
+      if (frequency !== 'off') {
+        var expectedProduction = TIMING_PROFILES.prod.frequencies;
+        var multiplier =
+          expectedProduction[frequency]
+            .silenceFloorMinutes /
+          expectedProduction.normal.silenceFloorMinutes;
+        silenceFloorMinutes = baseSilenceMinutes * multiplier;
+        silenceCeilingMinutes = productionCeilingMinutes;
+      }
+    }
+
+    ensure(
+      isFinite(recheckMinutes) &&
+        recheckMinutes >= 1 &&
+        Math.floor(recheckMinutes) === recheckMinutes,
+      'CONFIG_MISSING',
+      'Proactive recheck minutes must be a positive integer.'
+    );
+    if (frequency !== 'off') {
+      ensure(
+        isFinite(silenceFloorMinutes) &&
+          silenceFloorMinutes >= 0 &&
+          isFinite(silenceCeilingMinutes) &&
+          silenceCeilingMinutes > silenceFloorMinutes,
+        'CONFIG_MISSING',
+        'Proactive silence timing is invalid.'
+      );
+    }
+
+    return {
+      environment: environment,
+      frequency: frequency,
+      enabled: frequency !== 'off',
+      mode: mode,
+      silenceFloorMinutes: silenceFloorMinutes,
+      silenceCeilingMinutes: silenceCeilingMinutes,
+      recheckMinutes: recheckMinutes
+    };
+  }
+
+  function readAppEnvironment_() {
+    var environment = PropertiesService
+      .getScriptProperties()
+      .getProperty(APP_CONSTANTS.PROPERTY_KEYS.APP_ENV);
+    Validators.assertAppEnv(environment);
+    return String(environment);
+  }
+
+  function readProactiveFrequency_() {
+    var config = typeof ConfigRepository.getUniqueByKey === 'function'
+      ? ConfigRepository.getUniqueByKey('PROACTIVE_FREQUENCY')
+      : ConfigRepository.getByKey('PROACTIVE_FREQUENCY');
+    ensure(
+      config && config.value != null,
+      'CONFIG_MISSING',
+      'Missing config: PROACTIVE_FREQUENCY'
+    );
+    ensure(
+      config.type == null || config.type === 'string',
+      'CHARACTER_CONFIG_INVALID',
+      'Stored proactive frequency type is invalid.',
+      { reason: 'PROACTIVE_FREQUENCY_ENTRY_INVALID' }
+    );
+    var frequency = String(config.value).toLowerCase();
+    ensure(
+      APP_CONSTANTS.CHARACTER.PROACTIVE_FREQUENCIES.indexOf(
+        frequency
+      ) !== -1,
+      'CHARACTER_CONFIG_INVALID',
+      'Stored proactive frequency is invalid.',
+      { reason: 'PROACTIVE_FREQUENCY_INVALID' }
+    );
+    return frequency;
+  }
+
+  function buildPolicyBinding_(timingPolicy) {
+    return {
+      environment: timingPolicy.environment,
+      frequency: timingPolicy.frequency,
+      mode: timingPolicy.mode
+    };
+  }
+
+  function normalizePolicyBinding_(value) {
+    ensure(
+      value &&
+        typeof value === 'object' &&
+        !Array.isArray(value),
+      'VALIDATION_REQUEST_INVALID',
+      'PROACTIVE_SEND payload.policyBinding is invalid.'
+    );
+    var keys = Object.keys(value).sort();
+    ensure(
+      JSON.stringify(keys) ===
+        JSON.stringify(['environment', 'frequency', 'mode']),
+      'VALIDATION_REQUEST_INVALID',
+      'PROACTIVE_SEND payload.policyBinding fields are invalid.'
+    );
+    var environment = String(value.environment || '');
+    var frequency = String(value.frequency || '');
+    var mode = String(value.mode || '');
+    ensure(
+      APP_CONSTANTS.APP_ENVS.indexOf(environment) !== -1 &&
+        APP_CONSTANTS.CHARACTER.PROACTIVE_FREQUENCIES.indexOf(
+          frequency
+        ) !== -1 &&
+        frequency !== 'off' &&
+        (mode === 'probability' || mode === 'threshold'),
+      'VALIDATION_REQUEST_INVALID',
+      'PROACTIVE_SEND payload.policyBinding values are invalid.'
+    );
+    return {
+      environment: environment,
+      frequency: frequency,
+      mode: mode
+    };
+  }
+
+  function policyBindingsEqual_(left, right) {
+    return Boolean(
+      left &&
+        right &&
+        left.environment === right.environment &&
+        left.frequency === right.frequency &&
+        left.mode === right.mode
+    );
+  }
+
+  function inspectPolicy(now) {
+    try {
+      var policy = resolveTimingPolicy_();
+      var reference = normalizeDate_(now);
+      var quietStart = String(
+        requireConfig_('QUIET_START', 'time')
+      );
+      var quietEnd = String(
+        requireConfig_('QUIET_END', 'time')
+      );
+      var quietStartMinutes = parseTimeMinutes_(quietStart);
+      var quietEndMinutes = parseTimeMinutes_(quietEnd);
+      var timeBands = {
+        morningStart: '00:00',
+        dayStart: String(
+          requireConfig_('PROACTIVE_DAY_START', 'time')
+        ),
+        eveningStart: String(
+          requireConfig_('PROACTIVE_EVENING_START', 'time')
+        ),
+        quietStart: quietStart,
+        quietEnd: quietEnd,
+        morningWeight: Number(
+          requireConfig_('PROACTIVE_MORNING_WEIGHT', 'float')
+        ),
+        dayWeight: Number(
+          requireConfig_('PROACTIVE_DAY_WEIGHT', 'float')
+        ),
+        eveningWeight: Number(
+          requireConfig_('PROACTIVE_EVENING_WEIGHT', 'float')
+        ),
+        probabilityCurve: Number(
+          requireConfig_('PROACTIVE_PROBABILITY_CURVE', 'float')
+        )
+      };
+      var guardrails = {
+        quietStart: quietStart,
+        quietEnd: quietEnd,
+        quietHoursEnabled: quietStartMinutes !== quietEndMinutes,
+        cooldownMinutes: Number(
+          requireConfig_(
+            'PROACTIVE_COOLDOWN_MINUTES',
+            'int'
+          )
+        ),
+        maxPerDay: Number(
+          requireConfig_('PROACTIVE_MAX_PER_DAY', 'int')
+        )
+      };
+      ensure(
+        isFinite(guardrails.cooldownMinutes) &&
+          guardrails.cooldownMinutes >= 0 &&
+          Math.floor(guardrails.cooldownMinutes) ===
+            guardrails.cooldownMinutes,
+        'CONFIG_MISSING',
+        'PROACTIVE_COOLDOWN_MINUTES must be a non-negative integer.'
+      );
+      ensure(
+        isFinite(guardrails.maxPerDay) &&
+          guardrails.maxPerDay >= 1 &&
+          Math.floor(guardrails.maxPerDay) === guardrails.maxPerDay,
+        'CONFIG_MISSING',
+        'PROACTIVE_MAX_PER_DAY must be a positive integer.'
+      );
+      var productionReady = isProductionTimingReady_(
+        policy,
+        timeBands,
+        guardrails
+      );
+      var manualTestReady = isManualTestTimingReady_(
+        policy,
+        timeBands,
+        guardrails
+      );
+      var issues = [];
+      if (
+        policy.environment === 'prod' &&
+        !productionReady
+      ) {
+        issues.push('PROACTIVE_PRODUCTION_POLICY_NOT_READY');
+      }
+      if (
+        policy.environment === 'test' &&
+        !manualTestReady
+      ) {
+        issues.push('PROACTIVE_TEST_POLICY_NOT_READY');
+      }
+      return {
+        valid: true,
+        environment: policy.environment,
+        frequency: policy.frequency,
+        enabled: policy.enabled,
+        policyMode: policy.mode,
+        silenceFloorMinutes: policy.silenceFloorMinutes,
+        silenceCeilingMinutes: policy.silenceCeilingMinutes,
+        recheckMinutes: policy.recheckMinutes,
+        currentTimeWeight: getTimeWeight_(reference),
+        quietHoursActive: isQuietHours_(
+          reference,
+          quietStart,
+          quietEnd
+        ),
+        timeBands: timeBands,
+        guardrails: guardrails,
+        expectedTimingProfiles: buildExpectedTimingProfiles_(),
+        automaticTriggersAllowed: productionReady,
+        manualTestAllowed: manualTestReady,
+        issues: issues
+      };
+    } catch (error) {
+      return {
+        valid: false,
+        environment: null,
+        frequency: null,
+        enabled: false,
+        policyMode: null,
+        silenceFloorMinutes: null,
+        silenceCeilingMinutes: null,
+        recheckMinutes: null,
+        currentTimeWeight: null,
+        quietHoursActive: null,
+        timeBands: null,
+        guardrails: null,
+        expectedTimingProfiles: buildExpectedTimingProfiles_(),
+        automaticTriggersAllowed: false,
+        manualTestAllowed: false,
+        issues: [normalizeError(error).code]
+      };
+    }
+  }
+
+  function assertAutomaticTriggerReady() {
+    var inspection = inspectPolicy(new Date());
+    ensure(
+      inspection.valid &&
+        inspection.automaticTriggersAllowed,
+      'CONFIG_MISSING',
+      'Automatic triggers require the approved production proactive policy.',
+      { reason: 'PROACTIVE_PRODUCTION_POLICY_NOT_READY' }
+    );
+    return inspection;
+  }
+
+  function assertManualTestReady() {
+    var inspection = inspectPolicy(new Date());
+    ensure(
+      inspection.valid &&
+        inspection.manualTestAllowed,
+      'CONFIG_MISSING',
+      'The proactive release test requires the approved test probability policy.',
+      { reason: 'PROACTIVE_TEST_POLICY_NOT_READY' }
+    );
+    return inspection;
+  }
+
+  function hasApprovedSharedPolicy_(
+    timeBands,
+    guardrails
+  ) {
+    return Boolean(
+      timeBands.dayStart === '10:00' &&
+        timeBands.eveningStart === '18:00' &&
+        Number(timeBands.morningWeight) === 0.7 &&
+        Number(timeBands.dayWeight) === 1 &&
+        Number(timeBands.eveningWeight) === 1.2 &&
+        Number(timeBands.probabilityCurve) === 1.3 &&
+        guardrails.quietHoursEnabled === true &&
+        Number(guardrails.cooldownMinutes) === 240 &&
+        Number(guardrails.maxPerDay) === 2
+    );
+  }
+
+  function isProductionTimingReady_(
+    policy,
+    timeBands,
+    guardrails
+  ) {
+    var expected = TIMING_PROFILES.prod;
+    return Boolean(
+      policy.environment === 'prod' &&
+        policy.mode === 'probability' &&
+        policy.recheckMinutes === expected.recheckMinutes &&
+        Number(requireConfig_('SILENCE_MINUTES', 'int')) ===
+          expected.frequencies.normal.silenceFloorMinutes &&
+        Number(
+          requireConfig_(
+            'PROACTIVE_SILENCE_CEILING_MINUTES',
+            'int'
+          )
+        ) ===
+          expected.frequencies.normal.silenceCeilingMinutes &&
+        hasApprovedSharedPolicy_(timeBands, guardrails)
+    );
+  }
+
+  function isManualTestTimingReady_(
+    policy,
+    timeBands,
+    guardrails
+  ) {
+    var expected = TIMING_PROFILES.test;
+    var expectedFrequency = expected.frequencies[policy.frequency];
+    var timingMatches = policy.frequency === 'off'
+      ? policy.enabled === false &&
+        policy.silenceFloorMinutes == null &&
+        policy.silenceCeilingMinutes == null
+      : Boolean(
+        policy.enabled &&
+          expectedFrequency &&
+          policy.silenceFloorMinutes ===
+            expectedFrequency.silenceFloorMinutes &&
+          policy.silenceCeilingMinutes ===
+            expectedFrequency.silenceCeilingMinutes
+      );
+    return Boolean(
+      policy.environment === 'test' &&
+        policy.mode === 'probability' &&
+        policy.recheckMinutes === expected.recheckMinutes &&
+        timingMatches &&
+        hasApprovedSharedPolicy_(timeBands, guardrails)
+    );
+  }
+
+  function buildExpectedTimingProfiles_() {
+    var result = {};
+    ['test', 'prod'].forEach(function(environment) {
+      var profile = TIMING_PROFILES[environment];
+      result[environment] = {
+        recheckMinutes: profile.recheckMinutes
+      };
+      ['low', 'normal', 'high'].forEach(function(frequency) {
+        result[environment][frequency] = {
+          silenceFloorMinutes:
+            profile.frequencies[frequency]
+              .silenceFloorMinutes,
+          silenceCeilingMinutes:
+            profile.frequencies[frequency]
+              .silenceCeilingMinutes
+        };
+      });
+    });
+    return result;
+  }
+
   function deterministicSample_(seed) {
     var text = String(seed || '');
     var hash = 2166136261;
@@ -1918,12 +2650,12 @@ var ProactiveMessageService = (function() {
   function getTimeWeight_(nowDate) {
     var current = getTokyoMinutesOfDay_(nowDate);
     var dayStart = parseTimeMinutes_(
-      getConfigString_('PROACTIVE_DAY_START', DEFAULTS.dayStart)
+      requireConfig_('PROACTIVE_DAY_START', 'time')
     );
     var eveningStart = parseTimeMinutes_(
-      getConfigString_(
+      requireConfig_(
         'PROACTIVE_EVENING_START',
-        DEFAULTS.eveningStart
+        'time'
       )
     );
     ensure(
@@ -1932,17 +2664,14 @@ var ProactiveMessageService = (function() {
       'PROACTIVE_DAY_START must be earlier than PROACTIVE_EVENING_START.'
     );
 
-    var morningWeight = getConfigFloat_(
-      'PROACTIVE_MORNING_WEIGHT',
-      DEFAULTS.morningWeight
+    var morningWeight = Number(
+      requireConfig_('PROACTIVE_MORNING_WEIGHT', 'float')
     );
-    var dayWeight = getConfigFloat_(
-      'PROACTIVE_DAY_WEIGHT',
-      DEFAULTS.dayWeight
+    var dayWeight = Number(
+      requireConfig_('PROACTIVE_DAY_WEIGHT', 'float')
     );
-    var eveningWeight = getConfigFloat_(
-      'PROACTIVE_EVENING_WEIGHT',
-      DEFAULTS.eveningWeight
+    var eveningWeight = Number(
+      requireConfig_('PROACTIVE_EVENING_WEIGHT', 'float')
     );
     ensure(
       isFinite(morningWeight) &&
@@ -2141,6 +2870,9 @@ var ProactiveMessageService = (function() {
     var binding = payload.characterRuntimeMode === 'enforced'
       ? normalizeCharacterBinding_(payload.characterBinding)
       : null;
+    var policyBinding = payload.policyBinding == null
+      ? null
+      : normalizePolicyBinding_(payload.policyBinding);
     return JSON.stringify({
       targetDate: payload.targetDate,
       sequence: payload.sequence,
@@ -2153,17 +2885,33 @@ var ProactiveMessageService = (function() {
       timeWeight: payload.timeWeight,
       reason: payload.reason || null,
       characterRuntimeMode: payload.characterRuntimeMode,
-      characterBinding: binding
+      characterBinding: binding,
+      policyBinding: policyBinding
     });
   }
 
-  function requireConfig_(key) {
-    var config = ConfigRepository.getByKey(key);
+  function requireConfig_(key, expectedType) {
+    var config = typeof ConfigRepository.getUniqueByKey ===
+      'function'
+      ? ConfigRepository.getUniqueByKey(key)
+      : ConfigRepository.getByKey(key);
     ensure(
       config && config.value != null,
       'CONFIG_MISSING',
       'Missing config: ' + key
     );
+    if (expectedType) {
+      ensure(
+        config.type == null ||
+          config.type === expectedType,
+        'STORAGE_DATA_CORRUPTED',
+        'Config type is invalid: ' + key,
+        {
+          key: key,
+          expectedType: expectedType
+        }
+      );
+    }
     return config.value;
   }
 
@@ -2171,12 +2919,6 @@ var ProactiveMessageService = (function() {
     var value = getConfigValue_(key, fallback);
     var numeric = Number(value);
     return isFinite(numeric) ? Math.floor(numeric) : fallback;
-  }
-
-  function getConfigFloat_(key, fallback) {
-    var value = getConfigValue_(key, fallback);
-    var numeric = Number(value);
-    return isFinite(numeric) ? numeric : fallback;
   }
 
   function getConfigString_(key, fallback) {
@@ -2357,6 +3099,9 @@ var ProactiveMessageService = (function() {
     evaluateByAi: evaluateByAi,
     prepareDispatch: prepareDispatch,
     send: send,
+    inspectPolicy: inspectPolicy,
+    assertAutomaticTriggerReady: assertAutomaticTriggerReady,
+    assertManualTestReady: assertManualTestReady,
     __test: {
       buildSubject: buildSubject_,
       buildBody: buildBody_,
@@ -2370,7 +3115,11 @@ var ProactiveMessageService = (function() {
       normalizeGeneratedBody: normalizeGeneratedBody_,
       validateGeneratedBody: validateGeneratedBody_,
       getTimeWeight: getTimeWeight_,
-      buildMemoryQuery: buildMemoryQuery_
+      buildMemoryQuery: buildMemoryQuery_,
+      resolveTimingPolicy: resolveTimingPolicy_,
+      normalizePolicyBinding: normalizePolicyBinding_,
+      buildExpectedTimingProfiles: buildExpectedTimingProfiles_,
+      assessFinalDelivery: assessFinalDelivery_
     }
   };
 })();

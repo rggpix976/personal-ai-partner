@@ -75,7 +75,11 @@ var OperationalHealthService = (function() {
     var missingOrDuplicateTriggers = normalizedTriggerHealth.missingCount +
       normalizedTriggerHealth.duplicateCount;
     var status = 'OK';
-    if (missingOrDuplicateTriggers > 0 || staleProcessingCount > 0) {
+    if (
+      missingOrDuplicateTriggers > 0 ||
+      normalizedTriggerHealth.unexpectedCount > 0 ||
+      staleProcessingCount > 0
+    ) {
       status = 'CRITICAL';
     } else if (recentDeadCount > 0 || overduePendingCount > 0 || overdueRetryCount > 0) {
       status = 'DEGRADED';
@@ -254,7 +258,8 @@ var OperationalHealthService = (function() {
       overduePendingCount: report.queue.overdue.pending,
       overdueRetryWaitCount: report.queue.overdue.retryWait,
       triggerMissingCount: report.triggers.missingCount,
-      triggerDuplicateCount: report.triggers.duplicateCount
+      triggerDuplicateCount: report.triggers.duplicateCount,
+      triggerUnexpectedCount: report.triggers.unexpectedCount
     };
   }
 
@@ -271,6 +276,7 @@ var OperationalHealthService = (function() {
       'Overdue RETRY_WAIT events: ' + details.overdueRetryWaitCount,
       'Missing required triggers: ' + details.triggerMissingCount,
       'Duplicate required triggers: ' + details.triggerDuplicateCount,
+      'Unexpected project triggers: ' + details.triggerUnexpectedCount,
       '',
       'This notification intentionally excludes message content, payloads, IDs, URLs, and email addresses.'
     ].join('\n');

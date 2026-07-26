@@ -1,4 +1,15 @@
 var ConfigRepository = (function() {
+  function toConfigDto_(row) {
+    return {
+      key: row.key,
+      rawValue: row.value,
+      type: row.type,
+      value: Validators.parseConfigValue(row.type, row.value),
+      description: row.description,
+      updatedAt: row.updated_at
+    };
+  }
+
   function listAll() {
     return SheetRepository.getRows(APP_CONSTANTS.SHEETS.CONFIG).map(function(row) {
       return {
@@ -15,17 +26,24 @@ var ConfigRepository = (function() {
     var rows = SheetRepository.getRows(APP_CONSTANTS.SHEETS.CONFIG);
     for (var i = 0; i < rows.length; i += 1) {
       if (rows[i].key === key) {
-        return {
-          key: rows[i].key,
-          rawValue: rows[i].value,
-          type: rows[i].type,
-          value: Validators.parseConfigValue(rows[i].type, rows[i].value),
-          description: rows[i].description,
-          updatedAt: rows[i].updated_at
-        };
+        return toConfigDto_(rows[i]);
       }
     }
     return null;
+  }
+
+  function getUniqueByKey(key) {
+    var rows = SheetRepository.getRows(APP_CONSTANTS.SHEETS.CONFIG)
+      .filter(function(row) {
+        return row.key === key;
+      });
+    ensure(
+      rows.length <= 1,
+      'STORAGE_DATA_CORRUPTED',
+      'Duplicate config key.',
+      { key: key }
+    );
+    return rows.length === 1 ? toConfigDto_(rows[0]) : null;
   }
 
   function upsertDefault(entry) {
@@ -83,6 +101,7 @@ var ConfigRepository = (function() {
   return {
     listAll: listAll,
     getByKey: getByKey,
+    getUniqueByKey: getUniqueByKey,
     upsertDefault: upsertDefault,
     ensureDefaults: ensureDefaults,
     validateDefaultsPresent: validateDefaultsPresent

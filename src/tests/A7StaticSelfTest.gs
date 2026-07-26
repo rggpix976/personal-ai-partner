@@ -43,6 +43,12 @@ function runA7StaticSelfTest() {
     assert(typeof deleteProjectTriggers === 'function', 'deleteProjectTriggers is missing.');
     assert(typeof listProjectTriggers === 'function', 'listProjectTriggers is missing.');
     assert(typeof runOperationalHealthCheck === 'function', 'runOperationalHealthCheck is missing.');
+    assert(typeof inspectProactivePolicy === 'function', 'inspectProactivePolicy is missing.');
+    assert(typeof inspectPr9PersistenceSafety === 'function', 'inspectPr9PersistenceSafety is missing.');
+    assert(typeof inspectPreviousDiaryReleaseTest === 'function', 'inspectPreviousDiaryReleaseTest is missing.');
+    assert(typeof runDiaryReleaseTest === 'function', 'runDiaryReleaseTest is missing.');
+    assert(typeof runMemoryReleaseTest === 'function', 'runMemoryReleaseTest is missing.');
+    assert(typeof runProactiveReleaseTest === 'function', 'runProactiveReleaseTest is missing.');
     assert(typeof assessDeadQueueEvent === 'function', 'assessDeadQueueEvent is missing.');
     assert(typeof requeueDeadChatReply === 'function', 'requeueDeadChatReply is missing.');
     assert(typeof assessDeadDiaryGeneration === 'function', 'assessDeadDiaryGeneration is missing.');
@@ -74,6 +80,7 @@ function runA7StaticSelfTest() {
   test('core services expose A1 methods', function() {
     assert(hasFunction('QueueService', 'enqueue'), 'QueueService.enqueue is missing.');
     assert(hasFunction('QueueService', 'claimBatch'), 'QueueService.claimBatch is missing.');
+    assert(hasFunction('QueueService', 'claimEventById'), 'QueueService.claimEventById is missing.');
     assert(hasFunction('QueueService', 'markDone'), 'QueueService.markDone is missing.');
     assert(hasFunction('QueueService', 'markRetry'), 'QueueService.markRetry is missing.');
     assert(hasFunction('QueueService', 'markDead'), 'QueueService.markDead is missing.');

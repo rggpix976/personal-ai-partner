@@ -102,6 +102,11 @@ var CharacterSettingsService = (function() {
     );
     var quietStart = normalizeTime_(request.quietStart, 'quietStart');
     var quietEnd = normalizeTime_(request.quietEnd, 'quietEnd');
+    ensure(
+      quietStart !== quietEnd,
+      'VALIDATION_REQUEST_INVALID',
+      'Quiet hours start and end must be different.'
+    );
     var validation = CharacterProfileService.validateV2({
       schemaVersion: APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION,
       identity: {

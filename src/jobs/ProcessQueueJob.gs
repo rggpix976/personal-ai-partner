@@ -33,6 +33,92 @@ function processQueueJob() {
   };
 }
 
+function processReleaseTestEventById_(
+  eventType,
+  eventId,
+  options
+) {
+  assertReleaseTestTriggersStopped_();
+  if (eventType === 'PROACTIVE_SEND') {
+    ProactiveMessageService.assertManualTestReady();
+  }
+  var now = new Date();
+  var workerId =
+    'release-test-' + eventType + ':' + generateUuidV4();
+  var correlationId = generateUuidV4();
+  var claimedEvent;
+  try {
+    claimedEvent = QueueService.claimEventById(
+      eventType,
+      eventId,
+      workerId,
+      now
+    );
+  } catch (error) {
+    var normalized = normalizeError(error);
+    if (normalized.code !== 'QUEUE_LOCK_BUSY') {
+      throw normalized;
+    }
+    return {
+      eventType: eventType,
+      claimedCount: 0,
+      status: null,
+      errorCode: null,
+      skipped: true,
+      reason: 'QUEUE_LOCK_BUSY'
+    };
+  }
+  if (!claimedEvent) {
+    return {
+      eventType: eventType,
+      claimedCount: 0,
+      status: null,
+      errorCode: null,
+      skipped: true,
+      reason: 'TARGET_EVENT_NOT_CLAIMABLE'
+    };
+  }
+  processSingleQueueEvent_(
+    claimedEvent,
+    correlationId,
+    {
+      allowProactiveTestProfile: Boolean(
+        options && options.allowProactiveTestProfile
+      )
+    }
+  );
+  var settled = SheetRepository.getEventById(eventId);
+  ensure(
+    settled && settled.eventType === eventType,
+    'STORAGE_DATA_CORRUPTED',
+    'The release-test queue event disappeared after processing.'
+  );
+  var errorCode = settled.lastError &&
+    settled.lastError.code
+    ? String(settled.lastError.code)
+    : null;
+  return {
+    eventType: eventType,
+    claimedCount: 1,
+    status: settled.status,
+    errorCode: errorCode,
+    skipped: settled.status !== 'DONE',
+    reason: settled.status === 'DONE'
+      ? 'PROCESSED'
+      : 'PROCESSING_INCOMPLETE'
+  };
+}
+
+function assertReleaseTestTriggersStopped_() {
+  var triggers = ScriptApp.getProjectTriggers();
+  ensure(
+    triggers.length === 0,
+    'CONFIG_MISSING',
+    'Release-test operators require every project trigger to be stopped.',
+    { reason: 'RELEASE_TEST_TRIGGERS_ACTIVE' }
+  );
+}
+
 function assessDeadQueueEvent(eventId) {
   return QueueService.assessDeadEventRecovery(eventId);
 }
@@ -65,9 +151,9 @@ function resumeDiaryNarrativeLengthRetries() {
   return QueueService.expediteDiaryNarrativeLengthRetries(new Date());
 }
 
-function processSingleQueueEvent_(event, correlationId) {
+function processSingleQueueEvent_(event, correlationId, options) {
   try {
-    var result = dispatchQueueEvent_(event);
+    var result = dispatchQueueEvent_(event, options);
     postDispatchSuccess_(event, result);
     QueueService.markDone(event.eventId, result, event.lockedBy);
     AppLogger.writeDebugLog('INFO', 'processQueueJob', 'Queue event completed.', {
@@ -89,7 +175,7 @@ function processSingleQueueEvent_(event, correlationId) {
   }
 }
 
-function dispatchQueueEvent_(event) {
+function dispatchQueueEvent_(event, options) {
   var nowIso = toIsoStringInTokyo(new Date());
   if (event.eventType === 'CHAT_REPLY') {
     return ChatService.processQueuedReply(event.payload, {
@@ -111,7 +197,7 @@ function dispatchQueueEvent_(event) {
     });
   }
   if (event.eventType === 'PROACTIVE_SEND') {
-    return dispatchProactiveSend_(event, nowIso);
+    return dispatchProactiveSend_(event, nowIso, options);
   }
   if (event.eventType === 'WEEKLY_BACKUP') {
     return MaintenanceService.weeklyBackup(event.payload);
@@ -130,13 +216,16 @@ function postDispatchSuccess_(event, result) {
   }
 }
 
-function dispatchProactiveSend_(event, nowIso) {
+function dispatchProactiveSend_(event, nowIso, options) {
   var preparation = ProactiveMessageService.prepareDispatch(
     event.payload,
     nowIso,
     {
       eventId: event.eventId,
-      leaseToken: event.lockedBy
+      leaseToken: event.lockedBy,
+      allowTestProfile: Boolean(
+        options && options.allowProactiveTestProfile
+      )
     }
   );
 

@@ -85,17 +85,22 @@ function runA12CharacterProactiveIntegrationTests() {
 
   function makePayload(overrides) {
     var payload = {
-      targetDate: '2026-07-24',
+      targetDate: '2099-07-24',
       sequence: 1,
       requestedAt: '2026-07-24T09:00:00+09:00',
       decisionSlot: '12345',
       messageDedupeKey:
-        'PROACTIVE_MESSAGE:2026-07-24:1',
+        'PROACTIVE_MESSAGE:2099-07-24:1',
       probability: 0.75,
       sample: 0.25,
       elapsedMinutes: 300,
       timeWeight: 1,
       reason: 'deterministic_probability_hit',
+      policyBinding: {
+        environment: 'prod',
+        frequency: 'normal',
+        mode: 'probability'
+      },
       characterRuntimeMode: 'enforced',
       characterBinding: makeBinding(4)
     };
@@ -146,7 +151,7 @@ function runA12CharacterProactiveIntegrationTests() {
     return merge({
       messageId:
         'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-      requestId: 'PROACTIVE_MESSAGE:2026-07-24:1',
+      requestId: 'PROACTIVE_MESSAGE:2099-07-24:1',
       createdAt: '2026-07-24T11:50:00+09:00',
       role: 'system',
       messageType: 'proactive',
@@ -193,12 +198,21 @@ function runA12CharacterProactiveIntegrationTests() {
       ? null
       : copy(options.marker);
     var values = merge({
-      QUIET_START: '23:00',
-      QUIET_END: '08:00',
+      QUIET_START: '00:00',
+      QUIET_END: '00:01',
       SILENCE_MINUTES: 240,
+      PROACTIVE_FREQUENCY: 'normal',
       PROACTIVE_COOLDOWN_MINUTES: 240,
       PROACTIVE_MAX_PER_DAY: 2,
       PROACTIVE_RECHECK_MINUTES: 60,
+      PROACTIVE_POLICY_MODE: 'probability',
+      PROACTIVE_SILENCE_CEILING_MINUTES: 720,
+      PROACTIVE_PROBABILITY_CURVE: 1.3,
+      PROACTIVE_DAY_START: '10:00',
+      PROACTIVE_EVENING_START: '18:00',
+      PROACTIVE_MORNING_WEIGHT: 0.7,
+      PROACTIVE_DAY_WEIGHT: 1.0,
+      PROACTIVE_EVENING_WEIGHT: 1.2,
       PROACTIVE_AI_GENERATION_ENABLED: false,
       PROACTIVE_SUBJECT_TEMPLATE: 'Legacy subject',
       PROACTIVE_BODY_TEMPLATE: 'Legacy body'
@@ -356,7 +370,7 @@ function runA12CharacterProactiveIntegrationTests() {
         trace.markerReads += 1;
         assert(
           dedupeKey ===
-            'PROACTIVE_MESSAGE:2026-07-24:1',
+            'PROACTIVE_MESSAGE:2099-07-24:1',
           'Unexpected proactive marker dedupe key.'
         );
         return visibleMarker(originEventId);
@@ -606,8 +620,10 @@ function runA12CharacterProactiveIntegrationTests() {
       PropertiesService: {
         getScriptProperties: function() {
           return {
-            getProperty: function() {
-              return 'owner@example.invalid';
+            getProperty: function(key) {
+              return key === 'APP_ENV'
+                ? 'prod'
+                : 'owner@example.invalid';
             }
           };
         }
@@ -720,7 +736,7 @@ function runA12CharacterProactiveIntegrationTests() {
       withGlobals(disabled.overrides, function() {
         disabledResult =
           ProactiveMessageService.evaluateLocalConditions(
-            '2026-07-24T12:00:00+09:00'
+            '2026-07-24T20:00:00+09:00'
           );
       });
       assert(
@@ -749,7 +765,7 @@ function runA12CharacterProactiveIntegrationTests() {
       withGlobals(legacy.overrides, function() {
         legacyResult =
           ProactiveMessageService.evaluateLocalConditions(
-            '2026-07-24T12:00:00+09:00'
+            '2026-07-24T20:00:00+09:00'
           );
       });
       assert(
@@ -770,7 +786,7 @@ function runA12CharacterProactiveIntegrationTests() {
       withGlobals(enforced.overrides, function() {
         enforcedResult =
           ProactiveMessageService.evaluateLocalConditions(
-            '2026-07-24T12:00:00+09:00'
+            '2026-07-24T20:00:00+09:00'
           );
       });
       assert(
@@ -797,7 +813,7 @@ function runA12CharacterProactiveIntegrationTests() {
       withGlobals(blocked.overrides, function() {
         blockedResult =
           ProactiveMessageService.evaluateLocalConditions(
-            '2026-07-24T12:00:00+09:00'
+            '2026-07-24T20:00:00+09:00'
           );
       });
       assert(

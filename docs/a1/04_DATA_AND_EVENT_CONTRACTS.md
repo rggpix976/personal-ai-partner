@@ -87,7 +87,8 @@ PR 5以降の新規 `PROACTIVE_SEND` も
 machine payloadではmode欠落を拒否し、PR 5以前のmode未保存eventだけをruntimeの
 historical legacy compatibilityとして処理する。enqueue後はmode/bindingを維持し、
 retry時を含めてlegacyとenforcedを相互変換しない。queue payloadの
-`subject` / `body` はmodeにかかわらず禁止する。
+`subject` / `body` はmodeにかかわらず禁止する。さらに、新規eventはenqueue時の
+`environment`、`frequency`、`mode`を持つexact `policyBinding` を必須とする。
 
 ## 4.5 `dedupe_key`
 
@@ -106,9 +107,10 @@ when the scheduler enqueues the event. Queue retries reuse the persisted
 `probability`, `sample`, `decisionSlot`, and `requestedAt`; dispatch never
 reruns or rerolls the probability decision.
 
-Dispatch performs only hard safety checks: quiet hours, `quiet_until`,
-cooldown, daily cap, mail quota, target-date expiry, and whether the user
-spoke after `requestedAt`. The queue event is deduplicated by
+Dispatch performs only hard safety checks: current frequency and policy
+binding, minimum silence, quiet hours, `quiet_until`, cooldown, daily cap,
+mail quota, target-date expiry, and whether the user spoke after
+`requestedAt`. It does not reroll the persisted probability. The queue event is deduplicated by
 `PROACTIVE_SEND:{targetDate}:{sequence}:{decisionSlot}`, while actual
 conversation delivery is deduplicated separately by
 `PROACTIVE_MESSAGE:{targetDate}:{sequence}`.

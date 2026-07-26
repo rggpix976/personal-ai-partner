@@ -2,6 +2,7 @@
 
 PR 4〜PR 8のCharacterPackを本番へ切り替える場合は、
 [PR 9 段階的本番有効化手順](PR9_STAGED_ACTIVATION.md)と
+[PR 9 人間受入テスト手順](../qa/PR9_HUMAN_ACCEPTANCE_TEST_GUIDE_JA.md)と
 [PR 9 本番確認・証跡テンプレート](../qa/PR9_EVIDENCE_TEMPLATE.md)
 を使用します。この手順が、トリガー停止、a7移行、未有効状態での設定、
 各機能の段階的テスト、自発発言の外部送信、ロールバック、最終監視の順序を管理します。
@@ -17,12 +18,17 @@ report has three states:
 
 - `OK`: required triggers are singular and no recent queue anomaly is present.
 - `DEGRADED`: an unresolved recent `DEAD` event or an overdue claimable event exists.
-- `CRITICAL`: a required trigger is missing or duplicated, or a `PROCESSING`
-  event has exceeded `QUEUE_STALE_MINUTES`.
+- `CRITICAL`: a required trigger is missing or duplicated, an unexpected
+  trigger exists, or a `PROCESSING` event has exceeded
+  `QUEUE_STALE_MINUTES`.
 
 The report intentionally excludes message content, event payloads, event and
 resource IDs, URLs, and email addresses. It includes aggregate counts by
 status and event type plus controlled error codes.
+
+The public function uses `OperationalHealthService.inspect()` and does not
+write alert state, debug logs, or email. The scheduled `schedulerJob()` keeps
+using the notifying `run()` path for approved production monitoring.
 
 Relevant configuration defaults:
 

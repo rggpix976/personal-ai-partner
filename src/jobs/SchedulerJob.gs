@@ -21,7 +21,109 @@ function schedulerJob() {
 }
 
 function runOperationalHealthCheck() {
-  return OperationalHealthService.run(new Date(), getOperationalTriggerHealth_());
+  var result = OperationalHealthService.inspect(
+    new Date(),
+    getOperationalTriggerHealth_()
+  );
+  return logPr9TestResult_('runOperationalHealthCheck', result);
+}
+
+function inspectProactivePolicy() {
+  var result = ProactiveMessageService.inspectPolicy(new Date());
+  return logPr9TestResult_('inspectProactivePolicy', result);
+}
+
+function inspectPr9PersistenceSafety() {
+  var result = ImmersionSafetyAuditService.inspect();
+  return logPr9TestResult_(
+    'inspectPr9PersistenceSafety',
+    result
+  );
+}
+
+function inspectPreviousDiaryReleaseTest() {
+  var previousDate = getTokyoRelativeDate_(new Date(), -1);
+  var lifecycle = DiaryService.getLifecycleState(previousDate);
+  var result = {
+    status: lifecycle.status,
+    anchorCount: Number(lifecycle.anchorCount || 0)
+  };
+  return logPr9TestResult_(
+    'inspectPreviousDiaryReleaseTest',
+    result
+  );
+}
+
+function runDiaryReleaseTest() {
+  assertReleaseTestTriggersStopped_();
+  var result = runReleaseTest_(
+    'DIARY_GENERATE',
+    enqueueDiaryIfDue_(new Date())
+  );
+  return logPr9TestResult_('runDiaryReleaseTest', result);
+}
+
+function runMemoryReleaseTest() {
+  assertReleaseTestTriggersStopped_();
+  var result = runReleaseTest_(
+    'MEMORY_EXTRACT',
+    enqueueMemoryExtractionIfDue_(
+      toIsoStringInTokyo(new Date())
+    )
+  );
+  return logPr9TestResult_('runMemoryReleaseTest', result);
+}
+
+function runProactiveReleaseTest() {
+  assertReleaseTestTriggersStopped_();
+  ProactiveMessageService.assertManualTestReady();
+  var result = runReleaseTest_(
+    'PROACTIVE_SEND',
+    enqueueProactiveIfEligible_(
+      new Date(),
+      { allowTestProfile: true }
+    ),
+    { allowProactiveTestProfile: true }
+  );
+  return logPr9TestResult_('runProactiveReleaseTest', result);
+}
+
+function runReleaseTest_(eventType, enqueueResult, options) {
+  var sanitized = sanitizeReleaseEnqueueResult_(
+    eventType,
+    enqueueResult
+  );
+  if (!sanitized.enqueued) {
+    return {
+      eventType: eventType,
+      enqueued: false,
+      duplicate: sanitized.duplicate,
+      processed: false,
+      status: sanitized.status,
+      reason: sanitized.reason,
+      errorCode: null
+    };
+  }
+  ensure(
+    enqueueResult &&
+      Validators.isUuidV4(enqueueResult.eventId),
+    'STORAGE_DATA_CORRUPTED',
+    'The release-test enqueue result did not identify its new event.'
+  );
+  var processing = processReleaseTestEventById_(
+    eventType,
+    enqueueResult.eventId,
+    options
+  );
+  return {
+    eventType: eventType,
+    enqueued: true,
+    duplicate: false,
+    processed: processing.status === 'DONE',
+    status: processing.status,
+    reason: processing.reason,
+    errorCode: processing.errorCode
+  };
 }
 
 function getOperationalTriggerHealth_() {
@@ -59,12 +161,17 @@ function getOperationalTriggerHealth_() {
   };
 }
 
-function enqueueProactiveIfEligible_(now) {
-  var evaluation = ProactiveMessageService.evaluateLocalConditions(now);
+function enqueueProactiveIfEligible_(now, options) {
+  var evaluation = ProactiveMessageService.evaluateLocalConditions(
+    now,
+    options
+  );
   if (!evaluation.eligible || !evaluation.payload) {
     return evaluation;
   }
+  var candidateEventId = generateUuidV4();
   var event = QueueService.enqueue({
+    eventId: candidateEventId,
     eventType: 'PROACTIVE_SEND',
     dedupeKey: evaluation.dedupeKey,
     payload: evaluation.payload,
@@ -73,8 +180,11 @@ function enqueueProactiveIfEligible_(now) {
     createdAt: evaluation.payload.requestedAt,
     updatedAt: evaluation.payload.requestedAt
   });
+  var wasInserted = event.eventId === candidateEventId;
   return {
     eligible: true,
+    enqueued: wasInserted,
+    duplicate: !wasInserted,
     reason: evaluation.reason,
     eventId: event.eventId,
     dedupeKey: event.dedupeKey
@@ -181,10 +291,29 @@ function enqueueWeeklyBackupIfDue_(now) {
 }
 
 function installTriggers() {
+  ProactiveMessageService.assertAutomaticTriggerReady();
   var existing = ScriptApp.getProjectTriggers();
   ensureTrigger_(existing, 'processQueueJob', 5);
   ensureTrigger_(existing, 'schedulerJob', 15);
-  return listProjectTriggers();
+  var result = listProjectTriggers_();
+  return logPr9TestResult_('installTriggers', result);
+}
+
+function sanitizeReleaseEnqueueResult_(eventType, result) {
+  result = result || {};
+  var hasEnqueued = Object.prototype.hasOwnProperty.call(
+    result,
+    'enqueued'
+  );
+  return {
+    eventType: eventType,
+    enqueued: hasEnqueued
+      ? Boolean(result.enqueued)
+      : Boolean(result.eligible),
+    duplicate: Boolean(result.duplicate),
+    reason: result.reason || null,
+    status: result.diaryStatus || null
+  };
 }
 
 function deleteProjectTriggers() {
@@ -195,13 +324,349 @@ function deleteProjectTriggers() {
 }
 
 function listProjectTriggers() {
+  var result = listProjectTriggers_();
+  return logPr9TestResult_('listProjectTriggers', result);
+}
+
+function listProjectTriggers_() {
   return ScriptApp.getProjectTriggers().map(function(trigger) {
     return {
       handlerFunction: trigger.getHandlerFunction(),
       eventType: String(trigger.getEventType()),
-      triggerSource: String(trigger.getTriggerSource()),
-      uniqueId: trigger.getUniqueId ? trigger.getUniqueId() : null
+      triggerSource: String(trigger.getTriggerSource())
     };
+  });
+}
+
+function logPr9TestResult_(functionName, result) {
+  var payload = buildPr9TestLogPayload_(functionName, result);
+  console.log(
+    'PR9_TEST_RESULT ' +
+      functionName +
+      ' ' +
+      JSON.stringify(payload)
+  );
+  return result;
+}
+
+function buildPr9TestLogPayload_(functionName, result) {
+  if (functionName === 'runOperationalHealthCheck') {
+    return buildPr9OperationalHealthLog_(result);
+  }
+  if (functionName === 'inspectProactivePolicy') {
+    return buildPr9ProactivePolicyLog_(result);
+  }
+  if (functionName === 'inspectPr9PersistenceSafety') {
+    return buildPr9PersistenceSafetyLog_(result);
+  }
+  if (functionName === 'inspectPreviousDiaryReleaseTest') {
+    result = result || {};
+    return {
+      status: pr9SafeUpperToken_(result.status),
+      anchorCount: pr9SafeCount_(result.anchorCount)
+    };
+  }
+  if (
+    functionName === 'runDiaryReleaseTest' ||
+    functionName === 'runMemoryReleaseTest' ||
+    functionName === 'runProactiveReleaseTest'
+  ) {
+    return buildPr9ReleaseTestLog_(result);
+  }
+  if (
+    functionName === 'listProjectTriggers' ||
+    functionName === 'installTriggers'
+  ) {
+    return buildPr9TriggerListLog_(result);
+  }
+  throw createAppError(
+    'VALIDATION_REQUEST_INVALID',
+    'The PR9 test result logger does not recognize this function.'
+  );
+}
+
+function buildPr9OperationalHealthLog_(result) {
+  result = result || {};
+  var queue = result.queue || {};
+  var byStatus = queue.byStatus || {};
+  var byEventType = queue.byEventType || {};
+  var recentDead = queue.recentDead || {};
+  var recentDeadByEventType = recentDead.byEventType || {};
+  var staleProcessing = queue.staleProcessing || {};
+  var overdue = queue.overdue || {};
+  var triggers = result.triggers || {};
+  var required = triggers.required || {};
+  var processQueueJob = required.processQueueJob || {};
+  var schedulerJob = required.schedulerJob || {};
+  return {
+    status: pr9SafeUpperToken_(result.status),
+    queue: {
+      total: pr9SafeCount_(queue.total),
+      byStatus: {
+        PENDING: pr9SafeCount_(byStatus.PENDING),
+        PROCESSING: pr9SafeCount_(byStatus.PROCESSING),
+        RETRY_WAIT: pr9SafeCount_(byStatus.RETRY_WAIT),
+        DONE: pr9SafeCount_(byStatus.DONE),
+        DEAD: pr9SafeCount_(byStatus.DEAD)
+      },
+      byEventType: buildPr9EventTypeStatusCountsLog_(byEventType),
+      recentDead: {
+        total: pr9SafeCount_(recentDead.total),
+        resolvedTotal: pr9SafeCount_(recentDead.resolvedTotal),
+        byEventType: buildPr9EventTypeCountsLog_(recentDeadByEventType)
+      },
+      staleProcessing: {
+        total: pr9SafeCount_(staleProcessing.total)
+      },
+      overdue: {
+        pending: pr9SafeCount_(overdue.pending),
+        retryWait: pr9SafeCount_(overdue.retryWait)
+      }
+    },
+    triggers: {
+      required: {
+        processQueueJob: {
+          count: pr9SafeCount_(processQueueJob.count)
+        },
+        schedulerJob: {
+          count: pr9SafeCount_(schedulerJob.count)
+        }
+      },
+      missingCount: pr9SafeCount_(triggers.missingCount),
+      duplicateCount: pr9SafeCount_(triggers.duplicateCount),
+      unexpectedCount: pr9SafeCount_(triggers.unexpectedCount)
+    }
+  };
+}
+
+function buildPr9EventTypeStatusCountsLog_(source) {
+  source = source || {};
+  return {
+    CHAT_REPLY: buildPr9StatusCountsLog_(source.CHAT_REPLY),
+    MEMORY_EXTRACT: buildPr9StatusCountsLog_(source.MEMORY_EXTRACT),
+    DIARY_GENERATE: buildPr9StatusCountsLog_(source.DIARY_GENERATE),
+    PROACTIVE_SEND: buildPr9StatusCountsLog_(source.PROACTIVE_SEND),
+    WEEKLY_BACKUP: buildPr9StatusCountsLog_(source.WEEKLY_BACKUP)
+  };
+}
+
+function buildPr9StatusCountsLog_(source) {
+  source = source || {};
+  return {
+    PENDING: pr9SafeCount_(source.PENDING),
+    PROCESSING: pr9SafeCount_(source.PROCESSING),
+    RETRY_WAIT: pr9SafeCount_(source.RETRY_WAIT),
+    DONE: pr9SafeCount_(source.DONE),
+    DEAD: pr9SafeCount_(source.DEAD)
+  };
+}
+
+function buildPr9EventTypeCountsLog_(source) {
+  source = source || {};
+  return {
+    CHAT_REPLY: pr9SafeCount_(source.CHAT_REPLY),
+    MEMORY_EXTRACT: pr9SafeCount_(source.MEMORY_EXTRACT),
+    DIARY_GENERATE: pr9SafeCount_(source.DIARY_GENERATE),
+    PROACTIVE_SEND: pr9SafeCount_(source.PROACTIVE_SEND),
+    WEEKLY_BACKUP: pr9SafeCount_(source.WEEKLY_BACKUP)
+  };
+}
+
+function buildPr9ProactivePolicyLog_(result) {
+  result = result || {};
+  var timeBands = result.timeBands || null;
+  var guardrails = result.guardrails || null;
+  return {
+    valid: pr9SafeBoolean_(result.valid),
+    environment: pr9SafeLowerToken_(result.environment),
+    frequency: pr9SafeLowerToken_(result.frequency),
+    enabled: pr9SafeBoolean_(result.enabled),
+    policyMode: pr9SafeLowerToken_(result.policyMode),
+    silenceFloorMinutes: pr9SafeNumber_(result.silenceFloorMinutes),
+    silenceCeilingMinutes: pr9SafeNumber_(result.silenceCeilingMinutes),
+    recheckMinutes: pr9SafeNumber_(result.recheckMinutes),
+    currentTimeWeight: pr9SafeNumber_(result.currentTimeWeight),
+    quietHoursActive: pr9SafeBoolean_(result.quietHoursActive),
+    timeBands: timeBands
+      ? {
+        morningStart: pr9SafeTime_(timeBands.morningStart),
+        dayStart: pr9SafeTime_(timeBands.dayStart),
+        eveningStart: pr9SafeTime_(timeBands.eveningStart),
+        quietStart: pr9SafeTime_(timeBands.quietStart),
+        quietEnd: pr9SafeTime_(timeBands.quietEnd),
+        morningWeight: pr9SafeNumber_(timeBands.morningWeight),
+        dayWeight: pr9SafeNumber_(timeBands.dayWeight),
+        eveningWeight: pr9SafeNumber_(timeBands.eveningWeight),
+        probabilityCurve: pr9SafeNumber_(
+          timeBands.probabilityCurve
+        )
+      }
+      : null,
+    guardrails: guardrails
+      ? {
+        quietStart: pr9SafeTime_(guardrails.quietStart),
+        quietEnd: pr9SafeTime_(guardrails.quietEnd),
+        quietHoursEnabled: pr9SafeBoolean_(
+          guardrails.quietHoursEnabled
+        ),
+        cooldownMinutes: pr9SafeNumber_(
+          guardrails.cooldownMinutes
+        ),
+        maxPerDay: pr9SafeNumber_(guardrails.maxPerDay)
+      }
+      : null,
+    automaticTriggersAllowed: pr9SafeBoolean_(
+      result.automaticTriggersAllowed
+    ),
+    manualTestAllowed: pr9SafeBoolean_(
+      result.manualTestAllowed
+    ),
+    issues: pr9SafeCodeList_(result.issues)
+  };
+}
+
+function buildPr9PersistenceSafetyLog_(result) {
+  result = result || {};
+  var checked = result.checked || {};
+  var unsafe = result.unsafePersistedOrSent || {};
+  var metrics = result.metrics || {};
+  return {
+    valid: pr9SafeBoolean_(result.valid),
+    windowSource: pr9SafeUpperToken_(result.windowSource),
+    checked: {
+      chatMessages: pr9SafeCount_(checked.chatMessages),
+      imageSummaries: pr9SafeCount_(checked.imageSummaries),
+      proactiveMarkers: pr9SafeCount_(
+        checked.proactiveMarkers
+      ),
+      sentProactiveMarkers: pr9SafeCount_(
+        checked.sentProactiveMarkers
+      ),
+      diaries: pr9SafeCount_(checked.diaries),
+      memories: pr9SafeCount_(checked.memories),
+      total: pr9SafeCount_(checked.total)
+    },
+    unsafePersistedOrSent: {
+      chatMessages: pr9SafeCount_(unsafe.chatMessages),
+      imageSummaries: pr9SafeCount_(unsafe.imageSummaries),
+      proactiveMarkers: pr9SafeCount_(
+        unsafe.proactiveMarkers
+      ),
+      sentProactiveMarkers: pr9SafeCount_(
+        unsafe.sentProactiveMarkers
+      ),
+      diaries: pr9SafeCount_(unsafe.diaries),
+      memories: pr9SafeCount_(unsafe.memories),
+      total: pr9SafeCount_(unsafe.total)
+    },
+    metrics: {
+      immersion_unsafe_persisted_or_sent_total:
+        pr9SafeCount_(
+          metrics.immersion_unsafe_persisted_or_sent_total
+        )
+    },
+    issues: pr9SafeCodeList_(result.issues)
+  };
+}
+
+function buildPr9ReleaseTestLog_(result) {
+  result = result || {};
+  return {
+    eventType: pr9SafeUpperToken_(result.eventType),
+    enqueued: pr9SafeBoolean_(result.enqueued),
+    duplicate: pr9SafeBoolean_(result.duplicate),
+    processed: pr9SafeBoolean_(result.processed),
+    status: pr9SafeUpperToken_(result.status),
+    reason: pr9SafeUpperToken_(result.reason),
+    errorCode: pr9SafeUpperToken_(result.errorCode)
+  };
+}
+
+function buildPr9TriggerListLog_(result) {
+  if (!Array.isArray(result)) {
+    return [];
+  }
+  return result.map(function(trigger) {
+    trigger = trigger || {};
+    return {
+      handlerFunction: pr9SafeHandlerName_(
+        trigger.handlerFunction
+      ),
+      eventType: pr9SafeUpperToken_(trigger.eventType),
+      triggerSource: pr9SafeUpperToken_(
+        trigger.triggerSource
+      )
+    };
+  });
+}
+
+function pr9SafeBoolean_(value) {
+  return typeof value === 'boolean' ? value : null;
+}
+
+function pr9SafeNumber_(value) {
+  if (value == null || value === '') {
+    return null;
+  }
+  var number = Number(value);
+  return isFinite(number) ? number : null;
+}
+
+function pr9SafeCount_(value) {
+  var number = pr9SafeNumber_(value);
+  return number != null &&
+    number >= 0 &&
+    Math.floor(number) === number
+    ? number
+    : null;
+}
+
+function pr9SafeUpperToken_(value) {
+  if (value == null || value === '') {
+    return null;
+  }
+  var token = String(value);
+  return /^[A-Z][A-Z0-9_]{0,127}$/.test(token)
+    ? token
+    : null;
+}
+
+function pr9SafeLowerToken_(value) {
+  if (value == null || value === '') {
+    return null;
+  }
+  var token = String(value);
+  return /^[a-z][a-z0-9_-]{0,63}$/.test(token)
+    ? token
+    : null;
+}
+
+function pr9SafeHandlerName_(value) {
+  if (value == null || value === '') {
+    return null;
+  }
+  var handler = String(value);
+  return /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/.test(handler)
+    ? handler
+    : null;
+}
+
+function pr9SafeTime_(value) {
+  if (value == null || value === '') {
+    return null;
+  }
+  var time = String(value);
+  return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time)
+    ? time
+    : null;
+}
+
+function pr9SafeCodeList_(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  return values.map(pr9SafeUpperToken_).filter(function(value) {
+    return value != null;
   });
 }
 

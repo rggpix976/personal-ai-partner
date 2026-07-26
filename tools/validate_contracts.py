@@ -444,6 +444,11 @@ def check_event_contract(results: Results) -> None:
             "elapsedMinutes": 300,
             "timeWeight": 1.0,
             "reason": "deterministic_probability_hit",
+            "policyBinding": {
+                "environment": "prod",
+                "frequency": "normal",
+                "mode": "probability",
+            },
             "characterRuntimeMode": "legacy",
         },
         "WEEKLY_BACKUP": {"backupDate": "2026-07-05", "requestedAt": NOW},
@@ -513,6 +518,28 @@ def check_event_contract(results: Results) -> None:
         validator,
         base_event("PROACTIVE_SEND", missing_proactive_mode),
         "Event PROACTIVE_SEND new payload requires runtime mode",
+    )
+
+    missing_proactive_policy = dict(samples["PROACTIVE_SEND"])
+    missing_proactive_policy.pop("policyBinding")
+    assert_invalid(
+        results,
+        validator,
+        base_event("PROACTIVE_SEND", missing_proactive_policy),
+        "Event PROACTIVE_SEND requires a proactive policy binding",
+    )
+
+    invalid_proactive_policy = dict(samples["PROACTIVE_SEND"])
+    invalid_proactive_policy["policyBinding"] = {
+        "environment": "staging",
+        "frequency": "normal",
+        "mode": "probability",
+    }
+    assert_invalid(
+        results,
+        validator,
+        base_event("PROACTIVE_SEND", invalid_proactive_policy),
+        "Event PROACTIVE_SEND rejects an unknown policy environment",
     )
 
     missing_proactive_binding = dict(enforced_proactive_payload)

@@ -236,6 +236,12 @@ Script Propertiesは検証時点を分離する。
 | QUIET_START | time | 23:00 |
 | QUIET_END | time | 08:00 |
 | PROACTIVE_RECHECK_MINUTES | int | 60 |
+| PROACTIVE_POLICY_MODE | string | probability |
+| PROACTIVE_SILENCE_CEILING_MINUTES | int | 720 |
+| PROACTIVE_PROBABILITY_CURVE | float | 1.3 |
+| PROACTIVE_MORNING_WEIGHT | float | 0.7 |
+| PROACTIVE_DAY_WEIGHT | float | 1.0 |
+| PROACTIVE_EVENING_WEIGHT | float | 1.2 |
 | IMAGE_MAX_BYTES | int | 4194304 |
 | IMAGE_MAX_DIMENSION | int | 1600 |
 | TEMP_IMAGE_TTL_HOURS | int | 24 |
