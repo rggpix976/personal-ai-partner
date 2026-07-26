@@ -1231,6 +1231,108 @@ function runA6QueueSchedulerTests() {
     });
   });
 
+  test('memory generation errors select retry or terminal queue outcomes', function() {
+    var fixedNow = '2026-07-26T09:00:00+09:00';
+    [
+      { code: 'CONFIG_MISSING', expected: 'DEAD' },
+      { code: 'GEMINI_AUTH_FAILED', expected: 'DEAD' },
+      { code: 'GEMINI_MODEL_UNAVAILABLE', expected: 'DEAD' },
+      { code: 'GEMINI_RATE_LIMIT', expected: 'RETRY_WAIT' },
+      { code: 'GEMINI_BAD_RESPONSE', expected: 'RETRY_WAIT' },
+      { code: 'GEMINI_TEMPORARY_FAILURE', expected: 'RETRY_WAIT' },
+      { code: 'CHARACTER_OUTPUT_BLOCKED', expected: 'RETRY_WAIT' }
+    ].forEach(function(testCase) {
+      var retried = [];
+      var dead = [];
+      var done = [];
+      withFixedNow(fixedNow, function() {
+        withOverrides({
+          QueueService: {
+            markRetry: function(eventId, error, nextAttemptAt) {
+              retried.push({
+                eventId: eventId,
+                code: error.code,
+                nextAttemptAt: nextAttemptAt
+              });
+            },
+            markDead: function(eventId, error) {
+              dead.push({
+                eventId: eventId,
+                code: error.code
+              });
+            },
+            markDone: function(eventId) {
+              done.push(eventId);
+            }
+          },
+          AppLogger: {
+            writeDebugLog: function() {}
+          }
+        }, function() {
+          handleQueueFailure_({
+            eventId: '11111111-1111-4111-8111-111111111111',
+            eventType: 'MEMORY_EXTRACT',
+            attemptCount: 0,
+            payload: {},
+            lockedBy: 'queue-lease:v1:memory-taxonomy'
+          }, createAppError(testCase.code, 'controlled'), 'correlation');
+        });
+      });
+      assert(done.length === 0, testCase.code + ' completed the queue event.');
+      if (testCase.expected === 'RETRY_WAIT') {
+        assert(
+          retried.length === 1 &&
+            dead.length === 0 &&
+            retried[0].code === testCase.code,
+          testCase.code + ' did not select RETRY_WAIT.'
+        );
+        assert(
+          retried[0].nextAttemptAt.toISOString() ===
+            new Date('2026-07-26T00:01:00.000Z').toISOString(),
+          testCase.code + ' used the wrong first retry window.'
+        );
+      } else {
+        assert(
+          dead.length === 1 &&
+            retried.length === 0 &&
+            dead[0].code === testCase.code,
+          testCase.code + ' did not select DEAD.'
+        );
+      }
+    });
+
+    var fifthRetry = 0;
+    var fifthDead = 0;
+    withOverrides({
+      QueueService: {
+        markRetry: function() {
+          fifthRetry += 1;
+        },
+        markDead: function() {
+          fifthDead += 1;
+        },
+        markDone: function() {}
+      },
+      AppLogger: {
+        writeDebugLog: function() {}
+      }
+    }, function() {
+      handleQueueFailure_({
+        eventId: '22222222-2222-4222-8222-222222222222',
+        eventType: 'MEMORY_EXTRACT',
+        attemptCount: 4,
+        payload: {}
+      }, createAppError(
+        'CHARACTER_OUTPUT_BLOCKED',
+        'controlled'
+      ), 'correlation');
+    });
+    assert(
+      fifthRetry === 0 && fifthDead === 1,
+      'The fifth memory failure did not become terminal.'
+    );
+  });
+
   test('MAIL_QUOTA_EXHAUSTED uses next-day retry window instead of short retry', function() {
     var retried = null;
     var targetDate = formatDateInTokyo(
