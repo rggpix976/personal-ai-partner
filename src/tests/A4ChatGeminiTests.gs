@@ -224,15 +224,6 @@ function runA4ChatGeminiTests() {
       ),
       GeminiClient.__test.getStructuredResponseSchema(
         'character-diary'
-      ),
-      GeminiClient.__test.getStructuredResponseSchema(
-        'character-memory-candidates',
-        {
-          allowedSourceMessageIds: [
-            '11111111-1111-4111-8111-111111111111'
-          ],
-          allowedExistingMemoryIds: []
-        }
       )
     ].forEach(function(schema) {
       var serialized = JSON.stringify(schema);
@@ -244,58 +235,24 @@ function runA4ChatGeminiTests() {
     });
   });
 
-  test('Gemini memory schema stays compact and binds provider ids', function() {
-    var sourceIds = [
-      '11111111-1111-4111-8111-111111111111',
-      '22222222-2222-4222-8222-222222222222'
-    ];
-    var memoryId =
-      '33333333-3333-4333-8333-333333333333';
-    var schema = GeminiClient.__test
-      .getStructuredResponseSchema(
-        'character-memory-candidates',
-        {
-          allowedSourceMessageIds: sourceIds,
-          allowedExistingMemoryIds: [memoryId]
-        }
-      );
-    var candidateSchema = schema.properties.candidates.items;
+  test('Gemini JSON mode omits an absent response schema', function() {
+    var body = GeminiClient.__test.buildRequestBody({
+      systemInstruction: 'test',
+      contents: [{
+        role: 'user',
+        parts: [{ text: 'test' }]
+      }]
+    }, null, {
+      responseMimeType: 'application/json',
+      responseJsonSchema: null
+    });
     assert(
-      candidateSchema.anyOf === undefined &&
-        candidateSchema.type === 'object' &&
-        candidateSchema.additionalProperties === false,
-      'Memory schema must avoid provider-rejected branch expansion.'
-    );
-    assert(
-      JSON.stringify(
-        candidateSchema.properties.sourceMessageIds.items.enum
-      ) === JSON.stringify(sourceIds) &&
-        JSON.stringify(candidateSchema.properties.action.enum) ===
-          JSON.stringify(['create', 'ignore', 'confirm', 'update']),
-      'Memory schema does not constrain actions and provenance.'
-    );
-    assert(
-      JSON.stringify(
-        candidateSchema.properties.existingMemoryId.enum
-      ) === JSON.stringify([memoryId]) &&
-        candidateSchema.required.indexOf('existingMemoryId') === -1,
-      'Memory schema must expose only approved optional memory ids.'
-    );
-
-    var noExisting = GeminiClient.__test
-      .getStructuredResponseSchema(
-        'character-memory-candidates',
-        {
-          allowedSourceMessageIds: sourceIds,
-          allowedExistingMemoryIds: []
-        }
-      )
-      .properties.candidates.items;
-    assert(
-      JSON.stringify(noExisting.properties.action.enum) ===
-        JSON.stringify(['create', 'ignore']) &&
-        noExisting.properties.existingMemoryId === undefined,
-      'Memory schema offered existing-memory actions without an id.'
+      body.generationConfig.responseMimeType === 'application/json' &&
+        !Object.prototype.hasOwnProperty.call(
+          body.generationConfig,
+          'responseJsonSchema'
+        ),
+      'Schema-less JSON mode retained a response schema.'
     );
   });
 
