@@ -23,13 +23,7 @@ var ConfigRepository = (function() {
   }
 
   function getByKey(key) {
-    var rows = SheetRepository.getRows(APP_CONSTANTS.SHEETS.CONFIG);
-    for (var i = 0; i < rows.length; i += 1) {
-      if (rows[i].key === key) {
-        return toConfigDto_(rows[i]);
-      }
-    }
-    return null;
+    return getUniqueByKey(key);
   }
 
   function getUniqueByKey(key) {
@@ -82,7 +76,7 @@ var ConfigRepository = (function() {
 
   function validateDefaultsPresent() {
     APP_CONSTANTS.CONFIG_DEFAULTS.forEach(function(entry) {
-      var config = getByKey(entry.key);
+      var config = getUniqueByKey(entry.key);
       if (!config) {
         throw createAppError('CONFIG_MISSING', 'Missing default config entry.', {
           key: entry.key

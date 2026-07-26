@@ -59,7 +59,7 @@ First run `assessDeadQueueEvent(eventId)` from a trusted operator context.
 | `MEMORY_EXTRACT` | Review the source range and current memory cursor before any new event. |
 | `DIARY_GENERATE` | Run `assessDeadDiaryGeneration(eventId)`. If it returns `REQUEUE_AS_NEW_EVENT`, call `repairDeadDiaryGeneration(eventId, manualRequestId)` with one UUID v4. Reusing the same UUID is idempotent. Never use generic replay. |
 | `PROACTIVE_SEND` | Do not replay. Wait for a fresh eligibility decision. |
-| `WEEKLY_BACKUP` | Verify whether copies already exist before considering a new backup event. |
+| `WEEKLY_BACKUP` | The same backup date reuses existing managed copies. Verify the managed pair and queue state before considering a new backup event. |
 
 An overlapping `processQueueJob` that cannot acquire the script lock exits as
 a successful safe skip with reason `QUEUE_LOCK_BUSY`. The active worker keeps
@@ -127,6 +127,12 @@ Complete the applicable cases in `docs/qa/A7_ACCEPTANCE_TEST_PLAN.md` and
 - backup creation, retention, and a restore rehearsal using isolated copies;
 - Web App rollback to the previously recorded immutable version, followed by
   restoration of the release candidate.
+
+Weekly backup retention counts complete backup dates rather than individual
+files. Only files with the managed sheet/diary backup names participate in
+retention; unrelated files in the backup folder are never trashed. A retry for
+the same date reuses an existing managed copy and creates only a missing member
+of the pair.
 
 Never overwrite the production spreadsheet or diary document during the
 restore rehearsal. Restore copies into isolated test resources, validate them,

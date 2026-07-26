@@ -125,7 +125,7 @@ function runA12CharacterProactiveGeminiAdapterTests() {
     };
   }
 
-  test('Gemini client exposes an exact proactive response schema', function() {
+  test('Gemini client exposes a compatible exact proactive response schema', function() {
     var schema = GeminiClient.__test.getStructuredResponseSchema(
       'character-proactive'
     );
@@ -135,13 +135,13 @@ function runA12CharacterProactiveGeminiAdapterTests() {
         schema.additionalProperties === false &&
         JSON.stringify(schema.required) ===
           JSON.stringify(['subject', 'body']) &&
-        schema.properties.subject.minLength === 1 &&
-        schema.properties.subject.maxLength ===
-          APP_CONSTANTS.CHARACTER.SURFACE_LIMITS.PROACTIVE.subject &&
-        schema.properties.body.minLength === 1 &&
-        schema.properties.body.maxLength ===
-          APP_CONSTANTS.CHARACTER.SURFACE_LIMITS.PROACTIVE.body,
-      'Proactive structured schema is not exact and bounded.'
+        schema.properties.subject.type === 'string' &&
+        schema.properties.body.type === 'string' &&
+        schema.properties.subject.minLength === undefined &&
+        schema.properties.subject.maxLength === undefined &&
+        schema.properties.body.minLength === undefined &&
+        schema.properties.body.maxLength === undefined,
+      'Proactive structured schema contains unsupported string bounds.'
     );
   });
 

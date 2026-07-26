@@ -217,6 +217,117 @@ function runA4ChatGeminiTests() {
     );
   });
 
+  test('Gemini structured schemas omit unsupported string length keywords', function() {
+    [
+      GeminiClient.__test.getStructuredResponseSchema(
+        'character-proactive'
+      ),
+      GeminiClient.__test.getStructuredResponseSchema(
+        'character-diary'
+      ),
+      GeminiClient.__test.getStructuredResponseSchema(
+        'character-memory-candidates',
+        {
+          allowedSourceMessageIds: [
+            '11111111-1111-4111-8111-111111111111'
+          ],
+          allowedExistingMemoryIds: []
+        }
+      )
+    ].forEach(function(schema) {
+      var serialized = JSON.stringify(schema);
+      assert(
+        serialized.indexOf('"minLength"') === -1 &&
+          serialized.indexOf('"maxLength"') === -1,
+        'Gemini response schema retained unsupported string bounds.'
+      );
+    });
+  });
+
+  test('Gemini memory schema binds actions to exact source and memory ids', function() {
+    var sourceIds = [
+      '11111111-1111-4111-8111-111111111111',
+      '22222222-2222-4222-8222-222222222222'
+    ];
+    var memoryId =
+      '33333333-3333-4333-8333-333333333333';
+    var schema = GeminiClient.__test
+      .getStructuredResponseSchema(
+        'character-memory-candidates',
+        {
+          allowedSourceMessageIds: sourceIds,
+          allowedExistingMemoryIds: [memoryId]
+        }
+      );
+    var branches =
+      schema.properties.candidates.items.anyOf;
+    var byAction = {};
+    branches.forEach(function(branch) {
+      byAction[branch.properties.action.enum[0]] = branch;
+    });
+    assert(
+      branches.length === 4 &&
+        byAction.create &&
+        byAction.ignore &&
+        byAction.confirm &&
+        byAction.update,
+      'Memory action branches are incomplete.'
+    );
+    assert(
+      JSON.stringify(
+        byAction.create.properties.sourceMessageIds.items.enum
+      ) === JSON.stringify(sourceIds) &&
+        byAction.create.properties.existingMemoryId === undefined &&
+        byAction.create.required.indexOf('existingMemoryId') === -1,
+      'Create memory schema does not enforce exact provenance.'
+    );
+    assert(
+      JSON.stringify(
+        byAction.confirm.properties.existingMemoryId.enum
+      ) === JSON.stringify([memoryId]) &&
+        byAction.confirm.required.indexOf('existingMemoryId') !== -1,
+      'Confirm memory schema does not enforce an approved memory id.'
+    );
+
+    var noExisting = GeminiClient.__test
+      .getStructuredResponseSchema(
+        'character-memory-candidates',
+        {
+          allowedSourceMessageIds: sourceIds,
+          allowedExistingMemoryIds: []
+        }
+      )
+      .properties.candidates.items.anyOf;
+    assert(
+      JSON.stringify(noExisting.map(function(branch) {
+        return branch.properties.action.enum[0];
+      })) === JSON.stringify(['create', 'ignore']),
+      'Memory schema offered existing-memory actions without an id.'
+    );
+  });
+
+  test('Gemini HTTP 400 exposes only a safe non-retryable stage', function() {
+    var privateMarker = 'PRIVATE-GEMINI-HTTP-DETAIL';
+    var error = GeminiClient.__test.mapHttpError(400, {
+      error: {
+        message: privateMarker
+      }
+    });
+    assert(
+      error.code === 'GEMINI_BAD_RESPONSE' &&
+        error.retryable === false &&
+        error.retryStrategy === 'NONE' &&
+        error.httpStatus === 400 &&
+        error.details &&
+        error.details.safeStage === 'HTTP_REQUEST_REJECTED',
+      'Gemini HTTP 400 was not classified deterministically.'
+    );
+    assert(
+      JSON.stringify(error.details).indexOf(privateMarker) === -1,
+      'Gemini HTTP stage details exposed provider content.'
+    );
+  });
+
   test('duplicate request helper yields positive retry seconds', function() {
     var seconds = ChatService.__test.computeRetryAfterSeconds({
       nextAttemptAt: '2099-01-01T00:00:10+09:00'

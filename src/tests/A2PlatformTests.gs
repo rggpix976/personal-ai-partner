@@ -97,6 +97,75 @@ function runA2PlatformTests() {
     Validators.validateSheetSchema('config', ['key', 'value', 'type', 'description', 'updated_at']);
   });
 
+  test('post-deploy validation accepts only the exact deployed Web App URL', function() {
+    var url =
+      'https://script.google.com/macros/s/AKfycbw_test-123/exec';
+    assert(
+      assertPostDeployWebAppUrl_(url, url) === true,
+      'The exact deployed Web App URL should validate.'
+    );
+  });
+
+  expectThrows(
+    'post-deploy validation rejects a library or unrelated exec URL',
+    function() {
+      assertPostDeployWebAppUrl_(
+        'https://example.com/not-a-web-app/exec',
+        'https://script.google.com/macros/s/AKfycbw_test-123/exec'
+      );
+    },
+    'CONFIG_MISSING'
+  );
+
+  expectThrows(
+    'post-deploy validation rejects a different deployed Web App URL',
+    function() {
+      assertPostDeployWebAppUrl_(
+        'https://script.google.com/macros/s/AKfycbw_first/exec',
+        'https://script.google.com/macros/s/AKfycbw_second/exec'
+      );
+    },
+    'CONFIG_MISSING'
+  );
+
+  test('config lookup fails closed for duplicate primary keys', function() {
+    var originalSheetRepository = SheetRepository;
+    SheetRepository = {
+      getRows: function() {
+        return [
+          {
+            key: 'QUEUE_BATCH_SIZE',
+            value: '3',
+            type: 'int',
+            description: 'first',
+            updated_at: '2026-07-26T10:00:00+09:00'
+          },
+          {
+            key: 'QUEUE_BATCH_SIZE',
+            value: '9',
+            type: 'int',
+            description: 'duplicate',
+            updated_at: '2026-07-26T10:01:00+09:00'
+          }
+        ];
+      }
+    };
+    try {
+      var thrown = null;
+      try {
+        ConfigRepository.getByKey('QUEUE_BATCH_SIZE');
+      } catch (error) {
+        thrown = error;
+      }
+      assert(
+        thrown && thrown.code === 'STORAGE_DATA_CORRUPTED',
+        'Duplicate config primary keys must stop runtime reads.'
+      );
+    } finally {
+      SheetRepository = originalSheetRepository;
+    }
+  });
+
   test('conversation approval columns are an additive ordered schema block', function() {
     var schemaHeaders = getSheetSchema(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS)
       .map(function(column) {
@@ -262,9 +331,23 @@ function runA2PlatformTests() {
         text: 'before',
         status: 'completed'
       });
+      SheetRepository.appendConversation({
+        messageId: '10101010-1010-4010-8010-101010101010',
+        requestId: '20202020-2020-4020-8020-202020202020',
+        createdAt: '2026-07-24T09:00:30+09:00',
+        role: 'user',
+        messageType: 'text',
+        text: '=HYPERLINK("https://example.invalid","unsafe")',
+        status: 'accepted'
+      });
       assert(
         rows[1][headers.length - 1] === '',
         'Append must leave an unknown future column empty.'
+      );
+      assert(
+        rows[2][headers.indexOf('text')] ===
+          '\'=HYPERLINK("https://example.invalid","unsafe")',
+        'Formula-like conversation text must be written as a literal string.'
       );
 
       rows[1][headers.length - 1] = 'future-value';
@@ -714,6 +797,103 @@ function runA2PlatformTests() {
           headers.indexOf('proactive_origin_event_id')
         ] === claimedHistoricalOrigin,
         'A historical null origin could not bind to its current retry event.'
+      );
+    } finally {
+      PropertiesService = originalPropertiesService;
+      if (hadSpreadsheetApp) {
+        globalThis.SpreadsheetApp = originalSpreadsheetApp;
+      } else {
+        delete globalThis.SpreadsheetApp;
+      }
+    }
+  });
+
+  test('user_state lookup rejects duplicate singleton rows', function() {
+    var originalPropertiesService = PropertiesService;
+    var hadSpreadsheetApp = Object.prototype.hasOwnProperty.call(
+      globalThis,
+      'SpreadsheetApp'
+    );
+    var originalSpreadsheetApp = hadSpreadsheetApp
+      ? globalThis.SpreadsheetApp
+      : null;
+    var headers = getSheetSchema(APP_CONSTANTS.SHEETS.USER_STATE)
+      .map(function(column) {
+        return column.name;
+      });
+    var defaultRow = headers.map(function(header) {
+      if (header === 'singleton_id') {
+        return APP_CONSTANTS.USER_STATE_SINGLETON_ID;
+      }
+      if (header === 'proactive_count') {
+        return 0;
+      }
+      if (header === 'updated_at') {
+        return new Date('2026-07-26T10:00:00+09:00');
+      }
+      return '';
+    });
+    var rows = [
+      headers,
+      defaultRow,
+      defaultRow.slice()
+    ];
+    var sheet = {
+      getLastColumn: function() {
+        return headers.length;
+      },
+      getLastRow: function() {
+        return rows.length;
+      },
+      getRange: function(row, column, rowCount, columnCount) {
+        return {
+          getValues: function() {
+            var values = [];
+            for (
+              var rowOffset = 0;
+              rowOffset < rowCount;
+              rowOffset += 1
+            ) {
+              values.push(
+                rows[row - 1 + rowOffset].slice(
+                  column - 1,
+                  column - 1 + columnCount
+                )
+              );
+            }
+            return values;
+          }
+        };
+      }
+    };
+    PropertiesService = {
+      getScriptProperties: function() {
+        return {
+          getProperty: function() {
+            return 'test-spreadsheet';
+          }
+        };
+      }
+    };
+    globalThis.SpreadsheetApp = {
+      openById: function() {
+        return {
+          getSheetByName: function() {
+            return sheet;
+          }
+        };
+      }
+    };
+    try {
+      var thrown = null;
+      try {
+        SheetRepository.getUserState();
+      } catch (error) {
+        thrown = error;
+      }
+      assert(
+        thrown && thrown.code === 'STORAGE_DATA_CORRUPTED',
+        'Duplicate user_state singleton rows must fail closed.'
       );
     } finally {
       PropertiesService = originalPropertiesService;

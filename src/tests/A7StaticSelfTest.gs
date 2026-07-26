@@ -49,6 +49,7 @@ function runA7StaticSelfTest() {
     assert(typeof runDiaryReleaseTest === 'function', 'runDiaryReleaseTest is missing.');
     assert(typeof runMemoryReleaseTest === 'function', 'runMemoryReleaseTest is missing.');
     assert(typeof resumeMemoryReleaseTest === 'function', 'resumeMemoryReleaseTest is missing.');
+    assert(typeof diagnoseMemoryReleaseGeneration === 'function', 'diagnoseMemoryReleaseGeneration is missing.');
     assert(typeof runProactiveReleaseTest === 'function', 'runProactiveReleaseTest is missing.');
     assert(typeof assessDeadQueueEvent === 'function', 'assessDeadQueueEvent is missing.');
     assert(typeof requeueDeadChatReply === 'function', 'requeueDeadChatReply is missing.');

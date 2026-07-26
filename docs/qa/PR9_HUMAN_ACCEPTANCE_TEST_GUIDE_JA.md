@@ -307,6 +307,17 @@ Codexから次の6項目がすべて合格と報告されていることを確�
 
 判定：`[〇] 合格`　`[ ] 停止`
 
+### H4-02F 数式に見える本文の保存
+
+1. 入力欄へ`=1+1`と入力して「Send」をクリックする。
+2. ユーザーの吹き出しに`=1+1`がそのまま表示され、`2`やエラー表示へ
+   変わらないことを確認する。
+3. `conversation_logs`シートの対応するユーザー行を開き、`text`セルが
+   `=1+1`という本文として表示され、計算結果の`2`になっていないことを確認する。
+4. assistantの返答が1件だけ返ることを確認する。返答内容自体は固定しない。
+
+判定：`[〇] 合格`　`[ ] 停止`
+
 ### H4-03〜H4-08 固定セリフ
 
 表の`{partnerName}`と`{userAddress}`は、H3で保存した実際の名前と呼称へ
@@ -496,8 +507,25 @@ MEMORY_CHARACTER_ENFORCEMENT_ENABLED=true
 1. Webアプリで新しいメッセージを送らず、テスト操作を止める。
 2. `runMemoryReleaseTest()`、`processQueueJob()`、その他のrelease test関数を
    追加実行しない。`event_queue`と記憶cursorを手作業で変更しない。
-3. `runOperationalHealthCheck()`を1回実行する。
-4. 実行ログの集計値だけで、次をすべて確認する。
+3. 修正版をデプロイした後、`diagnoseMemoryReleaseGeneration()`を1回だけ実行する。
+   この関数は既存イベントをclaimせず、attempt数、status、cursor、記憶を変更しない。
+   Geminiへの一次生成確認は1回行うが、生成内容・会話・各種IDはログへ出さない。
+4. `PR9_TEST_RESULT diagnoseMemoryReleaseGeneration`で次を確認する。
+
+   ```text
+   eventType=MEMORY_EXTRACT
+   ok=true
+   stage=PRIMARY_GENERATION_VALID
+   errorCode=null
+   candidateCount=0以上20以下の整数
+   ```
+
+   `ok=false`、`stage`が上記以外、`errorCode`が非null、関数の例外終了のいずれかなら、
+   `resumeMemoryReleaseTest()`を実行せず停止する。診断関数も再実行しない。
+5. Codexから案内された再試行期限まで待つ。期限前に
+   `resumeMemoryReleaseTest()`を実行しない。
+6. 期限到来後、`runOperationalHealthCheck()`を1回実行する。
+7. 実行ログの集計値だけで、次をすべて確認する。
 
    ```text
    triggers.required.processQueueJob.count=0
@@ -516,9 +544,9 @@ MEMORY_CHARACTER_ENFORCEMENT_ENABLED=true
    queue.overdue.retryWait=1
    ```
 
-5. 1項目でも一致しなければ実行せず停止する。一致した場合だけ、
+8. 1項目でも一致しなければ実行せず停止する。一致した場合だけ、
    `resumeMemoryReleaseTest()`を選び、「実行」を1回だけクリックする。
-6. `PR9_TEST_RESULT resumeMemoryReleaseTest`で、次の7項目を確認する。
+9. `PR9_TEST_RESULT resumeMemoryReleaseTest`で、次の7項目を確認する。
 
    ```text
    eventType=MEMORY_EXTRACT
@@ -532,9 +560,9 @@ MEMORY_CHARACTER_ENFORCEMENT_ENABLED=true
 
    この復旧分岐に限り、`enqueued=false`と`duplicate=true`は、新しいイベントを
    作らず、既存の同一イベントだけを再開したことを示す正しい結果です。
-7. `long_term_memories`に新規・更新された行がある場合は本文を画面上だけで読み、
+10. `long_term_memories`に新規・更新された行がある場合は本文を画面上だけで読み、
    H4の会話にない事実が保存されていないことを確認する。本文は転記しない。
-8. `runOperationalHealthCheck()`をもう一度実行し、次を確認する。
+11. `runOperationalHealthCheck()`をもう一度実行し、次を確認する。
 
    ```text
    queue.byStatus.PENDING=0
@@ -549,10 +577,11 @@ MEMORY_CHARACTER_ENFORCEMENT_ENABLED=true
    queue.overdue.retryWait=0
    ```
 
-9. すべて一致した場合だけ、H5準備の通常手順へ戻る。H5-01後に作られる新しい
+12. すべて一致した場合だけ、H5準備の通常手順へ戻る。H5-01後に作られる新しい
    batchについて、H5-11の`runMemoryReleaseTest()`を通常どおり別途確認する。
 
-手順6が上記と異なる、関数が例外終了する、または復旧後の集計が一致しない場合は、
+手順4または手順9が上記と異なる、関数が例外終了する、または復旧後の集計が
+一致しない場合は、
 再実行せず停止します。特に`TARGET_EVENT_MISSING`、
 `TARGET_EVENT_AMBIGUOUS`、`TARGET_EVENT_MISMATCH`、
 `TARGET_EVENT_PROCESSING`、`TARGET_EVENT_NOT_DUE`、
