@@ -9,8 +9,11 @@ var GeminiClient = (function() {
     return generateContent_(request, request && request.image ? request.image : null);
   }
 
-  function generateStructured(request, schemaName) {
-    var responseJsonSchema = getStructuredResponseSchema_(schemaName);
+  function generateStructured(request, schemaName, schemaOptions) {
+    var responseJsonSchema = getStructuredResponseSchema_(
+      schemaName,
+      schemaOptions
+    );
     var response = generateContent_(request, request && request.image ? request.image : null, {
       responseMimeType: 'application/json',
       responseJsonSchema: responseJsonSchema
@@ -49,7 +52,12 @@ var GeminiClient = (function() {
     if (image && image.inlineData) {
       attachInlineImageToLastUserTurn_(contents, image.inlineData);
     }
-    ensure(contents.length > 0, 'GEMINI_BAD_RESPONSE', 'Gemini request contents are required.');
+    ensure(
+      contents.length > 0,
+      'GEMINI_BAD_RESPONSE',
+      'Gemini request contents are required.',
+      safeStageDetails_('REQUEST_CONTENTS_INVALID')
+    );
 
     var body = {
       contents: contents,
@@ -72,7 +80,13 @@ var GeminiClient = (function() {
     return body;
   }
 
-  function getStructuredResponseSchema_(schemaName) {
+  function getStructuredResponseSchema_(schemaName, schemaOptions) {
+    return sanitizeStructuredResponseSchema_(
+      buildStructuredResponseSchema_(schemaName, schemaOptions)
+    );
+  }
+
+  function buildStructuredResponseSchema_(schemaName, schemaOptions) {
     if (schemaName === 'character-chat-image') {
       return {
         type: 'object',
@@ -148,6 +162,9 @@ var GeminiClient = (function() {
     }
 
     if (schemaName === 'character-memory-candidates') {
+      var memorySchemaOptions = normalizeMemorySchemaOptions_(
+        schemaOptions
+      );
       return {
         type: 'object',
         additionalProperties: false,
@@ -155,60 +172,9 @@ var GeminiClient = (function() {
           candidates: {
             type: 'array',
             maxItems: 20,
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                action: {
-                  type: 'string',
-                  enum: ['create', 'confirm', 'update', 'ignore']
-                },
-                category: {
-                  type: 'string',
-                  enum: APP_CONSTANTS.MEMORY_CATEGORIES.slice()
-                },
-                normalizedKey: {
-                  type: 'string',
-                  minLength: 1,
-                  maxLength: 200
-                },
-                content: {
-                  type: 'string',
-                  minLength: 1,
-                  maxLength: 1000
-                },
-                confidence: {
-                  type: 'number',
-                  minimum: 0,
-                  maximum: 1
-                },
-                sourceMessageIds: {
-                  type: 'array',
-                  minItems: 1,
-                  maxItems: 100,
-                  items: {
-                    type: 'string'
-                  }
-                },
-                reason: {
-                  type: 'string',
-                  minLength: 1,
-                  maxLength: 500
-                },
-                existingMemoryId: {
-                  type: 'string'
-                }
-              },
-              required: [
-                'action',
-                'category',
-                'normalizedKey',
-                'content',
-                'confidence',
-                'sourceMessageIds',
-                'reason'
-              ]
-            }
+            items: buildMemoryCandidateSchema_(
+              memorySchemaOptions
+            )
           }
         },
         required: ['candidates']
@@ -294,6 +260,199 @@ var GeminiClient = (function() {
     return null;
   }
 
+  function normalizeMemorySchemaOptions_(options) {
+    ensure(
+      isPlainObject_(options) &&
+        hasExactKeys_(
+          options,
+          [
+            'allowedSourceMessageIds',
+            'allowedExistingMemoryIds'
+          ]
+        ) &&
+        isUuidList_(
+          options.allowedSourceMessageIds,
+          100,
+          false
+        ) &&
+        isUuidList_(
+          options.allowedExistingMemoryIds,
+          100,
+          true
+        ),
+      'VALIDATION_REQUEST_INVALID',
+      'Character memory response schema options are invalid.'
+    );
+    return {
+      allowedSourceMessageIds:
+        options.allowedSourceMessageIds.slice(),
+      allowedExistingMemoryIds:
+        options.allowedExistingMemoryIds.slice()
+    };
+  }
+
+  function buildMemoryCandidateSchema_(options) {
+    var branches = [
+      buildMemoryCandidateActionSchema_(
+        'create',
+        options,
+        false
+      ),
+      buildMemoryCandidateActionSchema_(
+        'ignore',
+        options,
+        false
+      )
+    ];
+    if (options.allowedExistingMemoryIds.length > 0) {
+      branches.push(
+        buildMemoryCandidateActionSchema_(
+          'confirm',
+          options,
+          true
+        )
+      );
+      branches.push(
+        buildMemoryCandidateActionSchema_(
+          'update',
+          options,
+          true
+        )
+      );
+    }
+    return {
+      anyOf: branches
+    };
+  }
+
+  function buildMemoryCandidateActionSchema_(
+    action,
+    options,
+    requiresExisting
+  ) {
+    var properties = {
+      action: {
+        type: 'string',
+        enum: [action]
+      },
+      category: {
+        type: 'string',
+        enum: APP_CONSTANTS.MEMORY_CATEGORIES.slice()
+      },
+      normalizedKey: {
+        type: 'string'
+      },
+      content: {
+        type: 'string'
+      },
+      confidence: {
+        type: 'number',
+        minimum: 0,
+        maximum: 1
+      },
+      sourceMessageIds: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 100,
+        items: {
+          type: 'string',
+          enum: options.allowedSourceMessageIds.slice()
+        }
+      },
+      reason: {
+        type: 'string'
+      }
+    };
+    var required = [
+      'action',
+      'category',
+      'normalizedKey',
+      'content',
+      'confidence',
+      'sourceMessageIds',
+      'reason'
+    ];
+    if (requiresExisting) {
+      properties.existingMemoryId = {
+        type: 'string',
+        enum: options.allowedExistingMemoryIds.slice()
+      };
+      required.push('existingMemoryId');
+    }
+    return {
+      type: 'object',
+      additionalProperties: false,
+      properties: properties,
+      required: required
+    };
+  }
+
+  function sanitizeStructuredResponseSchema_(value) {
+    if (Array.isArray(value)) {
+      return value.map(sanitizeStructuredResponseSchema_);
+    }
+    if (!value || typeof value !== 'object') {
+      return value;
+    }
+    var result = {};
+    Object.keys(value).forEach(function(key) {
+      if (
+        key === 'minLength' ||
+        key === 'maxLength' ||
+        value[key] === undefined
+      ) {
+        return;
+      }
+      result[key] = sanitizeStructuredResponseSchema_(
+        value[key]
+      );
+    });
+    return result;
+  }
+
+  function isUuidList_(value, maxItems, allowEmpty) {
+    if (
+      !Array.isArray(value) ||
+      value.length > maxItems ||
+      (!allowEmpty && value.length === 0)
+    ) {
+      return false;
+    }
+    var seen = {};
+    return value.every(function(id) {
+      if (!Validators.isUuidV4(id) || seen[id]) {
+        return false;
+      }
+      seen[id] = true;
+      return true;
+    });
+  }
+
+  function hasExactKeys_(value, expectedKeys) {
+    if (!isPlainObject_(value)) {
+      return false;
+    }
+    var keys = Object.keys(value);
+    return keys.length === expectedKeys.length &&
+      expectedKeys.every(function(key) {
+        return Object.prototype.hasOwnProperty.call(value, key);
+      });
+  }
+
+  function isPlainObject_(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return false;
+    }
+    var prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  }
+
+  function safeStageDetails_(stage) {
+    return {
+      safeStage: stage
+    };
+  }
+
   function parseStructuredData_(text) {
     try {
       return JSON.parse(String(text || ''));
@@ -302,7 +461,8 @@ var GeminiClient = (function() {
       // retain the raw response as an error sample or cause.
       throw createAppError(
         'GEMINI_BAD_RESPONSE',
-        'Gemini structured response is not valid JSON.'
+        'Gemini structured response is not valid JSON.',
+        safeStageDetails_('STRUCTURED_JSON_INVALID')
       );
     }
   }
@@ -363,9 +523,14 @@ var GeminiClient = (function() {
     var candidate = payload && payload.candidates && payload.candidates[0];
     var generatedText = extractTextFromCandidate_(candidate);
     if (!generatedText) {
-      throw createAppError('GEMINI_BAD_RESPONSE', 'Gemini response did not contain text.', null, {
-        retryable: true
-      });
+      throw createAppError(
+        'GEMINI_BAD_RESPONSE',
+        'Gemini response did not contain text.',
+        safeStageDetails_('RESPONSE_TEXT_MISSING'),
+        {
+          retryable: true
+        }
+      );
     }
 
     return {
@@ -388,7 +553,7 @@ var GeminiClient = (function() {
       throw createAppError(
         'GEMINI_BAD_RESPONSE',
         'Gemini blocked the response.',
-        null,
+        safeStageDetails_('RESPONSE_BLOCKED'),
         {
           retryable: false,
           httpStatus: 400,
@@ -411,10 +576,18 @@ var GeminiClient = (function() {
     var lowered = message.toLowerCase();
 
     if (statusCode === 429) {
-      return createAppError('GEMINI_RATE_LIMIT', message);
+      return createAppError(
+        'GEMINI_RATE_LIMIT',
+        message,
+        safeStageDetails_('HTTP_RATE_LIMITED')
+      );
     }
     if (statusCode === 401 || statusCode === 403) {
-      return createAppError('GEMINI_AUTH_FAILED', message);
+      return createAppError(
+        'GEMINI_AUTH_FAILED',
+        message,
+        safeStageDetails_('HTTP_AUTH_FAILED')
+      );
     }
     if (
       statusCode === 404 ||
@@ -424,25 +597,46 @@ var GeminiClient = (function() {
         lowered.indexOf('unsupported') !== -1
       )
     ) {
-      return createAppError('GEMINI_MODEL_UNAVAILABLE', message, null, {
-        httpStatus: statusCode
-      });
+      return createAppError(
+        'GEMINI_MODEL_UNAVAILABLE',
+        message,
+        safeStageDetails_('HTTP_MODEL_UNAVAILABLE'),
+        {
+          httpStatus: statusCode
+        }
+      );
     }
     if (statusCode >= 500) {
-      return createAppError('GEMINI_TEMPORARY_FAILURE', message, null, {
-        httpStatus: statusCode
-      });
+      return createAppError(
+        'GEMINI_TEMPORARY_FAILURE',
+        message,
+        safeStageDetails_('HTTP_SERVER_FAILURE'),
+        {
+          httpStatus: statusCode
+        }
+      );
     }
     if (statusCode === 400) {
-      return createAppError('GEMINI_BAD_RESPONSE', message, null, {
-        retryable: false,
-        httpStatus: 400,
-        userMessage: 'The AI request could not be processed.'
-      });
+      return createAppError(
+        'GEMINI_BAD_RESPONSE',
+        message,
+        safeStageDetails_('HTTP_REQUEST_REJECTED'),
+        {
+          retryable: false,
+          retryStrategy: 'NONE',
+          httpStatus: 400,
+          userMessage: 'The AI request could not be processed.'
+        }
+      );
     }
-    return createAppError('GEMINI_TEMPORARY_FAILURE', message, null, {
-      httpStatus: statusCode
-    });
+    return createAppError(
+      'GEMINI_TEMPORARY_FAILURE',
+      message,
+      safeStageDetails_('HTTP_FAILURE'),
+      {
+        httpStatus: statusCode
+      }
+    );
   }
 
   function normalizeGeminiError_(error) {
@@ -455,14 +649,19 @@ var GeminiClient = (function() {
       message.indexOf('Timed out') !== -1 ||
       message.indexOf('Service invoked too many times') !== -1
     ) {
-      return createAppError('GEMINI_TEMPORARY_FAILURE', 'Gemini transport request failed.', null, {
-        cause: error
-      });
+      return createAppError(
+        'GEMINI_TEMPORARY_FAILURE',
+        'Gemini transport request failed.',
+        safeStageDetails_('TRANSPORT_FAILURE'),
+        {
+          cause: error
+        }
+      );
     }
     return createAppError(
       'GEMINI_TEMPORARY_FAILURE',
       'Gemini transport request failed.',
-      null,
+      safeStageDetails_('TRANSPORT_FAILURE'),
       { cause: error }
     );
   }
@@ -471,10 +670,15 @@ var GeminiClient = (function() {
     try {
       return JSON.parse(text);
     } catch (error) {
-      throw createAppError('GEMINI_BAD_RESPONSE', 'Gemini response body was not valid JSON.', null, {
-        cause: error,
-        retryable: true
-      });
+      throw createAppError(
+        'GEMINI_BAD_RESPONSE',
+        'Gemini response body was not valid JSON.',
+        safeStageDetails_('HTTP_RESPONSE_JSON_INVALID'),
+        {
+          cause: error,
+          retryable: true
+        }
+      );
     }
   }
 

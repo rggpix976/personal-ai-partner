@@ -35,29 +35,15 @@ var MemoryService = (function() {
       lastError: null
     };
 
-    try {
-      SheetRepository.insertEvent(event);
-      return {
-        enqueued: true,
-        duplicate: false,
-        eventId: event.eventId,
-        dedupeKey: dedupeKey,
-        payload: event.payload
-      };
-    } catch (error) {
-      var normalized = normalizeError(error);
-      if (normalized.code !== 'DUPLICATE_REQUEST') {
-        throw normalized;
-      }
-      var existing = SheetRepository.getActiveEventByDedupeKey(dedupeKey);
-      return {
-        enqueued: false,
-        duplicate: true,
-        eventId: existing ? existing.eventId : null,
-        dedupeKey: dedupeKey,
-        payload: event.payload
-      };
-    }
+    var queued = QueueService.enqueue(event);
+    var enqueued = queued.eventId === event.eventId;
+    return {
+      enqueued: enqueued,
+      duplicate: !enqueued,
+      eventId: queued.eventId,
+      dedupeKey: dedupeKey,
+      payload: event.payload
+    };
   }
 
   function extract(eventPayload, options) {
@@ -66,6 +52,54 @@ var MemoryService = (function() {
       return extractEnforced_(payload, options);
     }
     return extractLegacy_(payload);
+  }
+
+  function diagnoseExtraction(eventPayload) {
+    var payload = validateExtractionPayload_(eventPayload);
+    ensure(
+      payload.characterRuntimeMode === 'enforced',
+      'VALIDATION_REQUEST_INVALID',
+      'Memory generation diagnosis requires enforced mode.'
+    );
+    var preparation = prepareEnforcedGeneration_(payload);
+    var signals =
+      CharacterMemoryContextService.classificationSignals(
+        preparation.context
+      );
+    var classification =
+      CharacterModeClassifier.classifyDetailed({
+        text: '',
+        partnerName:
+          preparation.context.persona.profile.identity.partnerName,
+        safetyRequired: signals.safetyRequired,
+        adminRequest: signals.adminRequest,
+        capabilityUnavailable: signals.capabilityUnavailable
+      });
+    ensure(
+      classification.mode === 'CHARACTER',
+      'CHARACTER_OUTPUT_BLOCKED',
+      'Memory generation diagnosis selected a non-generation route.'
+    );
+    var classified = CharacterContextService.withConversationMode(
+      preparation.context,
+      classification.mode
+    );
+    var generated = preparation.session.generate({
+      context: CharacterContextService.toGenerationView(classified),
+      surface: 'MEMORY_EXTRACTION',
+      mode: classification.mode
+    });
+    ensure(
+      generated &&
+        Array.isArray(generated.candidates) &&
+        generated.candidates.length <= DEFAULTS.maxCandidateCount,
+      'GEMINI_BAD_RESPONSE',
+      'Memory generation diagnosis returned an invalid candidate set.',
+      { safeStage: 'MEMORY_CANDIDATE_SET_INVALID' }
+    );
+    return {
+      candidateCount: generated.candidates.length
+    };
   }
 
   function extractLegacy_(eventPayload) {
@@ -115,29 +149,9 @@ var MemoryService = (function() {
       };
     }
 
-    var sourceMessages = SheetRepository.listMessagesByIds(
-      payload.sourceMessageIds
-    );
-    var allowedSourceMessageIds =
-      CharacterMemoryContextService.acceptedSourceMessageIds(
-        sourceMessages
-      );
-    ensure(
-      allowedSourceMessageIds.length > 0,
-      'VALIDATION_REQUEST_INVALID',
-      'No approved source messages were found for memory extraction.'
-    );
-    var context = CharacterMemoryContextService.build({
-      currentTime: payload.requestedAt,
-      sourceMessages: sourceMessages
-    });
-    CharacterMemoryContextService.assertBindingMatchesContext(
-      payload.characterBinding,
-      context
-    );
-    var session = CharacterMemoryGeminiAdapter.createSession({
-      allowedSourceMessageIds: allowedSourceMessageIds
-    });
+    var preparation = prepareEnforcedGeneration_(payload);
+    var context = preparation.context;
+    var session = preparation.session;
     var approval;
     try {
       approval = CharacterOutputCoordinator.approve({
@@ -196,6 +210,35 @@ var MemoryService = (function() {
         );
       }
     });
+  }
+
+  function prepareEnforcedGeneration_(payload) {
+    var sourceMessages = SheetRepository.listMessagesByIds(
+      payload.sourceMessageIds
+    );
+    var allowedSourceMessageIds =
+      CharacterMemoryContextService.acceptedSourceMessageIds(
+        sourceMessages
+      );
+    ensure(
+      allowedSourceMessageIds.length > 0,
+      'VALIDATION_REQUEST_INVALID',
+      'No approved source messages were found for memory extraction.'
+    );
+    var context = CharacterMemoryContextService.build({
+      currentTime: payload.requestedAt,
+      sourceMessages: sourceMessages
+    });
+    CharacterMemoryContextService.assertBindingMatchesContext(
+      payload.characterBinding,
+      context
+    );
+    return {
+      context: context,
+      session: CharacterMemoryGeminiAdapter.createSession({
+        allowedSourceMessageIds: allowedSourceMessageIds
+      })
+    };
   }
 
   function applyCandidates(candidates) {
@@ -1046,6 +1089,7 @@ var MemoryService = (function() {
   return {
     enqueueExtraction: enqueueExtraction,
     extract: extract,
+    diagnoseExtraction: diagnoseExtraction,
     findRelevant: findRelevant,
     findAcceptedRelevant: findAcceptedRelevant,
     applyCandidates: applyCandidates,

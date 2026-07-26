@@ -236,8 +236,116 @@ function runA14CharacterMemoryIntegrationTests() {
       }
     });
     assert(
-      error && error.code === 'GEMINI_BAD_RESPONSE',
+      error &&
+        error.code === 'GEMINI_BAD_RESPONSE' &&
+        error.details &&
+        error.details.safeStage ===
+          'MEMORY_CANDIDATE_SOURCE_INVALID',
       'Out-of-range memory provenance was not rejected.'
+    );
+  });
+
+  test('memory adapter binds the provider schema to current evidence', function() {
+    var capturedOptions = null;
+    var existingMemoryId =
+      '33333333-3333-4333-8333-333333333333';
+    withGlobals({
+      GeminiClient: {
+        generateStructured: function(
+          request,
+          schemaName,
+          schemaOptions
+        ) {
+          capturedOptions = schemaOptions;
+          return {
+            data: {
+              candidates: [candidate()]
+            }
+          };
+        }
+      }
+    }, function() {
+      var session = CharacterMemoryGeminiAdapter.createSession({
+        allowedSourceMessageIds: [sourceMessageId()]
+      });
+      session.generate({
+        context: generationView([{
+          memoryId: existingMemoryId,
+          category: 'preference',
+          normalizedKey: 'favorite.drink',
+          content: 'approved existing memory',
+          confidence: 0.9
+        }]),
+        surface: 'MEMORY_EXTRACTION',
+        mode: 'CHARACTER'
+      });
+    });
+    assert(
+      capturedOptions &&
+        JSON.stringify(
+          capturedOptions.allowedSourceMessageIds
+        ) === JSON.stringify([sourceMessageId()]) &&
+        JSON.stringify(
+          capturedOptions.allowedExistingMemoryIds
+        ) === JSON.stringify([existingMemoryId]),
+      'Memory provider schema was not bound to current evidence.'
+    );
+  });
+
+  test('memory adapter preserves only a safe deterministic failure stage', function() {
+    var privateMarker = 'PRIVATE-MEMORY-PROVIDER-DETAIL';
+    var error = null;
+    withGlobals({
+      GeminiClient: {
+        generateStructured: function() {
+          throw createAppError(
+            'GEMINI_BAD_RESPONSE',
+            privateMarker,
+            {
+              safeStage: 'HTTP_REQUEST_REJECTED',
+              privatePayload: privateMarker
+            },
+            {
+              retryable: true,
+              retryStrategy: 'COMMON_BACKOFF',
+              cause: new Error(privateMarker)
+            }
+          );
+        }
+      }
+    }, function() {
+      var session = CharacterMemoryGeminiAdapter.createSession({
+        allowedSourceMessageIds: [sourceMessageId()]
+      });
+      try {
+        session.generate({
+          context: generationView(),
+          surface: 'MEMORY_EXTRACTION',
+          mode: 'CHARACTER'
+        });
+      } catch (caught) {
+        error = caught;
+      }
+    });
+    var serialized = JSON.stringify(
+      error && error.toLogObject()
+    );
+    assert(
+      error &&
+        error.code === 'GEMINI_BAD_RESPONSE' &&
+        error.retryable === false &&
+        error.retryStrategy === 'NONE' &&
+        error.httpStatus === 400 &&
+        error.details &&
+        JSON.stringify(error.details) ===
+          JSON.stringify({
+            safeStage: 'HTTP_REQUEST_REJECTED'
+          }),
+      'Deterministic memory failure was not safely classified.'
+    );
+    assert(
+      serialized.indexOf(privateMarker) === -1,
+      'Memory adapter retained private provider details.'
     );
   });
 
@@ -322,6 +430,106 @@ function runA14CharacterMemoryIntegrationTests() {
     assert(
       error && error.code === 'GEMINI_BAD_RESPONSE',
       'Non-source memory evidence was accepted.'
+    );
+  });
+
+  test('memory generation diagnosis validates output without persistence', function() {
+    var generatedCalls = 0;
+    var writeCalls = 0;
+    var diagnosed = null;
+    withGlobals({
+      SheetRepository: {
+        listMessagesByIds: function() {
+          return [{
+            messageId: sourceMessageId(),
+            role: 'user',
+            messageType: 'text',
+            text: 'approved source',
+            status: 'accepted'
+          }];
+        },
+        insertEvent: function() {
+          writeCalls += 1;
+        },
+        updateUserState: function() {
+          writeCalls += 1;
+        },
+        upsertMemory: function() {
+          writeCalls += 1;
+        },
+        incrementUsageDaily: function() {
+          writeCalls += 1;
+        }
+      },
+      CharacterMemoryContextService: {
+        acceptedSourceMessageIds: function() {
+          return [sourceMessageId()];
+        },
+        build: function() {
+          return generationView();
+        },
+        assertBindingMatchesContext: function() {
+          return true;
+        },
+        classificationSignals: function() {
+          return {
+            safetyRequired: false,
+            adminRequest: false,
+            capabilityUnavailable: false
+          };
+        }
+      },
+      CharacterContextService: {
+        withConversationMode: function(context, mode) {
+          assert(
+            mode === 'CHARACTER',
+            'Diagnosis selected a non-character mode.'
+          );
+          return context;
+        },
+        toGenerationView: function(context) {
+          return context;
+        }
+      },
+      CharacterMemoryGeminiAdapter: {
+        createSession: function() {
+          return {
+            generate: function(input) {
+              generatedCalls += 1;
+              assert(
+                input.surface === 'MEMORY_EXTRACTION' &&
+                  input.mode === 'CHARACTER',
+                'Diagnosis used the wrong generation surface.'
+              );
+              return {
+                candidates: [candidate()]
+              };
+            }
+          };
+        }
+      },
+      CharacterOutputCoordinator: {
+        approve: function() {
+          throw new Error(
+            'Diagnosis must not enter approval or verification.'
+          );
+        }
+      },
+      CharacterSinkAdapter: {
+        deliver: function() {
+          throw new Error(
+            'Diagnosis must not enter the memory sink.'
+          );
+        }
+      }
+    }, function() {
+      diagnosed = MemoryService.diagnoseExtraction(payload());
+    });
+    assert(
+      generatedCalls === 1 &&
+        writeCalls === 0 &&
+        diagnosed.candidateCount === 1,
+      'Memory diagnosis was not a single write-free generation.'
     );
   });
 

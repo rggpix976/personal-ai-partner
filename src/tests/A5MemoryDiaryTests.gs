@@ -40,18 +40,13 @@ function runA5MemoryDiaryTests() {
   test('MEMORY_EXTRACT enqueue uses dedupe key and suppresses duplicates', function() {
     var inserted = [];
     withOverrides({
-      SheetRepository: {
-        insertEvent: function(event) {
+      QueueService: {
+        enqueue: function(event) {
           if (inserted.length > 0) {
-            throw createAppError('DUPLICATE_REQUEST', 'duplicate');
+            return inserted[0];
           }
           inserted.push(event);
-        },
-        getActiveEventByDedupeKey: function(dedupeKey) {
-          return {
-            eventId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-            dedupeKey: dedupeKey
-          };
+          return event;
         }
       }
     }, function() {
@@ -69,6 +64,10 @@ function runA5MemoryDiaryTests() {
       assert(first.enqueued === true, 'First enqueue should create an event.');
       assert(inserted[0].dedupeKey === 'MEMORY_EXTRACT:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222', 'Dedupe key must match the A1 format.');
       assert(second.duplicate === true, 'Second enqueue should be recognized as a duplicate.');
+      assert(
+        second.eventId === first.eventId,
+        'Duplicate enqueue should return the existing locked queue event.'
+      );
     });
   });
 

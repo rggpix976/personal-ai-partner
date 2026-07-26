@@ -74,10 +74,33 @@ function validatePostSetupProperties() {
 function validatePostDeployProperties() {
   var properties = PropertiesService.getScriptProperties().getProperties();
   Validators.validateScriptProperties(properties, 'postDeploy');
+  var configuredUrl = String(
+    properties[APP_CONSTANTS.PROPERTY_KEYS.WEB_APP_URL] || ''
+  );
+  var deployedUrl = String(
+    ScriptApp.getService().getUrl() || ''
+  );
+  assertPostDeployWebAppUrl_(configuredUrl, deployedUrl);
+  return true;
+}
+
+function assertPostDeployWebAppUrl_(configuredUrl, deployedUrl) {
+  var webAppUrlPattern =
+    /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/;
   ensure(
-    String(properties[APP_CONSTANTS.PROPERTY_KEYS.WEB_APP_URL]).indexOf('/exec') !== -1,
+    webAppUrlPattern.test(String(configuredUrl || '')),
     'CONFIG_MISSING',
-    'WEB_APP_URL must point to a deployed /exec endpoint.'
+    'WEB_APP_URL must be an exact Apps Script Web App /exec URL.'
+  );
+  ensure(
+    webAppUrlPattern.test(String(deployedUrl || '')),
+    'CONFIG_MISSING',
+    'The Apps Script project does not expose a deployed Web App /exec URL.'
+  );
+  ensure(
+    configuredUrl === deployedUrl,
+    'CONFIG_MISSING',
+    'WEB_APP_URL must exactly match the deployed Web App URL.'
   );
   return true;
 }

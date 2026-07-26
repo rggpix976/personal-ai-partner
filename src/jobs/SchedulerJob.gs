@@ -88,6 +88,15 @@ function resumeMemoryReleaseTest() {
   return logPr9TestResult_('resumeMemoryReleaseTest', result);
 }
 
+function diagnoseMemoryReleaseGeneration() {
+  assertReleaseTestTriggersStopped_();
+  var result = diagnoseSingleActiveMemoryGeneration_();
+  return logPr9TestResult_(
+    'diagnoseMemoryReleaseGeneration',
+    result
+  );
+}
+
 function runProactiveReleaseTest() {
   assertReleaseTestTriggersStopped_();
   ProactiveMessageService.assertManualTestReady();
@@ -347,6 +356,146 @@ function resumeSingleActiveMemoryReleaseTest_() {
     processing.reason,
     processing.errorCode
   );
+}
+
+function diagnoseSingleActiveMemoryGeneration_() {
+  var activeStatuses = {
+    PENDING: true,
+    PROCESSING: true,
+    RETRY_WAIT: true
+  };
+  var activeEvents = (SheetRepository.listEvents() || [])
+    .filter(function(event) {
+      return event && activeStatuses[event.status];
+    });
+  if (activeEvents.length === 0) {
+    return buildMemoryGenerationDiagnosis_(
+      false,
+      'TARGET_EVENT_MISSING',
+      null,
+      null
+    );
+  }
+  if (activeEvents.length !== 1) {
+    return buildMemoryGenerationDiagnosis_(
+      false,
+      'TARGET_EVENT_AMBIGUOUS',
+      null,
+      null
+    );
+  }
+
+  var event = activeEvents[0];
+  var state = SheetRepository.getUserState();
+  var selection = state
+    ? selectMemoryExtractionBatch_(state)
+    : null;
+  if (
+    !selection ||
+    !selection.ready ||
+    !memoryResumeEventMatchesSelection_(event, selection) ||
+    !memoryResumeLifecycleIsValid_(event)
+  ) {
+    return buildMemoryGenerationDiagnosis_(
+      false,
+      'TARGET_EVENT_MISMATCH',
+      safeMemoryResumeErrorCode_(event),
+      null
+    );
+  }
+
+  try {
+    var diagnosis = MemoryService.diagnoseExtraction(
+      event.payload
+    );
+    return buildMemoryGenerationDiagnosis_(
+      true,
+      'PRIMARY_GENERATION_VALID',
+      null,
+      diagnosis && diagnosis.candidateCount
+    );
+  } catch (error) {
+    return buildMemoryGenerationDiagnosis_(
+      false,
+      safeMemoryGenerationDiagnosticStage_(error),
+      safeMemoryGenerationDiagnosticCode_(error),
+      null
+    );
+  }
+}
+
+function buildMemoryGenerationDiagnosis_(
+  ok,
+  stage,
+  errorCode,
+  candidateCount
+) {
+  return {
+    eventType: 'MEMORY_EXTRACT',
+    ok: Boolean(ok),
+    stage: pr9SafeUpperToken_(stage) || 'UNKNOWN_STAGE',
+    errorCode: pr9SafeUpperToken_(errorCode),
+    candidateCount: candidateCount == null
+      ? null
+      : pr9SafeCount_(candidateCount)
+  };
+}
+
+function safeMemoryGenerationDiagnosticCode_(error) {
+  var allowed = [
+    'CONFIG_MISSING',
+    'GEMINI_RATE_LIMIT',
+    'GEMINI_AUTH_FAILED',
+    'GEMINI_MODEL_UNAVAILABLE',
+    'GEMINI_BAD_RESPONSE',
+    'GEMINI_TEMPORARY_FAILURE'
+  ];
+  var code = null;
+  try {
+    code = error && error.code;
+  } catch (ignored) {
+    return 'UNKNOWN';
+  }
+  return typeof code === 'string' &&
+    allowed.indexOf(code) !== -1
+    ? code
+    : 'UNKNOWN';
+}
+
+function safeMemoryGenerationDiagnosticStage_(error) {
+  var allowed = [
+    'REQUEST_CONTENTS_INVALID',
+    'HTTP_RESPONSE_JSON_INVALID',
+    'HTTP_REQUEST_REJECTED',
+    'HTTP_RATE_LIMITED',
+    'HTTP_AUTH_FAILED',
+    'HTTP_MODEL_UNAVAILABLE',
+    'HTTP_SERVER_FAILURE',
+    'HTTP_FAILURE',
+    'RESPONSE_TEXT_MISSING',
+    'RESPONSE_BLOCKED',
+    'STRUCTURED_JSON_INVALID',
+    'TRANSPORT_FAILURE',
+    'MEMORY_CANDIDATE_SET_INVALID',
+    'MEMORY_CANDIDATE_SHAPE_INVALID',
+    'MEMORY_CANDIDATE_FIELDS_INVALID',
+    'MEMORY_CANDIDATE_SOURCE_INVALID',
+    'MEMORY_CANDIDATE_EXISTING_INVALID',
+    'MEMORY_VERDICT_INVALID',
+    'MEMORY_VERDICT_EVIDENCE_INVALID'
+  ];
+  var stage = null;
+  try {
+    stage = error &&
+      error.details &&
+      error.details.safeStage;
+  } catch (ignored) {
+    return 'UNKNOWN_STAGE';
+  }
+  return typeof stage === 'string' &&
+    allowed.indexOf(stage) !== -1
+    ? stage
+    : 'UNKNOWN_STAGE';
 }
 
 function selectMemoryExtractionBatch_(state) {
@@ -677,6 +826,9 @@ function buildPr9TestLogPayload_(functionName, result) {
   ) {
     return buildPr9ReleaseTestLog_(result);
   }
+  if (functionName === 'diagnoseMemoryReleaseGeneration') {
+    return buildPr9MemoryGenerationDiagnosisLog_(result);
+  }
   if (
     functionName === 'listProjectTriggers' ||
     functionName === 'installTriggers'
@@ -883,6 +1035,19 @@ function buildPr9ReleaseTestLog_(result) {
     status: pr9SafeUpperToken_(result.status),
     reason: pr9SafeUpperToken_(result.reason),
     errorCode: pr9SafeUpperToken_(result.errorCode)
+  };
+}
+
+function buildPr9MemoryGenerationDiagnosisLog_(result) {
+  result = result || {};
+  return {
+    eventType: pr9SafeUpperToken_(result.eventType),
+    ok: pr9SafeBoolean_(result.ok),
+    stage: pr9SafeUpperToken_(result.stage),
+    errorCode: pr9SafeUpperToken_(result.errorCode),
+    candidateCount: result.candidateCount == null
+      ? null
+      : pr9SafeCount_(result.candidateCount)
   };
 }
 

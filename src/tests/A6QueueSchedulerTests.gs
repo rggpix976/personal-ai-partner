@@ -2614,6 +2614,246 @@ function runA6QueueSchedulerTests() {
     });
   });
 
+  test(
+    'weekly backup reuses a partial snapshot and retains complete managed dates only',
+    function() {
+      function iterator(items) {
+        var index = 0;
+        return {
+          hasNext: function() {
+            return index < items.length;
+          },
+          next: function() {
+            return items[index++];
+          }
+        };
+      }
+
+      function backupFile(id, name, updatedAt) {
+        return {
+          id: id,
+          name: name,
+          trashed: false,
+          getId: function() {
+            return this.id;
+          },
+          getName: function() {
+            return this.name;
+          },
+          getLastUpdated: function() {
+            return new Date(updatedAt);
+          },
+          getDateCreated: function() {
+            return new Date(updatedAt);
+          },
+          setTrashed: function(value) {
+            this.trashed = value === true;
+          }
+        };
+      }
+
+      var files = [
+        backupFile(
+          'current-sheet',
+          'personal-ai-partner-sheet-backup-2026-07-26',
+          '2026-07-26T03:00:00+09:00'
+        ),
+        backupFile(
+          'previous-sheet',
+          'personal-ai-partner-sheet-backup-2026-07-19',
+          '2026-07-19T03:00:00+09:00'
+        ),
+        backupFile(
+          'previous-diary',
+          'personal-ai-partner-diary-backup-2026-07-19',
+          '2026-07-19T03:00:01+09:00'
+        ),
+        backupFile(
+          'old-sheet',
+          'personal-ai-partner-sheet-backup-2026-07-12',
+          '2026-07-12T03:00:00+09:00'
+        ),
+        backupFile(
+          'old-diary',
+          'personal-ai-partner-diary-backup-2026-07-12',
+          '2026-07-12T03:00:01+09:00'
+        ),
+        backupFile(
+          'unrelated',
+          'keep-this-human-file',
+          '2026-07-01T00:00:00+09:00'
+        )
+      ];
+      var copyCalls = [];
+      var folder = {
+        getFilesByName: function(name) {
+          return iterator(files.filter(function(file) {
+            return !file.trashed && file.getName() === name;
+          }));
+        },
+        getFiles: function() {
+          return iterator(files.filter(function(file) {
+            return !file.trashed;
+          }));
+        }
+      };
+
+      withOverrides({
+        PropertiesService: {
+          getScriptProperties: function() {
+            return {
+              getProperty: function(key) {
+                if (key === APP_CONSTANTS.PROPERTY_KEYS.SPREADSHEET_ID) {
+                  return 'source-sheet';
+                }
+                if (key === APP_CONSTANTS.PROPERTY_KEYS.DIARY_DOC_ID) {
+                  return 'source-diary';
+                }
+                return null;
+              }
+            };
+          }
+        },
+        ConfigRepository: {
+          getByKey: function(key) {
+            return key === 'BACKUP_RETENTION_COUNT'
+              ? { value: 2 }
+              : null;
+          }
+        },
+        DriveTempRepository: {
+          ensureFolders: function() {
+            return {
+              backupFolder: folder
+            };
+          }
+        },
+        DriveApp: {
+          getFileById: function(sourceFileId) {
+            return {
+              makeCopy: function(name) {
+                copyCalls.push({
+                  sourceFileId: sourceFileId,
+                  name: name
+                });
+                var created = backupFile(
+                  'created-' + copyCalls.length,
+                  name,
+                  '2026-07-26T03:00:02+09:00'
+                );
+                files.push(created);
+                return created;
+              }
+            };
+          }
+        }
+      }, function() {
+        var first = MaintenanceService.weeklyBackup({
+          backupDate: '2026-07-26'
+        });
+        var second = MaintenanceService.weeklyBackup({
+          backupDate: '2026-07-26'
+        });
+
+        assert(
+          copyCalls.length === 1 &&
+            copyCalls[0].sourceFileId === 'source-diary',
+          'Only the missing diary member should be copied once.'
+        );
+        assert(
+          first.spreadsheetBackupFileId === 'current-sheet' &&
+            second.spreadsheetBackupFileId === 'current-sheet',
+          'The existing spreadsheet backup should be reused.'
+        );
+        assert(
+          first.diaryBackupFileId === second.diaryBackupFileId,
+          'A retry should reuse the newly completed diary backup.'
+        );
+        assert(
+          files.filter(function(file) {
+            return (
+              file.getName().indexOf('backup-2026-07-12') !== -1 &&
+              file.trashed
+            );
+          }).length === 2,
+          'Both members of the expired managed snapshot should be trashed.'
+        );
+        assert(
+          files.filter(function(file) {
+            return file.id === 'unrelated' && file.trashed;
+          }).length === 0,
+          'Unrelated files must never participate in backup retention.'
+        );
+      });
+    }
+  );
+
+  test(
+    'weekly backup maps provider failures to retryable storage errors',
+    function() {
+      function emptyIterator() {
+        return {
+          hasNext: function() {
+            return false;
+          },
+          next: function() {
+            throw new Error('empty');
+          }
+        };
+      }
+      var folder = {
+        getFilesByName: emptyIterator,
+        getFiles: emptyIterator
+      };
+      withOverrides({
+        PropertiesService: {
+          getScriptProperties: function() {
+            return {
+              getProperty: function(key) {
+                return key ===
+                  APP_CONSTANTS.PROPERTY_KEYS.SPREADSHEET_ID
+                  ? 'source-sheet'
+                  : 'source-diary';
+              }
+            };
+          }
+        },
+        DriveTempRepository: {
+          ensureFolders: function() {
+            return {
+              backupFolder: folder
+            };
+          }
+        },
+        DriveApp: {
+          getFileById: function() {
+            throw new Error('private provider detail');
+          }
+        }
+      }, function() {
+        var thrown = null;
+        try {
+          MaintenanceService.weeklyBackup({
+            backupDate: '2026-07-26'
+          });
+        } catch (error) {
+          thrown = error;
+        }
+        assert(
+          thrown &&
+            thrown.code === 'STORAGE_WRITE_FAILED' &&
+            thrown.retryable === true &&
+            thrown.retryStrategy === 'COMMON_BACKOFF',
+          'Drive failures must enter the standard retry path.'
+        );
+        assert(
+          thrown.message.indexOf('private provider detail') === -1,
+          'Provider details must not become the persisted error message.'
+        );
+      });
+    }
+  );
+
   test('QueueService.enqueue rejects incomplete PROACTIVE_SEND decision payloads', function() {
     var inserted = false;
     var thrown = null;
@@ -3031,6 +3271,20 @@ function runA6QueueSchedulerTests() {
             }
           };
         },
+        diagnoseSingleActiveMemoryGeneration_: function() {
+          return {
+            eventType: 'MEMORY_EXTRACT',
+            ok: false,
+            stage: 'HTTP_REQUEST_REJECTED',
+            errorCode: 'GEMINI_BAD_RESPONSE',
+            candidateCount: null,
+            eventId: secretId,
+            payload: {
+              body: secretBody,
+              ownerEmail: secretEmail
+            }
+          };
+        },
         enqueueProactiveIfEligible_: function() {
           return {
             eligible: false,
@@ -3051,6 +3305,8 @@ function runA6QueueSchedulerTests() {
         results.memory = runMemoryReleaseTest();
         results.memoryResume =
           resumeMemoryReleaseTest();
+        results.memoryDiagnosis =
+          diagnoseMemoryReleaseGeneration();
         results.proactive = runProactiveReleaseTest();
 
         currentTriggers = [
@@ -3079,6 +3335,8 @@ function runA6QueueSchedulerTests() {
           results.memoryResume.eventId === undefined &&
           results.memoryResume.payload === undefined &&
           Object.keys(results.memoryResume).length === 7 &&
+          results.memoryDiagnosis.stage ===
+            'HTTP_REQUEST_REJECTED' &&
           results.proactive.reason === 'PROBABILITY_MISS',
         'Logging changed a release-test return contract.'
       );
@@ -3089,7 +3347,7 @@ function runA6QueueSchedulerTests() {
         'Trigger inspection or readiness return behavior changed.'
       );
       assert(
-        logs.length === 10,
+        logs.length === 11,
         'Every PR9 public operator must emit exactly one result line.'
       );
 
@@ -3193,6 +3451,26 @@ function runA6QueueSchedulerTests() {
           functionName + ' log fields are not exact.'
         );
       });
+
+      var diagnosisLog = readLog(
+        'diagnoseMemoryReleaseGeneration'
+      );
+      assert(
+        JSON.stringify(Object.keys(diagnosisLog).sort()) ===
+          JSON.stringify([
+            'candidateCount',
+            'errorCode',
+            'eventType',
+            'ok',
+            'stage'
+          ]) &&
+          diagnosisLog.eventType === 'MEMORY_EXTRACT' &&
+          diagnosisLog.ok === false &&
+          diagnosisLog.stage === 'HTTP_REQUEST_REJECTED' &&
+          diagnosisLog.errorCode === 'GEMINI_BAD_RESPONSE' &&
+          diagnosisLog.candidateCount == null,
+        'Memory diagnosis log omitted or exposed fields.'
+      );
 
       var diaryLog = readLog(
         'inspectPreviousDiaryReleaseTest'
@@ -3625,6 +3903,226 @@ function runA6QueueSchedulerTests() {
             'status'
           ]),
         'The resume return exposed non-allowlisted fields.'
+      );
+    }
+  );
+
+  test(
+    'memory generation diagnosis uses the exact active event without mutation',
+    function() {
+      var firstMessageId =
+        '11111111-1111-4111-8111-111111111111';
+      var lastMessageId =
+        '33333333-3333-4333-8333-333333333333';
+      var sourceMessageIds = [
+        firstMessageId,
+        lastMessageId
+      ];
+      var event = {
+        eventId:
+          'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        eventType: 'MEMORY_EXTRACT',
+        dedupeKey:
+          'MEMORY_EXTRACT:' +
+          firstMessageId +
+          ':' +
+          lastMessageId,
+        payload: {
+          firstMessageId: firstMessageId,
+          lastMessageId: lastMessageId,
+          sourceMessageIds: sourceMessageIds.slice(),
+          requestedAt: '2026-07-26T12:00:00+09:00',
+          characterRuntimeMode: 'enforced',
+          characterBinding:
+            buildValidMemoryResumeBinding()
+        },
+        status: 'RETRY_WAIT',
+        attemptCount: 4,
+        nextAttemptAt: '2099-01-01T00:00:00+09:00',
+        lockedAt: null,
+        lockedBy: null,
+        lastError: {
+          code: 'GEMINI_BAD_RESPONSE',
+          message: 'private prior failure'
+        }
+      };
+      var diagnosticCalls = 0;
+      var mutationCalls = 0;
+      var result = null;
+      withOverrides({
+        console: {
+          log: function() {}
+        },
+        ScriptApp: {
+          getProjectTriggers: function() {
+            return [];
+          }
+        },
+        SheetRepository: {
+          listEvents: function() {
+            return [event];
+          },
+          getUserState: function() {
+            return {
+              last_memory_cursor: null
+            };
+          },
+          updateEvent: function() {
+            mutationCalls += 1;
+          },
+          updateUserState: function() {
+            mutationCalls += 1;
+          }
+        },
+        selectMemoryExtractionBatch_: function() {
+          return {
+            ready: true,
+            messageCount: sourceMessageIds.length,
+            firstMessageId: firstMessageId,
+            lastMessageId: lastMessageId,
+            sourceMessageIds: sourceMessageIds.slice()
+          };
+        },
+        MemoryService: {
+          diagnoseExtraction: function(payload) {
+            diagnosticCalls += 1;
+            assert(
+              payload === event.payload,
+              'Diagnosis used another event payload.'
+            );
+            return {
+              candidateCount: 2
+            };
+          }
+        },
+        processReleaseTestEventById_: function() {
+          mutationCalls += 1;
+        }
+      }, function() {
+        result = diagnoseMemoryReleaseGeneration();
+      });
+      assert(
+        diagnosticCalls === 1 &&
+          mutationCalls === 0 &&
+          result.eventType === 'MEMORY_EXTRACT' &&
+          result.ok === true &&
+          result.stage === 'PRIMARY_GENERATION_VALID' &&
+          result.errorCode == null &&
+          result.candidateCount === 2,
+        'Memory diagnosis did not remain write-free and exact.'
+      );
+      assert(
+        JSON.stringify(Object.keys(result).sort()) ===
+          JSON.stringify([
+            'candidateCount',
+            'errorCode',
+            'eventType',
+            'ok',
+            'stage'
+          ]),
+        'Memory diagnosis exposed non-allowlisted fields.'
+      );
+    }
+  );
+
+  test(
+    'memory generation diagnosis reports only a safe failure stage',
+    function() {
+      var firstMessageId =
+        '11111111-1111-4111-8111-111111111111';
+      var lastMessageId =
+        '33333333-3333-4333-8333-333333333333';
+      var sourceMessageIds = [
+        firstMessageId,
+        lastMessageId
+      ];
+      var privateMarker = 'PRIVATE-DIAGNOSTIC-CONTENT';
+      var event = {
+        eventId:
+          'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        eventType: 'MEMORY_EXTRACT',
+        dedupeKey:
+          'MEMORY_EXTRACT:' +
+          firstMessageId +
+          ':' +
+          lastMessageId,
+        payload: {
+          firstMessageId: firstMessageId,
+          lastMessageId: lastMessageId,
+          sourceMessageIds: sourceMessageIds.slice(),
+          requestedAt: '2026-07-26T12:00:00+09:00',
+          characterRuntimeMode: 'enforced',
+          characterBinding:
+            buildValidMemoryResumeBinding()
+        },
+        status: 'RETRY_WAIT',
+        attemptCount: 4,
+        nextAttemptAt: '2099-01-01T00:00:00+09:00',
+        lockedAt: null,
+        lockedBy: null,
+        lastError: {
+          code: 'GEMINI_BAD_RESPONSE'
+        }
+      };
+      var logs = [];
+      var result = null;
+      withOverrides({
+        console: {
+          log: function(line) {
+            logs.push(String(line));
+          }
+        },
+        ScriptApp: {
+          getProjectTriggers: function() {
+            return [];
+          }
+        },
+        SheetRepository: {
+          listEvents: function() {
+            return [event];
+          },
+          getUserState: function() {
+            return {
+              last_memory_cursor: null
+            };
+          }
+        },
+        selectMemoryExtractionBatch_: function() {
+          return {
+            ready: true,
+            messageCount: sourceMessageIds.length,
+            firstMessageId: firstMessageId,
+            lastMessageId: lastMessageId,
+            sourceMessageIds: sourceMessageIds.slice()
+          };
+        },
+        MemoryService: {
+          diagnoseExtraction: function() {
+            throw createAppError(
+              'GEMINI_BAD_RESPONSE',
+              privateMarker,
+              {
+                safeStage: 'HTTP_REQUEST_REJECTED',
+                privatePayload: privateMarker
+              }
+            );
+          }
+        }
+      }, function() {
+        result = diagnoseMemoryReleaseGeneration();
+      });
+      assert(
+        result.ok === false &&
+          result.stage === 'HTTP_REQUEST_REJECTED' &&
+          result.errorCode === 'GEMINI_BAD_RESPONSE' &&
+          result.candidateCount == null,
+        'Memory diagnostic failure was not safely classified.'
+      );
+      assert(
+        JSON.stringify(result).indexOf(privateMarker) === -1 &&
+          logs.join('\n').indexOf(privateMarker) === -1 &&
+          logs.length === 1,
+        'Memory diagnosis exposed private provider content.'
       );
     }
   );

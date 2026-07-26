@@ -141,6 +141,13 @@ var SheetRepository = (function() {
     if (type === 'date') {
       return value instanceof Date ? value : parseDateStringToDate(value);
     }
+    if (
+      type === 'string' &&
+      typeof value === 'string' &&
+      value.charAt(0) === '='
+    ) {
+      return "'" + value;
+    }
     return value;
   }
 
@@ -1037,12 +1044,16 @@ var SheetRepository = (function() {
 
   function getUserState() {
     var rows = getRows(APP_CONSTANTS.SHEETS.USER_STATE);
-    for (var i = 0; i < rows.length; i += 1) {
-      if (rows[i].singleton_id === APP_CONSTANTS.USER_STATE_SINGLETON_ID) {
-        return rows[i];
-      }
+    if (rows.length === 0) {
+      return null;
     }
-    return null;
+    ensure(
+      rows.length === 1 &&
+        rows[0].singleton_id === APP_CONSTANTS.USER_STATE_SINGLETON_ID,
+      'STORAGE_DATA_CORRUPTED',
+      'user_state must contain exactly one default singleton row.'
+    );
+    return rows[0];
   }
 
   function ensureDefaultUserState() {

@@ -1,4 +1,8 @@
 var MaintenanceService = (function() {
+  var BACKUP_FILE_PREFIX_ = 'personal-ai-partner-';
+  var BACKUP_FILE_PATTERN_ =
+    /^personal-ai-partner-(sheet|diary)-backup-(\d{4}-\d{2}-\d{2})$/;
+
   function runPeriodicMaintenance(now) {
     var reference = now instanceof Date ? now : (now ? parseIsoToDate(now) : new Date());
     return {
@@ -27,40 +31,109 @@ var MaintenanceService = (function() {
     var documentId = properties.getProperty(APP_CONSTANTS.PROPERTY_KEYS.DIARY_DOC_ID);
     ensure(spreadsheetId, 'CONFIG_MISSING', 'SPREADSHEET_ID is not configured.');
     ensure(documentId, 'CONFIG_MISSING', 'DIARY_DOC_ID is not configured.');
-    var folders = DriveTempRepository.ensureFolders();
-    var backupFolder = folders.backupFolder;
-    var spreadsheetCopy = DriveApp.getFileById(spreadsheetId).makeCopy(
-      'personal-ai-partner-sheet-backup-' + payload.backupDate,
+    var stage = 'ENSURE_FOLDERS';
+    try {
+      var folders = DriveTempRepository.ensureFolders();
+      var backupFolder = folders.backupFolder;
+      stage = 'COPY_SPREADSHEET';
+      var spreadsheetCopy = ensureBackupCopy_(
+        spreadsheetId,
+        backupFileName_('sheet', payload.backupDate),
+        backupFolder
+      );
+      stage = 'COPY_DIARY';
+      var diaryCopy = ensureBackupCopy_(
+        documentId,
+        backupFileName_('diary', payload.backupDate),
+        backupFolder
+      );
+      stage = 'ENFORCE_RETENTION';
+      enforceBackupRetention_(
+        backupFolder,
+        getConfigInt_('BACKUP_RETENTION_COUNT', 4)
+      );
+      return {
+        backupDate: payload.backupDate,
+        spreadsheetBackupFileId: spreadsheetCopy.getId(),
+        diaryBackupFileId: diaryCopy.getId()
+      };
+    } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
+      throw createAppError(
+        'STORAGE_WRITE_FAILED',
+        'Weekly backup storage operation failed.',
+        { stage: stage },
+        { cause: error }
+      );
+    }
+  }
+
+  function backupFileName_(kind, backupDate) {
+    return BACKUP_FILE_PREFIX_ + kind + '-backup-' + backupDate;
+  }
+
+  function ensureBackupCopy_(sourceFileId, targetName, backupFolder) {
+    var existing = backupFolder.getFilesByName(targetName);
+    var newest = null;
+    var newestTime = -1;
+    while (existing.hasNext()) {
+      var candidate = existing.next();
+      var candidateTime = getFileTimestamp_(candidate);
+      if (!newest || candidateTime > newestTime) {
+        newest = candidate;
+        newestTime = candidateTime;
+      }
+    }
+    if (newest) {
+      return newest;
+    }
+    return DriveApp.getFileById(sourceFileId).makeCopy(
+      targetName,
       backupFolder
     );
-    var diaryCopy = DriveApp.getFileById(documentId).makeCopy(
-      'personal-ai-partner-diary-backup-' + payload.backupDate,
-      backupFolder
-    );
-    enforceBackupRetention_(backupFolder, getConfigInt_('BACKUP_RETENTION_COUNT', 4));
-    return {
-      backupDate: payload.backupDate,
-      spreadsheetBackupFileId: spreadsheetCopy.getId(),
-      diaryBackupFileId: diaryCopy.getId()
-    };
   }
 
   function enforceBackupRetention_(folder, retentionCount) {
     var files = folder.getFiles();
-    var items = [];
+    var snapshots = {};
     while (files.hasNext()) {
       var file = files.next();
-      items.push({
-        file: file,
-        updatedAt: file.getLastUpdated ? file.getLastUpdated().getTime() : file.getDateCreated().getTime()
-      });
+      var name = String(file.getName ? file.getName() : '');
+      var match = name.match(BACKUP_FILE_PATTERN_);
+      if (!match) {
+        continue;
+      }
+      var backupDate = match[2];
+      if (!snapshots[backupDate]) {
+        snapshots[backupDate] = [];
+      }
+      snapshots[backupDate].push(file);
     }
-    items.sort(function(a, b) {
-      return b.updatedAt - a.updatedAt;
+    var retainedDates = Object.keys(snapshots)
+      .sort()
+      .reverse()
+      .slice(0, Math.max(Number(retentionCount) || 0, 0));
+    var retained = {};
+    retainedDates.forEach(function(date) {
+      retained[date] = true;
     });
-    items.slice(Math.max(retentionCount, 0)).forEach(function(item) {
-      item.file.setTrashed(true);
+    Object.keys(snapshots).forEach(function(date) {
+      if (retained[date]) {
+        return;
+      }
+      snapshots[date].forEach(function(file) {
+        file.setTrashed(true);
+      });
     });
+  }
+
+  function getFileTimestamp_(file) {
+    var timestamp = file.getLastUpdated
+      ? file.getLastUpdated()
+      : file.getDateCreated();
+    return timestamp instanceof Date ? timestamp.getTime() : 0;
   }
 
   function getConfigInt_(key, fallback) {

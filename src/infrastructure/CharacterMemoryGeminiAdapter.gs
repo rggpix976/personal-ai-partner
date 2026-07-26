@@ -17,6 +17,27 @@ var CharacterMemoryGeminiAdapter = (function() {
     GEMINI_BAD_RESPONSE: 'Gemini returned an invalid response.',
     GEMINI_TEMPORARY_FAILURE: 'Gemini is temporarily unavailable.'
   });
+  var SAFE_ERROR_STAGES = Object.freeze([
+    'REQUEST_CONTENTS_INVALID',
+    'HTTP_RESPONSE_JSON_INVALID',
+    'HTTP_REQUEST_REJECTED',
+    'HTTP_RATE_LIMITED',
+    'HTTP_AUTH_FAILED',
+    'HTTP_MODEL_UNAVAILABLE',
+    'HTTP_SERVER_FAILURE',
+    'HTTP_FAILURE',
+    'RESPONSE_TEXT_MISSING',
+    'RESPONSE_BLOCKED',
+    'STRUCTURED_JSON_INVALID',
+    'TRANSPORT_FAILURE',
+    'MEMORY_CANDIDATE_SET_INVALID',
+    'MEMORY_CANDIDATE_SHAPE_INVALID',
+    'MEMORY_CANDIDATE_FIELDS_INVALID',
+    'MEMORY_CANDIDATE_SOURCE_INVALID',
+    'MEMORY_CANDIDATE_EXISTING_INVALID',
+    'MEMORY_VERDICT_INVALID',
+    'MEMORY_VERDICT_EVIDENCE_INVALID'
+  ]);
 
   function createSession(options) {
     options = options || {};
@@ -100,7 +121,17 @@ var CharacterMemoryGeminiAdapter = (function() {
       usage.apiCalls += 1;
       var response;
       try {
-        response = GeminiClient.generateStructured(request, schemaName);
+        response = GeminiClient.generateStructured(
+          request,
+          schemaName,
+          schemaName === 'character-memory-candidates'
+            ? {
+              allowedSourceMessageIds: allowedSourceIds.slice(),
+              allowedExistingMemoryIds:
+                Object.keys(allowedExistingMemorySet)
+            }
+            : undefined
+        );
       } catch (error) {
         throw sanitizeGeminiError_(error);
       }
@@ -255,7 +286,8 @@ var CharacterMemoryGeminiAdapter = (function() {
       Array.isArray(candidates) &&
         candidates.length <= MAX_CANDIDATES,
       'GEMINI_BAD_RESPONSE',
-      'Gemini returned an invalid memory candidate set.'
+      'Gemini returned an invalid memory candidate set.',
+      safeStageDetails_('MEMORY_CANDIDATE_SET_INVALID')
     );
     var normalized = candidates.map(function(candidate) {
       return normalizeCandidate_(
@@ -277,7 +309,8 @@ var CharacterMemoryGeminiAdapter = (function() {
     ensure(
       isPlainObject_(candidate),
       'GEMINI_BAD_RESPONSE',
-      'Gemini returned an invalid memory candidate.'
+      'Gemini returned an invalid memory candidate.',
+      safeStageDetails_('MEMORY_CANDIDATE_SHAPE_INVALID')
     );
     var action = candidate.action;
     var requiresExisting = action === 'confirm' || action === 'update';
@@ -295,8 +328,13 @@ var CharacterMemoryGeminiAdapter = (function() {
     }
     ensure(
       hasExactKeys_(candidate, expectedKeys) &&
-        ['create', 'confirm', 'update', 'ignore'].indexOf(action) !== -1 &&
-        APP_CONSTANTS.MEMORY_CATEGORIES.indexOf(candidate.category) !== -1 &&
+        ['create', 'confirm', 'update', 'ignore'].indexOf(action) !== -1,
+      'GEMINI_BAD_RESPONSE',
+      'Gemini returned an invalid memory candidate shape.',
+      safeStageDetails_('MEMORY_CANDIDATE_SHAPE_INVALID')
+    );
+    ensure(
+      APP_CONSTANTS.MEMORY_CATEGORIES.indexOf(candidate.category) !== -1 &&
         typeof candidate.normalizedKey === 'string' &&
         candidate.normalizedKey.trim() !== '' &&
         candidate.normalizedKey.length <= 200 &&
@@ -309,20 +347,29 @@ var CharacterMemoryGeminiAdapter = (function() {
         typeof candidate.confidence === 'number' &&
         isFinite(candidate.confidence) &&
         candidate.confidence >= 0 &&
-        candidate.confidence <= 1 &&
-        isUuidList_(candidate.sourceMessageIds, 100) &&
+        candidate.confidence <= 1,
+      'GEMINI_BAD_RESPONSE',
+      'Gemini returned invalid memory candidate fields.',
+      safeStageDetails_('MEMORY_CANDIDATE_FIELDS_INVALID')
+    );
+    ensure(
+      isUuidList_(candidate.sourceMessageIds, 100) &&
         candidate.sourceMessageIds.every(function(id) {
           return allowedSourceSet[id] === true;
-        }) &&
+        }),
+      'GEMINI_BAD_RESPONSE',
+      'Gemini returned an ungrounded memory candidate.',
+      safeStageDetails_('MEMORY_CANDIDATE_SOURCE_INVALID')
+    );
+    ensure(
+      !requiresExisting ||
         (
-          !requiresExisting ||
-          (
-            Validators.isUuidV4(candidate.existingMemoryId) &&
-            allowedExistingMemorySet[candidate.existingMemoryId] === true
-          )
+          Validators.isUuidV4(candidate.existingMemoryId) &&
+          allowedExistingMemorySet[candidate.existingMemoryId] === true
         ),
       'GEMINI_BAD_RESPONSE',
-      'Gemini returned an invalid or ungrounded memory candidate.'
+      'Gemini returned an invalid existing-memory reference.',
+      safeStageDetails_('MEMORY_CANDIDATE_EXISTING_INVALID')
     );
     var normalized = {
       action: action,
@@ -411,7 +458,8 @@ var CharacterMemoryGeminiAdapter = (function() {
           return typeof key === 'string';
         }),
       'GEMINI_BAD_RESPONSE',
-      'Gemini returned an invalid semantic verdict.'
+      'Gemini returned an invalid semantic verdict.',
+      safeStageDetails_('MEMORY_VERDICT_INVALID')
     );
     if (
       value.verdict === 'allow' &&
@@ -426,7 +474,8 @@ var CharacterMemoryGeminiAdapter = (function() {
             return /^recentMessages:\d+$/.test(key);
           }),
         'GEMINI_BAD_RESPONSE',
-        'Memory approval requires direct source-message evidence.'
+        'Memory approval requires direct source-message evidence.',
+        safeStageDetails_('MEMORY_VERDICT_EVIDENCE_INVALID')
       );
     }
     return {
@@ -464,7 +513,47 @@ var CharacterMemoryGeminiAdapter = (function() {
       SAFE_ERROR_CODES.indexOf(error.code) !== -1
       ? error.code
       : 'GEMINI_TEMPORARY_FAILURE';
-    return createAppError(code, SAFE_ERROR_MESSAGES[code]);
+    var stage = safeStageFromError_(error);
+    var options = {};
+    if (
+      code === 'GEMINI_BAD_RESPONSE' &&
+      (
+        stage === 'HTTP_REQUEST_REJECTED' ||
+        stage === 'REQUEST_CONTENTS_INVALID' ||
+        stage === 'RESPONSE_BLOCKED'
+      )
+    ) {
+      options.retryable = false;
+      options.retryStrategy = 'NONE';
+      options.httpStatus = 400;
+    }
+    return createAppError(
+      code,
+      SAFE_ERROR_MESSAGES[code],
+      stage ? safeStageDetails_(stage) : null,
+      options
+    );
+  }
+
+  function safeStageFromError_(error) {
+    var stage = null;
+    try {
+      stage = error &&
+        error.details &&
+        error.details.safeStage;
+    } catch (ignored) {
+      return null;
+    }
+    return typeof stage === 'string' &&
+      SAFE_ERROR_STAGES.indexOf(stage) !== -1
+      ? stage
+      : null;
+  }
+
+  function safeStageDetails_(stage) {
+    return {
+      safeStage: stage
+    };
   }
 
   function isUuidList_(value, maxItems) {

@@ -566,6 +566,78 @@ function runA10ImmersionCoordinatorTests() {
     });
   });
 
+  test('memory generation preserves only an allowlisted safe failure stage', function() {
+    withContext('MEMORY_EXTRACTION', null, function(context) {
+      var privateMarker = 'PRIVATE-MEMORY-STAGE-DETAIL';
+      var error = expectCode(function() {
+        CharacterOutputCoordinator.approve({
+          context: context,
+          surface: 'MEMORY_EXTRACTION',
+          generate: function() {
+            throw createAppError(
+              'GEMINI_BAD_RESPONSE',
+              privateMarker,
+              {
+                safeStage: 'HTTP_REQUEST_REJECTED',
+                privatePayload: privateMarker
+              },
+              {
+                retryable: true,
+                retryStrategy: 'COMMON_BACKOFF',
+                cause: new Error(privateMarker)
+              }
+            );
+          },
+          metricEmitter: function() {}
+        });
+      }, 'GEMINI_BAD_RESPONSE');
+      var serialized = JSON.stringify(error.toLogObject());
+      assert(
+        error.message ===
+          'Memory generation failed before guard assessment. ' +
+          'Stage: HTTP_REQUEST_REJECTED.' &&
+          JSON.stringify(error.details) ===
+            JSON.stringify({
+              safeStage: 'HTTP_REQUEST_REJECTED'
+            }) &&
+          error.retryable === false &&
+          error.retryStrategy === 'NONE' &&
+          error.httpStatus === 400,
+        'Safe memory failure stage was not reconstructed.'
+      );
+      assert(
+        serialized.indexOf(privateMarker) === -1,
+        'Safe memory failure stage retained private details.'
+      );
+
+      var invalidStage = expectCode(function() {
+        CharacterOutputCoordinator.approve({
+          context: context,
+          surface: 'MEMORY_EXTRACTION',
+          generate: function() {
+            throw createAppError(
+              'GEMINI_BAD_RESPONSE',
+              privateMarker,
+              {
+                safeStage: 'PRIVATE_STAGE',
+                privatePayload: privateMarker
+              }
+            );
+          },
+          metricEmitter: function() {}
+        });
+      }, 'GEMINI_BAD_RESPONSE');
+      assert(
+        invalidStage.details === null &&
+          invalidStage.message ===
+            'Memory generation failed before guard assessment.' &&
+          JSON.stringify(invalidStage.toLogObject())
+            .indexOf(privateMarker) === -1,
+        'Unapproved memory failure stage crossed the boundary.'
+      );
+    });
+  });
+
   test('unknown memory generation failures remain fail closed', function() {
     withContext('MEMORY_EXTRACTION', null, function(context) {
       var privateMarker = 'PRIVATE-UNKNOWN-MEMORY-GENERATION';

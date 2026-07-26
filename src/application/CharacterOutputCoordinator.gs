@@ -22,6 +22,27 @@ var CharacterOutputCoordinator = (function() {
     'GEMINI_BAD_RESPONSE',
     'GEMINI_TEMPORARY_FAILURE'
   ]);
+  var SAFE_MEMORY_GENERATION_ERROR_STAGES = Object.freeze([
+    'REQUEST_CONTENTS_INVALID',
+    'HTTP_RESPONSE_JSON_INVALID',
+    'HTTP_REQUEST_REJECTED',
+    'HTTP_RATE_LIMITED',
+    'HTTP_AUTH_FAILED',
+    'HTTP_MODEL_UNAVAILABLE',
+    'HTTP_SERVER_FAILURE',
+    'HTTP_FAILURE',
+    'RESPONSE_TEXT_MISSING',
+    'RESPONSE_BLOCKED',
+    'STRUCTURED_JSON_INVALID',
+    'TRANSPORT_FAILURE',
+    'MEMORY_CANDIDATE_SET_INVALID',
+    'MEMORY_CANDIDATE_SHAPE_INVALID',
+    'MEMORY_CANDIDATE_FIELDS_INVALID',
+    'MEMORY_CANDIDATE_SOURCE_INVALID',
+    'MEMORY_CANDIDATE_EXISTING_INVALID',
+    'MEMORY_VERDICT_INVALID',
+    'MEMORY_VERDICT_EVIDENCE_INVALID'
+  ]);
 
   function approve(options) {
     validateOptions_(options);
@@ -294,10 +315,42 @@ var CharacterOutputCoordinator = (function() {
     if (SAFE_MEMORY_GENERATION_ERROR_CODES.indexOf(code) === -1) {
       return null;
     }
+    var stage = safeMemoryGenerationStage_(error);
+    var options = {};
+    if (
+      code === 'GEMINI_BAD_RESPONSE' &&
+      (
+        stage === 'HTTP_REQUEST_REJECTED' ||
+        stage === 'REQUEST_CONTENTS_INVALID' ||
+        stage === 'RESPONSE_BLOCKED'
+      )
+    ) {
+      options.retryable = false;
+      options.retryStrategy = 'NONE';
+      options.httpStatus = 400;
+    }
     return createAppError(
       code,
-      'Memory generation failed before guard assessment.'
+      'Memory generation failed before guard assessment.' +
+        (stage ? ' Stage: ' + stage + '.' : ''),
+      stage ? { safeStage: stage } : null,
+      options
     );
+  }
+
+  function safeMemoryGenerationStage_(error) {
+    var stage = null;
+    try {
+      stage = error &&
+        error.details &&
+        error.details.safeStage;
+    } catch (ignored) {
+      return null;
+    }
+    return typeof stage === 'string' &&
+      SAFE_MEMORY_GENERATION_ERROR_STAGES.indexOf(stage) !== -1
+      ? stage
+      : null;
   }
 
   function fallbackOrFail_(context, surface, decision, metricEmitter, reason) {
