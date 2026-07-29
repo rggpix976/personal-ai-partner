@@ -121,7 +121,7 @@ error、reason codeだけを記録します。
 | H5準備-復旧（該当時のみ） | `resumeMemoryReleaseTest` | `false / true / true / DONE / PROCESSED / null` | `合格 / 対象外 / 停止` | |
 | H5準備-復旧後（該当時のみ） | 復旧後の安全ゲート | 全非終端0件、未解決`DEAD` 0件、stale・overdue各0件 | `合格 / 対象外 / 停止` | |
 | H5-01 | D日の会話 | 5往復以上、送信・返信失敗0件 | `合格 / 停止` | |
-| H5-02 | D+1日の実行時刻 | 日本時間23:30以降 | `合格 / 停止` | |
+| H5-02 | D+1日の実行日 | 日本時間のD+1日00:00〜23:59 | `合格 / 停止` | |
 | H5-03 | `DIARY_GENERATE`実行前 | 非終端・未解決`DEAD`が各0件 | `合格 / 停止` | |
 | H5-04 | `runDiaryReleaseTest` | 生成時は`true / true / DONE / PROCESSED / null`。正当な不要時は`false / false / NONE / DIARY_NOT_REQUIRED / null`だが、正式合格にせず別日に再試験 | `合格 / 再試験 / 停止` | |
 | H5-05 | `inspectPreviousDiaryReleaseTest` | 生成時は`DONE`・アンカー1件。不要時は`NONE`・アンカー0件を確認後、別日に再試験 | `合格 / 再試験 / 停止` | |

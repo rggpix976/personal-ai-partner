@@ -58,7 +58,7 @@ function runDiaryReleaseTest() {
   assertReleaseTestTriggersStopped_();
   var result = runReleaseTest_(
     'DIARY_GENERATE',
-    enqueueDiaryIfDue_(new Date())
+    enqueuePreviousDiaryForReleaseTest_(new Date())
   );
   return logPr9TestResult_('runDiaryReleaseTest', result);
 }
@@ -232,8 +232,15 @@ function enqueueDiaryIfDue_(now) {
       reason: 'DIARY_TIME_NOT_REACHED'
     };
   }
-  var yesterday = getTokyoRelativeDate_(now, -1);
-  var lifecycle = DiaryService.getLifecycleState(yesterday);
+  return enqueueDiaryForDate_(getTokyoRelativeDate_(now, -1));
+}
+
+function enqueuePreviousDiaryForReleaseTest_(now) {
+  return enqueueDiaryForDate_(getTokyoRelativeDate_(now, -1));
+}
+
+function enqueueDiaryForDate_(diaryDate) {
+  var lifecycle = DiaryService.getLifecycleState(diaryDate);
   var noEnqueueReasons = {
     DONE: 'ALREADY_GENERATED',
     NONE: 'DIARY_NOT_REQUIRED',
@@ -246,10 +253,10 @@ function enqueueDiaryIfDue_(now) {
       enqueued: false,
       reason: noEnqueueReasons[lifecycle.status],
       diaryStatus: lifecycle.status,
-      diaryDate: yesterday
+      diaryDate: diaryDate
     };
   }
-  return DiaryService.enqueue(yesterday);
+  return DiaryService.enqueue(diaryDate);
 }
 
 function enqueueMemoryExtractionIfDue_(nowIso) {
