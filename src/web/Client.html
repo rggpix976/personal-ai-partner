@@ -824,6 +824,28 @@
     elements.messageInput.style.height = Math.min(elements.messageInput.scrollHeight, 180) + 'px';
   }
 
+  function compareMessagesChronologically(left, right) {
+    var timeDifference =
+      new Date(left.createdAt).getTime() -
+      new Date(right.createdAt).getTime();
+    if (timeDifference !== 0) {
+      return timeDifference;
+    }
+    if (
+      left.requestId &&
+      left.requestId === right.requestId &&
+      left.role !== right.role
+    ) {
+      if (left.role === 'user') {
+        return -1;
+      }
+      if (right.role === 'user') {
+        return 1;
+      }
+    }
+    return 0;
+  }
+
   function upsertMessage(message) {
     if (!message || !message.messageId) {
       return false;
@@ -849,12 +871,7 @@
     }
 
     if (changed) {
-      state.messages.sort(function(left, right) {
-        return (
-          new Date(left.createdAt).getTime() -
-          new Date(right.createdAt).getTime()
-        );
-      });
+      state.messages.sort(compareMessagesChronologically);
     }
 
     return changed;

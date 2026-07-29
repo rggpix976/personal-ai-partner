@@ -957,36 +957,111 @@ var SheetRepository = (function() {
     ) || row.status === 'completed';
   }
 
+  function indexConversationRows_(rows) {
+    return (rows || []).map(function(row, index) {
+      return {
+        row: row,
+        index: index,
+        createdAtMillis: row && row.created_at
+          ? getIsoTimeMillis(row.created_at)
+          : 0
+      };
+    });
+  }
+
+  function sortConversationEntries_(entries, direction) {
+    var descending = direction === 'descending';
+    return entries.sort(function(left, right) {
+      if (left.createdAtMillis !== right.createdAtMillis) {
+        return descending
+          ? right.createdAtMillis - left.createdAtMillis
+          : left.createdAtMillis - right.createdAtMillis;
+      }
+      return descending
+        ? right.index - left.index
+        : left.index - right.index;
+    });
+  }
+
+  function selectRecentConversationRows_(rows, limit) {
+    return sortConversationEntries_(
+      indexConversationRows_(rows).filter(function(entry) {
+        return isConversationRowVisible_(entry.row);
+      }),
+      'descending'
+    )
+      .slice(0, limit)
+      .map(function(entry) {
+        return entry.row;
+      });
+  }
+
+  function findConversationPivot_(entries, messageId) {
+    for (var index = 0; index < entries.length; index += 1) {
+      if (entries[index].row.message_id === messageId) {
+        return entries[index];
+      }
+    }
+    return null;
+  }
+
+  function selectConversationRowsBefore_(rows, messageId, limit) {
+    var entries = indexConversationRows_(rows);
+    var pivot = findConversationPivot_(entries, messageId);
+    return sortConversationEntries_(
+      entries.filter(function(entry) {
+        if (!isConversationRowVisible_(entry.row)) {
+          return false;
+        }
+        return pivot == null ||
+          entry.createdAtMillis < pivot.createdAtMillis ||
+          (
+            entry.createdAtMillis === pivot.createdAtMillis &&
+            entry.index < pivot.index
+          );
+      }),
+      'descending'
+    )
+      .slice(0, limit)
+      .map(function(entry) {
+        return entry.row;
+      });
+  }
+
+  function selectConversationRowsAfter_(rows, messageId, limit) {
+    var entries = indexConversationRows_(rows);
+    var pivot = findConversationPivot_(entries, messageId);
+    if (pivot == null) {
+      return [];
+    }
+    return sortConversationEntries_(
+      entries.filter(function(entry) {
+        return isConversationRowVisible_(entry.row) &&
+          entry.row.created_at && (
+          entry.createdAtMillis > pivot.createdAtMillis ||
+          (
+            entry.createdAtMillis === pivot.createdAtMillis &&
+            entry.index > pivot.index
+          )
+        );
+      }),
+      'ascending'
+    )
+      .slice(0, limit || rows.length)
+      .map(function(entry) {
+        return entry.row;
+      });
+  }
+
   function listRecentMessages(limit) {
     var rows = getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS);
-    return rows
-      .filter(isConversationRowVisible_)
-      .sort(function(a, b) {
-        return compareIsoDatesDescending(a.created_at, b.created_at);
-      })
-      .slice(0, limit)
+    return selectRecentConversationRows_(rows, limit)
       .map(toMessageDto);
   }
 
   function listMessagesBefore(messageId, limit) {
     var rows = getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS);
-    var pivot = null;
-    rows.forEach(function(row) {
-      if (row.message_id === messageId) {
-        pivot = getIsoTimeMillis(row.created_at);
-      }
-    });
-    return rows
-      .filter(function(row) {
-        return isConversationRowVisible_(row) && (
-          pivot == null ||
-          getIsoTimeMillis(row.created_at) < pivot
-        );
-      })
-      .sort(function(a, b) {
-        return compareIsoDatesDescending(a.created_at, b.created_at);
-      })
-      .slice(0, limit)
+    return selectConversationRowsBefore_(rows, messageId, limit)
       .map(toMessageDto);
   }
 
@@ -997,27 +1072,36 @@ var SheetRepository = (function() {
         wanted[messageId] = true;
       }
     });
-    return getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS)
-      .filter(function(row) {
-        return Boolean(wanted[row.message_id]) &&
-          isConversationRowVisible_(row);
-      })
-      .sort(function(a, b) {
-        return compareIsoDatesAscending(a.created_at, b.created_at);
+    return sortConversationEntries_(
+      indexConversationRows_(
+        getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS)
+      ).filter(function(entry) {
+        return Boolean(wanted[entry.row.message_id]) &&
+          isConversationRowVisible_(entry.row);
+      }),
+      'ascending'
+    )
+      .map(function(entry) {
+        return entry.row;
       })
       .map(toMessageDto);
   }
 
   function listMessagesByDate(summaryDate) {
     Validators.assertDateString(summaryDate, 'summaryDate');
-    return getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS)
-      .filter(function(row) {
-        return isConversationRowVisible_(row) &&
-          row.created_at &&
-          formatDateInTokyo(parseIsoToDate(row.created_at)) === summaryDate;
-      })
-      .sort(function(a, b) {
-        return compareIsoDatesAscending(a.created_at, b.created_at);
+    return sortConversationEntries_(
+      indexConversationRows_(
+        getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS)
+      ).filter(function(entry) {
+        return isConversationRowVisible_(entry.row) &&
+          entry.row.created_at &&
+          formatDateInTokyo(parseIsoToDate(entry.row.created_at)) ===
+            summaryDate;
+      }),
+      'ascending'
+    )
+      .map(function(entry) {
+        return entry.row;
       })
       .map(toMessageDto);
   }
@@ -1391,50 +1475,8 @@ var SheetRepository = (function() {
   function listMessagesAfter(messageId, limit) {
     Validators.assertUuidV4(messageId, 'messageId');
     var rows = getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS);
-    var pivotTime = null;
-    var pivotIndex = -1;
-
-    rows.forEach(function(row, index) {
-      if (row.message_id === messageId) {
-        pivotTime = getIsoTimeMillis(row.created_at);
-        pivotIndex = index;
-      }
-    });
-
-    if (pivotTime == null) {
-      return [];
-    }
-
-    return rows
-      .map(function(row, index) {
-        return {
-          row: row,
-          index: index,
-          createdAtMillis: row.created_at
-            ? getIsoTimeMillis(row.created_at)
-            : 0
-        };
-      })
-      .filter(function(entry) {
-        return isConversationRowVisible_(entry.row) &&
-          entry.row.created_at && (
-          entry.createdAtMillis > pivotTime ||
-          (
-            entry.createdAtMillis === pivotTime &&
-            entry.index > pivotIndex
-          )
-        );
-      })
-      .sort(function(left, right) {
-        if (left.createdAtMillis !== right.createdAtMillis) {
-          return left.createdAtMillis - right.createdAtMillis;
-        }
-        return left.index - right.index;
-      })
-      .slice(0, limit || rows.length)
-      .map(function(entry) {
-        return toMessageDto(entry.row);
-      });
+    return selectConversationRowsAfter_(rows, messageId, limit)
+      .map(toMessageDto);
   }
 
   function getUsageDaily(usageDate) {
@@ -1855,6 +1897,9 @@ var SheetRepository = (function() {
       normalizeProactiveOriginEventId:
         normalizeProactiveOriginEventId_,
       isConversationRowVisible: isConversationRowVisible_,
+      selectRecentConversationRows: selectRecentConversationRows_,
+      selectConversationRowsBefore: selectConversationRowsBefore_,
+      selectConversationRowsAfter: selectConversationRowsAfter_,
       selectProactiveMarkerRow: selectProactiveMarkerRow_,
       toMessageDto: toMessageDto,
       toProactiveMarkerDto: toProactiveMarkerDto_

@@ -838,6 +838,7 @@ var WebController = (function() {
     __test: {
       computeRetryAfterSeconds: computeRetryAfterSeconds_,
       toSafeInlineJson: toSafeInlineJson_,
+      listMessagePage: listMessagePage_,
       listNewMessagePage: listNewMessagePage_,
       normalizePollSeconds: normalizePollSeconds_
     }
