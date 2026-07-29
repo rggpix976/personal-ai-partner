@@ -238,6 +238,112 @@ function runA2PlatformTests() {
     );
   });
 
+  test('conversation ordering uses sheet order to break equal timestamps', function() {
+    var sharedTime = '2026-07-26T11:47:37+09:00';
+    var rows = [{
+      message_id: '11111111-1111-4111-8111-111111111111',
+      request_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      created_at: '2026-07-26T11:46:00+09:00',
+      role: 'assistant',
+      message_type: 'text',
+      status: 'completed'
+    }, {
+      message_id: '22222222-2222-4222-8222-222222222222',
+      request_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      created_at: sharedTime,
+      role: 'user',
+      message_type: 'image',
+      status: 'accepted'
+    }, {
+      message_id: '33333333-3333-4333-8333-333333333333',
+      request_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      created_at: sharedTime,
+      role: 'assistant',
+      message_type: 'text',
+      status: 'completed'
+    }];
+
+    var descending =
+      SheetRepository.__test.selectRecentConversationRows(rows, 3);
+    assert(
+      descending[0].role === 'assistant' &&
+        descending[1].role === 'user' &&
+        descending[2].message_id ===
+          '11111111-1111-4111-8111-111111111111',
+      'Descending history must use the later sheet row as the newer tie-break.'
+    );
+    assert(
+      descending.slice().reverse()[0].message_id ===
+        '11111111-1111-4111-8111-111111111111' &&
+        descending.slice().reverse()[1].role === 'user' &&
+        descending.slice().reverse()[2].role === 'assistant',
+      'Chronological display order must retain user before assistant.'
+    );
+  });
+
+  test('conversation cursors retain equal-timestamp rows across page boundaries', function() {
+    var sharedTime = '2026-07-26T11:47:37+09:00';
+    var rows = [{
+      message_id: '11111111-1111-4111-8111-111111111111',
+      request_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      created_at: '2026-07-26T11:46:00+09:00',
+      role: 'assistant',
+      message_type: 'text',
+      status: 'completed'
+    }, {
+      message_id: '22222222-2222-4222-8222-222222222222',
+      request_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      created_at: sharedTime,
+      role: 'user',
+      message_type: 'image',
+      status: 'accepted'
+    }, {
+      message_id: '33333333-3333-4333-8333-333333333333',
+      request_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      created_at: sharedTime,
+      role: 'assistant',
+      message_type: 'text',
+      status: 'completed'
+    }, {
+      message_id: '44444444-4444-4444-8444-444444444444',
+      request_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      created_at: '2026-07-26T11:48:00+09:00',
+      role: 'user',
+      message_type: 'text',
+      status: 'accepted'
+    }];
+
+    var beforeAssistant =
+      SheetRepository.__test.selectConversationRowsBefore(
+        rows,
+        '33333333-3333-4333-8333-333333333333',
+        3
+      );
+    assert(
+      beforeAssistant.length === 2 &&
+        beforeAssistant[0].message_id ===
+          '22222222-2222-4222-8222-222222222222' &&
+        beforeAssistant[1].message_id ===
+          '11111111-1111-4111-8111-111111111111',
+      'Older pagination must not skip the user row sharing the pivot timestamp.'
+    );
+
+    var afterUser =
+      SheetRepository.__test.selectConversationRowsAfter(
+        rows,
+        '22222222-2222-4222-8222-222222222222',
+        3
+      );
+    assert(
+      afterUser.length === 2 &&
+        afterUser[0].message_id ===
+          '33333333-3333-4333-8333-333333333333' &&
+        afterUser[1].message_id ===
+          '44444444-4444-4444-8444-444444444444',
+      'New-message pagination must retain the assistant row sharing the cursor timestamp.'
+    );
+  });
+
   expectThrows(
     'proactive delivery columns reject a missing origin column',
     function() {

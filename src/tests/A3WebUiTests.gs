@@ -126,5 +126,45 @@ function runA3WebUiTests() {
     });
   });
 
+  test('web controller renders an equal-timestamp image pair chronologically', function() {
+    var sharedTime = '2026-07-26T11:47:37+09:00';
+    withOverrides({
+      SheetRepository: {
+        listRecentMessages: function(limit) {
+          assert(limit === 3, 'The controller must request one look-ahead row.');
+          return [{
+            messageId: '33333333-3333-4333-8333-333333333333',
+            requestId: '11111111-1111-4111-8111-111111111111',
+            createdAt: sharedTime,
+            role: 'assistant',
+            messageType: 'text',
+            text: 'Reply'
+          }, {
+            messageId: '22222222-2222-4222-8222-222222222222',
+            requestId: '11111111-1111-4111-8111-111111111111',
+            createdAt: sharedTime,
+            role: 'user',
+            messageType: 'image',
+            text: 'Image request',
+            image: {
+              name: 'test.png',
+              mimeType: 'image/png',
+              summary: ''
+            }
+          }];
+        }
+      }
+    }, function() {
+      var result = WebController.__test.listMessagePage(null, 2);
+      assert(result.messages.length === 2, 'Both messages must be returned.');
+      assert(
+        result.messages[0].role === 'user' &&
+          result.messages[0].messageType === 'image' &&
+          result.messages[1].role === 'assistant',
+        'The displayed pair must remain user then assistant.'
+      );
+    });
+  });
+
   return results;
 }
