@@ -22,6 +22,10 @@ function loadNewMessages(afterMessageId, limit) {
   return WebController.loadNewMessages(afterMessageId, limit);
 }
 
+function loadDiaryEntries(beforeDate, limit) {
+  return WebController.loadDiaryEntries(beforeDate, limit);
+}
+
 function sendChat(request) {
   return WebController.sendChat(request);
 }

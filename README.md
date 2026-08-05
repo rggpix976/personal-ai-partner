@@ -42,6 +42,7 @@ documented in
   neutral product/status routing, and approval metadata persistence
 - Long-term memory extraction and retrieval
 - AI self-diary generation
+- Read-only diary archive inside the owner-only Web App
 - Persistent queue processing and scheduled jobs
 - Proactive email delivery with quota, cooldown, quiet-hour, and daily-cap
   gates

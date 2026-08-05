@@ -162,6 +162,7 @@ vm.createContext(context);
   'src/application/MaintenanceService.gs',
   'src/application/MemoryService.gs',
   'src/application/DiaryService.gs',
+  'src/application/DiaryArchiveService.gs',
   'src/application/ProactiveMessageService.gs',
   'src/application/ChatService.gs',
   'src/application/ContextService.gs',
@@ -194,6 +195,7 @@ vm.createContext(context);
   'src/tests/A14CharacterMemoryIntegrationTests.gs',
   'src/tests/A15CharacterSettingsUiTests.gs',
   'src/tests/A16ImmersionSafetyAuditTests.gs',
+  'src/tests/A17DiaryArchiveUiTests.gs',
   'src/tests/RunAllTests.gs'
 ].forEach((file) => {
   vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
