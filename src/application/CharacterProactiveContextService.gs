@@ -2,6 +2,9 @@ var CharacterProactiveContextService = (function() {
   var DEFAULT_RECENT_MESSAGE_LIMIT = 20;
   var MAX_RECENT_MESSAGE_LIMIT = 20;
   var HISTORY_QUERY_MULTIPLIER = 3;
+  var RELEVANT_MEMORY_LIMIT = 5;
+  var CONTINUITY_MEMORY_LIMIT = 5;
+  var MAX_MEMORY_FACTS = 10;
   var BINDING_KEYS = Object.freeze([
     'profileSchemaVersion',
     'profileRevision',
@@ -26,11 +29,10 @@ var CharacterProactiveContextService = (function() {
     );
 
     var recentMessages = loadRecentMessages_();
-    var acceptedMemories = loadAcceptedMemories_(
+    var acceptedMemories = loadBalancedAcceptedMemories_(
       recentMessages.map(function(message) {
         return message.text;
-      }).join(' '),
-      5
+      }).join(' ')
     );
     var partnerWorldFacts =
       typeof CharacterDiaryContextService !== 'undefined' &&
@@ -62,7 +64,7 @@ var CharacterProactiveContextService = (function() {
     });
   }
 
-  function loadAcceptedMemories_(query, limit) {
+  function loadBalancedAcceptedMemories_(query) {
     if (
       typeof MemoryService === 'undefined' ||
       !MemoryService ||
@@ -70,7 +72,29 @@ var CharacterProactiveContextService = (function() {
     ) {
       return [];
     }
-    return (MemoryService.findAcceptedRelevant(query, limit) || [])
+    var relevant = MemoryService.findAcceptedRelevant(
+      query,
+      RELEVANT_MEMORY_LIMIT
+    ) || [];
+    var continuity = MemoryService.findAcceptedRelevant(
+      '',
+      CONTINUITY_MEMORY_LIMIT
+    ) || [];
+    var seen = {};
+    return relevant.concat(continuity)
+      .filter(function(memory) {
+        var key = [
+          String(memory.category || ''),
+          String(memory.normalizedKey || ''),
+          String(memory.content || '')
+        ].join('\n');
+        if (seen[key]) {
+          return false;
+        }
+        seen[key] = true;
+        return true;
+      })
+      .slice(0, MAX_MEMORY_FACTS)
       .map(function(memory) {
         return {
           category: memory.category,
@@ -295,7 +319,8 @@ var CharacterProactiveContextService = (function() {
     classificationSignals: classificationSignals,
     __test: Object.freeze({
       normalizeHistoricalMessage: normalizeHistoricalMessage_,
-      getRecentMessageLimit: getRecentMessageLimit_
+      getRecentMessageLimit: getRecentMessageLimit_,
+      loadBalancedAcceptedMemories: loadBalancedAcceptedMemories_
     })
   });
 })();

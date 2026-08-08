@@ -1,6 +1,9 @@
 var CharacterDiaryContextService = (function() {
   var MAX_MESSAGES = 60;
   var MAX_PARTNER_WORLD_FACTS = 12;
+  var RELEVANT_MEMORY_LIMIT = 6;
+  var CONTINUITY_MEMORY_LIMIT = 4;
+  var MAX_MEMORY_FACTS = 10;
   var BINDING_KEYS = Object.freeze([
     'profileSchemaVersion',
     'profileRevision',
@@ -39,11 +42,10 @@ var CharacterDiaryContextService = (function() {
       input.diaryDate,
       input.partnerWorldFactLimit
     );
-    var acceptedMemories = loadAcceptedMemories_(
+    var acceptedMemories = loadBalancedAcceptedMemories_(
       messages.map(function(message) {
         return String(message.text || '');
-      }).join(' '),
-      5
+      }).join(' ')
     );
 
     return CharacterContextService.buildActive({
@@ -68,7 +70,7 @@ var CharacterDiaryContextService = (function() {
     });
   }
 
-  function loadAcceptedMemories_(query, limit) {
+  function loadBalancedAcceptedMemories_(query) {
     if (
       typeof MemoryService === 'undefined' ||
       !MemoryService ||
@@ -76,7 +78,29 @@ var CharacterDiaryContextService = (function() {
     ) {
       return [];
     }
-    return (MemoryService.findAcceptedRelevant(query, limit) || [])
+    var relevant = MemoryService.findAcceptedRelevant(
+      query,
+      RELEVANT_MEMORY_LIMIT
+    ) || [];
+    var continuity = MemoryService.findAcceptedRelevant(
+      '',
+      CONTINUITY_MEMORY_LIMIT
+    ) || [];
+    var seen = {};
+    return relevant.concat(continuity)
+      .filter(function(memory) {
+        var key = [
+          String(memory.category || ''),
+          String(memory.normalizedKey || ''),
+          String(memory.content || '')
+        ].join('\n');
+        if (seen[key]) {
+          return false;
+        }
+        seen[key] = true;
+        return true;
+      })
+      .slice(0, MAX_MEMORY_FACTS)
       .map(function(memory) {
         return {
           category: memory.category,
@@ -330,7 +354,8 @@ var CharacterDiaryContextService = (function() {
     __test: Object.freeze({
       normalizeHistoricalMessage: normalizeHistoricalMessage_,
       normalizeApprovedDiaryRow: normalizeApprovedDiaryRow_,
-      loadApprovedPartnerWorldFacts: loadApprovedPartnerWorldFacts_
+      loadApprovedPartnerWorldFacts: loadApprovedPartnerWorldFacts_,
+      loadBalancedAcceptedMemories: loadBalancedAcceptedMemories_
     })
   });
 })();
