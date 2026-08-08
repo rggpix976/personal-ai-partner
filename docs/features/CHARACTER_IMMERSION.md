@@ -426,6 +426,23 @@ created or updated by the enforced PR 7 path. Existing legacy rows are not
 silently promoted merely because they can be retrieved. Memory values remain
 untrusted quoted evidence and never gain instruction authority.
 
+Diary and proactive generation use a bounded continuity blend rather than
+letting retrieval order become narrative priority. The context combines
+topic-relevant accepted memories with a small high-confidence continuity pool,
+deduplicates the result, and exposes at most ten memories. Diary may use up to
+six relevant plus four continuity memories; proactive may use up to five from
+each pool. Recent conversation remains available as evidence, but the prompt
+forbids the final or longest exchange from dominating merely through recency or
+length.
+
+Diary should synthesize the day instead of replaying a transcript. When natural,
+it may weave in one or two durable memories and one approved Partner World
+thread. Proactive output keeps one conversational focus and prefers a usable
+durable memory, approved Partner World continuity, or CharacterPack canon over
+an automatic recap of the last exchange. These are selection preferences, not
+permission to invent facts: missing or awkward continuity is omitted rather
+than forced, and proactive output cannot create new Partner World events.
+
 ## 8. Classification taxonomy and precedence
 
 The deterministic classifier selects exactly one route in this order:
@@ -692,9 +709,9 @@ speech-preset variants and no generic proactive catalog entry.
 | `CHAT_TEXT_SYNC` | Guard before assistant row, event completion, state update, and Web response | One rewrite, then exact `CHAT_RECOVERY` where applicable |
 | `CHAT_TEXT_QUEUED` | Guard each attempt; reject stale pack/profile/policy/catalog | One rewrite, then exact `CHAT_RECOVERY` |
 | `CHAT_IMAGE` | Guard reply and image summary before either write | One rewrite, then exact image uncertainty pair |
-| `PROACTIVE_AI` | Generate from CharacterPack + bounded approved recent conversation + provenance-accepted memory; guard subject/body before marker/save/send | One rewrite; otherwise no artifact and no send |
+| `PROACTIVE_AI` | Generate one focused topic from CharacterPack + bounded approved recent conversation + balanced provenance-accepted memory and Partner World continuity; guard subject/body before marker/save/send | One rewrite; otherwise no artifact and no send |
 | `PROACTIVE_RETRY` | Revalidate saved generated subject/body immediately before reuse | If no longer approved, quarantine and do not send; no rewrite/fixed replacement |
-| `DIARY` | Guard all content before Docs, summary, or Partner World write | Controlled retryable failure; no fabricated diary |
+| `DIARY` | Synthesize the day with bounded memory and Partner World continuity; guard all content before Docs, summary, or Partner World write | Controlled retryable failure; no fabricated diary |
 | `MEMORY_EXTRACTION` | Validate response, candidate, grounding, provenance, and instruction-like text | Reject batch or candidate at the defined boundary |
 | `PRODUCT_INFO` / `ADMIN_OOC` | Route outside character pipeline | Reviewed neutral UI content only |
 

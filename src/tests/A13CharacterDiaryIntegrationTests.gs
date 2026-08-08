@@ -201,6 +201,47 @@ function runA13CharacterDiaryIntegrationTests() {
     assert(facts[0].date === '2026-07-22', 'Approved fact date was lost.');
   });
 
+  test('diary context blends relevant and durable memories without duplicates', function() {
+    var calls = [];
+    var relevant = {
+      category: 'preference',
+      normalizedKey: 'favorite drink',
+      content: 'The user likes coffee.',
+      confidence: 0.9
+    };
+    var durable = {
+      category: 'routine',
+      normalizedKey: 'evening routine',
+      content: 'The user prefers quiet evenings.',
+      confidence: 0.95
+    };
+    var memories;
+    withGlobals({
+      MemoryService: {
+        findAcceptedRelevant: function(query, limit) {
+          calls.push({ query: query, limit: limit });
+          return query ? [relevant] : [relevant, durable];
+        }
+      }
+    }, function() {
+      memories = CharacterDiaryContextService.__test
+        .loadBalancedAcceptedMemories('coffee today');
+    });
+    assert(
+      calls.length === 2 &&
+        calls[0].limit === 6 &&
+        calls[1].query === '' &&
+        calls[1].limit === 4,
+      'Diary memory blend did not request both evidence pools.'
+    );
+    assert(
+      memories.length === 2 &&
+        memories[0].content === relevant.content &&
+        memories[1].content === durable.content,
+      'Diary memory blend lost order or retained a duplicate.'
+    );
+  });
+
   test('diary Gemini adapter keeps generation and verification bounded', function() {
     var calls = [];
     var session;
@@ -260,6 +301,18 @@ function runA13CharacterDiaryIntegrationTests() {
     });
     assert(calls.length === 2, 'Unexpected Gemini call count.');
     assert(calls[0].schemaName === 'character-diary', 'Wrong diary schema.');
+    assert(
+      calls[0].request.systemInstruction.indexOf(
+        'Write a reflective diary entry, not a transcript recap'
+      ) !== -1 &&
+        calls[0].request.systemInstruction.indexOf(
+          'durable long-term memories, character canon, and Partner World continuity'
+        ) !== -1 &&
+        calls[0].request.systemInstruction.indexOf(
+          'Do not let the final or longest conversation dominate'
+        ) !== -1,
+      'Diary continuity balance rules were not supplied.'
+    );
     assert(
       session.getUsage().apiCalls === 2 &&
         session.getUsage().inputTokens === 15,

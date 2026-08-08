@@ -220,6 +220,18 @@ function runA12CharacterProactiveGeminiAdapterTests() {
       ) !== -1,
       'Approved conversation evidence was not supplied as untrusted data.'
     );
+    assert(
+      captured.systemInstruction.indexOf(
+        'Do not default to paraphrasing or following up on the most recent conversation.'
+      ) !== -1 &&
+        captured.systemInstruction.indexOf(
+          'durable memory, approved Partner World continuity, or character canon'
+        ) !== -1 &&
+        captured.systemInstruction.indexOf(
+          'Keep one clear conversational focus.'
+        ) !== -1,
+      'Proactive continuity balance rules were not supplied.'
+    );
 
     var serialized = JSON.stringify(captured);
     [

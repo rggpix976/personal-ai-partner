@@ -361,6 +361,48 @@ function runA12CharacterProactiveContextTests() {
     );
   });
 
+  test('proactive context blends relevant and durable memories without duplicates', function() {
+    var calls = [];
+    var relevant = {
+      category: 'preference',
+      normalizedKey: 'morning drink',
+      content: 'The user usually drinks coffee in the morning.',
+      confidence: 0.9
+    };
+    var durable = {
+      category: 'habit',
+      normalizedKey: 'weekend walk',
+      content: 'The user often takes a walk on weekends.',
+      confidence: 0.95
+    };
+    var memories;
+    withGlobals({
+      MemoryService: {
+        findAcceptedRelevant: function(query, limit) {
+          calls.push({ query: query, limit: limit });
+          return query ? [relevant] : [relevant, durable];
+        }
+      }
+    }, function() {
+      memories = CharacterProactiveContextService.__test
+        .loadBalancedAcceptedMemories('coffee today');
+    });
+    assert(
+      calls.length === 2 &&
+        calls[0].query === 'coffee today' &&
+        calls[0].limit === 5 &&
+        calls[1].query === '' &&
+        calls[1].limit === 5,
+      'Proactive memory blend did not request both evidence pools.'
+    );
+    assert(
+      memories.length === 2 &&
+        memories[0].content === relevant.content &&
+        memories[1].content === durable.content,
+      'Proactive memory blend lost order or retained a duplicate.'
+    );
+  });
+
   test('proactive classification signals are fixed false values', function() {
     var asserted = null;
     withGlobals({
