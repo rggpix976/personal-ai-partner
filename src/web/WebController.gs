@@ -131,6 +131,27 @@ var WebController = (function() {
     return listNewMessagePage_(afterMessageId, limit);
   }
 
+  function loadDiaryEntries(beforeDate, limit) {
+    try {
+      assertWebAccess_();
+      return DiaryArchiveService.listPage(beforeDate, limit);
+    } catch (error) {
+      return {
+        ok: false,
+        entries: [],
+        pagination: {
+          hasMore: false,
+          nextBeforeDate: null
+        },
+        warnings: [],
+        error: {
+          code: 'DIARY_ARCHIVE_UNAVAILABLE',
+          message: '日記を読み込めませんでした。少し待ってから、もう一度お試しください。'
+        }
+      };
+    }
+  }
+
   function sendChat(request) {
     var requestId = request && Validators.isUuidV4(request.requestId) ? request.requestId : generateUuidV4();
 
@@ -832,6 +853,7 @@ var WebController = (function() {
     saveCharacterSettings: saveCharacterSettings,
     loadMessages: loadMessages,
     loadNewMessages: loadNewMessages,
+    loadDiaryEntries: loadDiaryEntries,
     sendChat: sendChat,
     getRequestStatus: getRequestStatus,
     includePartial_: includePartial_,

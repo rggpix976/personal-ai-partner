@@ -19,6 +19,7 @@
         </div>
         <div class="topbar-actions">
           <button class="ghost-button" id="about-button" type="button" aria-expanded="false">このアプリについて</button>
+          <button class="ghost-button" id="diary-button" type="button" aria-expanded="false">日記</button>
           <button class="ghost-button" id="settings-button" type="button" aria-expanded="false">設定</button>
           <button class="ghost-button" id="refresh-button" type="button">更新</button>
         </div>
@@ -40,6 +41,33 @@
         <p id="about-message"></p>
         <p id="about-boundary"></p>
         <p class="panel-note">この説明はアプリからの案内です。会話の吹き出しには入りません。</p>
+      </section>
+
+      <section class="info-panel diary-panel hidden" id="diary-panel" aria-labelledby="diary-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Diary</p>
+            <h2 id="diary-title">日記</h2>
+          </div>
+          <div class="panel-heading-actions">
+            <button class="ghost-button" id="diary-refresh-button" type="button">更新</button>
+            <button class="ghost-button" id="diary-close-button" type="button">閉じる</button>
+          </div>
+        </div>
+
+        <p class="diary-status" id="diary-status" role="status" aria-live="polite">日記を開くと、最新の記録を読み込みます。</p>
+
+        <div class="diary-layout hidden" id="diary-layout">
+          <div class="diary-navigation">
+            <div class="diary-list" id="diary-list" aria-label="日記の日付一覧"></div>
+            <button class="ghost-button diary-more-button hidden" id="diary-more-button" type="button">以前の日記を読む</button>
+          </div>
+          <article class="diary-entry" id="diary-entry" aria-live="polite">
+            <time class="diary-entry-date" id="diary-entry-date"></time>
+            <h3 class="diary-entry-title" id="diary-entry-title"></h3>
+            <p class="diary-entry-body" id="diary-entry-body"></p>
+          </article>
+        </div>
       </section>
 
       <section class="info-panel hidden" id="settings-panel" aria-labelledby="settings-title">

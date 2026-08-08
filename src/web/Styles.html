@@ -78,7 +78,8 @@
 
   .topbar-actions,
   .panel-heading,
-  .settings-actions {
+  .settings-actions,
+  .panel-heading-actions {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -126,6 +127,105 @@
 
   .info-panel > p {
     line-height: 1.65;
+  }
+
+  .diary-status {
+    margin: 14px 0 0;
+    color: var(--muted);
+  }
+
+  .diary-status[data-state="error"] {
+    color: var(--danger);
+  }
+
+  .diary-layout {
+    display: grid;
+    grid-template-columns: minmax(190px, 0.38fr) minmax(0, 1fr);
+    gap: 16px;
+    margin-top: 16px;
+  }
+
+  .diary-navigation {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .diary-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 440px;
+    overflow-y: auto;
+    padding-right: 3px;
+  }
+
+  .diary-list-button {
+    width: 100%;
+    appearance: none;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    padding: 11px 12px;
+    background: rgba(255, 250, 243, 0.72);
+    color: var(--ink);
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .diary-list-button:hover,
+  .diary-list-button[aria-current="true"] {
+    border-color: rgba(184, 92, 56, 0.45);
+    background: var(--panel-strong);
+  }
+
+  .diary-list-date,
+  .diary-list-title {
+    display: block;
+  }
+
+  .diary-list-date {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .diary-list-title {
+    margin-top: 4px;
+    font-weight: 600;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+
+  .diary-more-button {
+    align-self: flex-start;
+  }
+
+  .diary-entry {
+    min-width: 0;
+    min-height: 220px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    padding: 18px;
+    background: var(--panel-strong);
+  }
+
+  .diary-entry-date {
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .diary-entry-title {
+    margin: 8px 0 14px;
+    font-size: 21px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+
+  .diary-entry-body {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    line-height: 1.85;
   }
 
   .panel-note,
@@ -482,8 +582,13 @@
     }
 
     .settings-form,
-    .time-fields {
+    .time-fields,
+    .diary-layout {
       grid-template-columns: 1fr;
+    }
+
+    .diary-list {
+      max-height: 230px;
     }
 
     .bubble {

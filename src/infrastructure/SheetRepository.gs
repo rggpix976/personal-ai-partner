@@ -1693,6 +1693,45 @@ var SheetRepository = (function() {
     );
   }
 
+  function listCompletedDiaryEntriesBefore(beforeDate, limit) {
+    if (beforeDate != null && String(beforeDate).trim() !== '') {
+      Validators.assertDateString(String(beforeDate), 'beforeDate');
+    }
+    return selectCompletedDiaryEntriesBefore_(
+      getRows(APP_CONSTANTS.SHEETS.DAILY_SUMMARIES),
+      beforeDate,
+      limit
+    );
+  }
+
+  function selectCompletedDiaryEntriesBefore_(rows, beforeDate, limit) {
+    var normalizedLimit = Number(limit || 0);
+    if (!isFinite(normalizedLimit) || normalizedLimit <= 0) {
+      return [];
+    }
+    normalizedLimit = Math.floor(normalizedLimit);
+    var cursor = beforeDate == null || String(beforeDate).trim() === ''
+      ? null
+      : String(beforeDate);
+
+    return (rows || [])
+      .filter(function(row) {
+        return row.diary_status === 'DONE' &&
+          row.diary_payload_json != null &&
+          row.diary_approval_json != null &&
+          row.diary_origin_event_id != null &&
+          String(row.diary_origin_event_id).trim() !== '' &&
+          (!cursor || row.summary_date < cursor);
+      })
+      .sort(function(a, b) {
+        if (a.summary_date === b.summary_date) {
+          return 0;
+        }
+        return a.summary_date < b.summary_date ? 1 : -1;
+      })
+      .slice(0, normalizedLimit);
+  }
+
   function selectRecentDiarySummariesBefore_(rows, summaryDate, limit) {
     var normalizedLimit = Number(limit || 0);
     if (!isFinite(normalizedLimit) || normalizedLimit <= 0) {
@@ -1877,6 +1916,7 @@ var SheetRepository = (function() {
     findActiveMemoryByNormalizedKey: findActiveMemoryByNormalizedKey,
     upsertMemory: upsertMemory,
     listRecentDiarySummariesBefore: listRecentDiarySummariesBefore,
+    listCompletedDiaryEntriesBefore: listCompletedDiaryEntriesBefore,
     getDailySummary: getDailySummary,
     upsertDailySummary: upsertDailySummary,
     getUsageDaily: getUsageDaily,
@@ -1886,6 +1926,7 @@ var SheetRepository = (function() {
     __test: {
       selectClaimableEvents: selectClaimableEvents_,
       selectRecentDiarySummariesBefore: selectRecentDiarySummariesBefore_,
+      selectCompletedDiaryEntriesBefore: selectCompletedDiaryEntriesBefore_,
       assertCharacterApprovalHeaders: assertCharacterApprovalHeaders_,
       assertProactiveDeliveryHeaders: assertProactiveDeliveryHeaders_,
       assertDiaryProvenanceHeaders: assertDiaryProvenanceHeaders_,

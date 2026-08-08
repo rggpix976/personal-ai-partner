@@ -47,7 +47,17 @@
     backgroundPollToken: 0,
     backgroundPollingEnabled: false,
     settings: null,
-    savingSettings: false
+    savingSettings: false,
+    diary: {
+      entries: [],
+      pagination: {
+        hasMore: false,
+        nextBeforeDate: null
+      },
+      selectedDate: null,
+      loaded: false,
+      loading: false
+    }
   };
 
   var elements = {};
@@ -77,6 +87,18 @@
     elements.aboutPanel = document.getElementById('about-panel');
     elements.aboutMessage = document.getElementById('about-message');
     elements.aboutBoundary = document.getElementById('about-boundary');
+    elements.diaryButton = document.getElementById('diary-button');
+    elements.diaryCloseButton = document.getElementById('diary-close-button');
+    elements.diaryRefreshButton = document.getElementById('diary-refresh-button');
+    elements.diaryPanel = document.getElementById('diary-panel');
+    elements.diaryStatus = document.getElementById('diary-status');
+    elements.diaryLayout = document.getElementById('diary-layout');
+    elements.diaryList = document.getElementById('diary-list');
+    elements.diaryMoreButton = document.getElementById('diary-more-button');
+    elements.diaryEntry = document.getElementById('diary-entry');
+    elements.diaryEntryDate = document.getElementById('diary-entry-date');
+    elements.diaryEntryTitle = document.getElementById('diary-entry-title');
+    elements.diaryEntryBody = document.getElementById('diary-entry-body');
     elements.settingsButton = document.getElementById('settings-button');
     elements.settingsCloseButton = document.getElementById('settings-close-button');
     elements.settingsPanel = document.getElementById('settings-panel');
@@ -111,16 +133,30 @@
     elements.loadOlderButton.addEventListener('click', onLoadOlder);
     elements.refreshButton.addEventListener('click', loadInitialState);
     elements.aboutButton.addEventListener('click', function() {
+      togglePanel(elements.diaryPanel, elements.diaryButton, false);
+      togglePanel(elements.settingsPanel, elements.settingsButton, false);
       togglePanel(elements.aboutPanel, elements.aboutButton, true);
     });
     elements.aboutCloseButton.addEventListener('click', function() {
       togglePanel(elements.aboutPanel, elements.aboutButton, false);
     });
     elements.settingsButton.addEventListener('click', function() {
+      togglePanel(elements.aboutPanel, elements.aboutButton, false);
+      togglePanel(elements.diaryPanel, elements.diaryButton, false);
       togglePanel(elements.settingsPanel, elements.settingsButton, true);
     });
     elements.settingsCloseButton.addEventListener('click', function() {
       togglePanel(elements.settingsPanel, elements.settingsButton, false);
+    });
+    elements.diaryButton.addEventListener('click', onDiaryOpen);
+    elements.diaryCloseButton.addEventListener('click', function() {
+      togglePanel(elements.diaryPanel, elements.diaryButton, false);
+    });
+    elements.diaryRefreshButton.addEventListener('click', function() {
+      loadDiaryPage(true);
+    });
+    elements.diaryMoreButton.addEventListener('click', function() {
+      loadDiaryPage(false);
     });
     elements.settingsForm.addEventListener('submit', onSettingsSubmit);
     elements.messageInput.addEventListener('input', autoResizeTextarea);
@@ -570,6 +606,199 @@
   function renderProductDisclosure(disclosure) {
     elements.aboutMessage.textContent = disclosure.message || '';
     elements.aboutBoundary.textContent = disclosure.boundary || '';
+  }
+
+  function onDiaryOpen() {
+    togglePanel(elements.aboutPanel, elements.aboutButton, false);
+    togglePanel(elements.settingsPanel, elements.settingsButton, false);
+    togglePanel(elements.diaryPanel, elements.diaryButton, true);
+    if (!state.diary.loaded && !state.diary.loading) {
+      loadDiaryPage(true);
+    }
+  }
+
+  function loadDiaryPage(reset) {
+    if (state.diary.loading) {
+      return;
+    }
+    if (!reset && !state.diary.pagination.hasMore) {
+      return;
+    }
+
+    var beforeDate = reset
+      ? null
+      : state.diary.pagination.nextBeforeDate;
+    state.diary.loading = true;
+    elements.diaryRefreshButton.disabled = true;
+    elements.diaryMoreButton.disabled = true;
+    elements.diaryStatus.removeAttribute('data-state');
+    elements.diaryStatus.textContent = reset
+      ? '日記を読み込んでいます…'
+      : '以前の日記を読み込んでいます…';
+
+    callServer('loadDiaryEntries', [beforeDate, 12])
+      .then(function(response) {
+        if (!response || !response.ok) {
+          var message = response && response.error && response.error.message
+            ? response.error.message
+            : '日記を読み込めませんでした。';
+          throw new Error(message);
+        }
+
+        var incoming = Array.isArray(response.entries)
+          ? response.entries
+          : [];
+        state.diary.entries = reset
+          ? incoming.slice()
+          : appendUniqueDiaryEntries_(state.diary.entries, incoming);
+        state.diary.pagination = response.pagination || {
+          hasMore: false,
+          nextBeforeDate: null
+        };
+        state.diary.loaded = true;
+
+        if (
+          reset ||
+          !state.diary.selectedDate ||
+          !findDiaryEntry_(state.diary.selectedDate)
+        ) {
+          state.diary.selectedDate = state.diary.entries.length > 0
+            ? state.diary.entries[0].date
+            : null;
+        }
+
+        renderDiaryArchive_();
+        var warnings = Array.isArray(response.warnings)
+          ? response.warnings.filter(Boolean)
+          : [];
+        if (state.diary.entries.length === 0) {
+          elements.diaryStatus.textContent =
+            'まだ読める日記はありません。日記が生成されると、ここに表示されます。';
+        } else if (warnings.length > 0) {
+          elements.diaryStatus.textContent = warnings.join(' ');
+        } else {
+          elements.diaryStatus.textContent = '日記を読み込みました。';
+        }
+      })
+      .catch(function(error) {
+        elements.diaryStatus.setAttribute('data-state', 'error');
+        elements.diaryStatus.textContent =
+          error.message || '日記を読み込めませんでした。';
+      })
+      .finally(function() {
+        state.diary.loading = false;
+        elements.diaryRefreshButton.disabled = false;
+        elements.diaryMoreButton.disabled = false;
+        updateDiaryPaginationUi_();
+      });
+  }
+
+  function appendUniqueDiaryEntries_(existing, incoming) {
+    var seen = {};
+    var combined = [];
+    (existing || []).concat(incoming || []).forEach(function(entry) {
+      if (!entry || !entry.date || seen[entry.date]) {
+        return;
+      }
+      seen[entry.date] = true;
+      combined.push(entry);
+    });
+    return combined;
+  }
+
+  function renderDiaryArchive_() {
+    while (elements.diaryList.firstChild) {
+      elements.diaryList.removeChild(elements.diaryList.firstChild);
+    }
+
+    if (state.diary.entries.length === 0) {
+      elements.diaryLayout.classList.toggle(
+        'hidden',
+        !state.diary.pagination.hasMore
+      );
+      elements.diaryEntry.classList.add('hidden');
+      clearDiaryEntry_();
+      updateDiaryPaginationUi_();
+      return;
+    }
+
+    elements.diaryLayout.classList.remove('hidden');
+    elements.diaryEntry.classList.remove('hidden');
+    state.diary.entries.forEach(function(entry) {
+      var button = document.createElement('button');
+      button.className = 'diary-list-button';
+      button.type = 'button';
+      button.setAttribute(
+        'aria-current',
+        entry.date === state.diary.selectedDate ? 'true' : 'false'
+      );
+
+      var date = document.createElement('span');
+      date.className = 'diary-list-date';
+      date.textContent = formatDiaryDate_(entry.date);
+
+      var title = document.createElement('span');
+      title.className = 'diary-list-title';
+      title.textContent = entry.title || '題名のない日記';
+
+      button.appendChild(date);
+      button.appendChild(title);
+      button.addEventListener('click', function() {
+        state.diary.selectedDate = entry.date;
+        renderDiaryArchive_();
+      });
+      elements.diaryList.appendChild(button);
+    });
+
+    renderSelectedDiaryEntry_();
+    updateDiaryPaginationUi_();
+  }
+
+  function renderSelectedDiaryEntry_() {
+    var entry = findDiaryEntry_(state.diary.selectedDate);
+    if (!entry) {
+      clearDiaryEntry_();
+      return;
+    }
+    elements.diaryEntryDate.dateTime = entry.date;
+    elements.diaryEntryDate.textContent = formatDiaryDate_(entry.date);
+    elements.diaryEntryTitle.textContent = entry.title || '題名のない日記';
+    elements.diaryEntryBody.textContent = entry.narrative || '';
+  }
+
+  function clearDiaryEntry_() {
+    elements.diaryEntryDate.removeAttribute('datetime');
+    elements.diaryEntryDate.textContent = '';
+    elements.diaryEntryTitle.textContent = '';
+    elements.diaryEntryBody.textContent = '';
+  }
+
+  function findDiaryEntry_(date) {
+    for (var i = 0; i < state.diary.entries.length; i += 1) {
+      if (state.diary.entries[i].date === date) {
+        return state.diary.entries[i];
+      }
+    }
+    return null;
+  }
+
+  function updateDiaryPaginationUi_() {
+    elements.diaryMoreButton.classList.toggle(
+      'hidden',
+      !state.diary.pagination.hasMore
+    );
+    elements.diaryMoreButton.textContent = state.diary.loading
+      ? '読み込み中…'
+      : '以前の日記を読む';
+  }
+
+  function formatDiaryDate_(dateString) {
+    var parts = String(dateString || '').split('-');
+    if (parts.length !== 3) {
+      return String(dateString || '');
+    }
+    return Number(parts[0]) + '年' + Number(parts[1]) + '月' +
+      Number(parts[2]) + '日';
   }
 
   function renderSettings(settings) {

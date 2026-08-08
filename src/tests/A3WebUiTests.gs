@@ -45,6 +45,7 @@ function runA3WebUiTests() {
     assert(typeof saveCharacterSettings === 'function', 'saveCharacterSettings should exist.');
     assert(typeof loadMessages === 'function', 'loadMessages should exist.');
     assert(typeof loadNewMessages === 'function', 'loadNewMessages should exist.');
+    assert(typeof loadDiaryEntries === 'function', 'loadDiaryEntries should exist.');
     assert(typeof sendChat === 'function', 'sendChat should exist.');
     assert(typeof getRequestStatus === 'function', 'getRequestStatus should exist.');
   });
