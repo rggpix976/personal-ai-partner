@@ -461,6 +461,172 @@ function runA11CharacterChatGeminiAdapterTests() {
     });
   });
 
+  test('failure diagnostics retain only controlled verifier metadata', function() {
+    var originalLogger = AppLogger;
+    var emitted = [];
+    var sentinel = 'PRIVATE_PROVIDER_FAILURE_42c8';
+    AppLogger = {
+      info: function(operation, message, details) {
+        emitted.push({
+          operation: operation,
+          message: message,
+          details: details
+        });
+      }
+    };
+    try {
+      withGeminiStub({
+        generateStructured: function() {
+          throw createAppError(
+            'GEMINI_RATE_LIMIT',
+            sentinel,
+            {
+              safeStage: 'HTTP_RATE_LIMITED',
+              providerResponse: sentinel
+            }
+          );
+        }
+      }, function() {
+        var context = generationView('diagnostic verifier request');
+        var session = CharacterChatGeminiAdapter.createSession({});
+        try {
+          session.verify(
+            verifierRequest(context, 'CHAT_TEXT_SYNC', { text: sentinel })
+          );
+        } catch (ignored) {}
+      });
+
+      assert(emitted.length === 1, 'Verifier failure diagnostic count drifted.');
+      assert(
+        emitted[0].operation === 'CharacterChatGeminiAdapter.diagnostic' &&
+          emitted[0].message === 'Character Gemini stage failed.',
+        'Verifier failure used the wrong diagnostic operation.'
+      );
+      assert(
+        JSON.stringify(emitted[0].details) === JSON.stringify({
+          diagnostic: 'CHAT_GEMINI_STAGE_FAILED',
+          source: 'verifier',
+          errorCode: 'GEMINI_RATE_LIMIT',
+          safeStage: 'HTTP_RATE_LIMITED'
+        }),
+        'Verifier diagnostic details were not exact and controlled.'
+      );
+      assert(
+        JSON.stringify(emitted[0]).indexOf(sentinel) === -1,
+        'Verifier diagnostic retained private provider or candidate text.'
+      );
+    } finally {
+      AppLogger = originalLogger;
+    }
+  });
+
+  test('generated and rewrite validation failures are diagnosed by source', function() {
+    var originalLogger = AppLogger;
+    var emitted = [];
+    AppLogger = {
+      info: function(operation, message, details) {
+        emitted.push({
+          operation: operation,
+          message: message,
+          details: details
+        });
+      }
+    };
+    try {
+      withGeminiStub({
+        generateText: function() {
+          return {
+            text: '',
+            model: 'gemini-test',
+            usage: { inputTokens: 1, outputTokens: 0 }
+          };
+        }
+      }, function() {
+        var session = CharacterChatGeminiAdapter.createSession({});
+        try {
+          session.generate({
+            context: generationView('diagnostic generated request'),
+            surface: 'CHAT_TEXT_SYNC',
+            mode: 'CHARACTER'
+          });
+        } catch (ignored) {}
+      });
+
+      withGeminiStub({
+        generateText: function() {
+          return {
+            text: '',
+            model: 'gemini-test',
+            usage: { inputTokens: 1, outputTokens: 0 }
+          };
+        }
+      }, function() {
+        var session = CharacterChatGeminiAdapter.createSession({});
+        try {
+          session.rewrite({
+            context: generationView('diagnostic rewrite request'),
+            surface: 'CHAT_TEXT_SYNC',
+            category: 'PERSONA_SOFT_STYLE'
+          });
+        } catch (ignored) {}
+      });
+
+      assert(emitted.length === 2, 'Validation diagnostic count drifted.');
+      assert(
+        emitted[0].details.source === 'generated' &&
+          emitted[1].details.source === 'rewrite',
+        'Validation diagnostics lost their stage sources.'
+      );
+      emitted.forEach(function(entry) {
+        assert(
+          entry.details.errorCode === 'GEMINI_BAD_RESPONSE' &&
+            entry.details.safeStage === 'CHARACTER_TEXT_INVALID',
+          'Validation diagnostic exposed an uncontrolled value.'
+        );
+      });
+    } finally {
+      AppLogger = originalLogger;
+    }
+  });
+
+  test('diagnostic logger failure never replaces the original generation error', function() {
+    var originalLogger = AppLogger;
+    AppLogger = {
+      info: function() {
+        throw new Error('PRIVATE_LOGGER_FAILURE');
+      }
+    };
+    try {
+      withGeminiStub({
+        generateText: function() {
+          throw createAppError(
+            'GEMINI_AUTH_FAILED',
+            'PRIVATE_PROVIDER_MESSAGE',
+            { safeStage: 'HTTP_AUTH_FAILED' }
+          );
+        }
+      }, function() {
+        var session = CharacterChatGeminiAdapter.createSession({});
+        var thrown = null;
+        try {
+          session.generate({
+            context: generationView('diagnostic logger request'),
+            surface: 'CHAT_TEXT_SYNC',
+            mode: 'CHARACTER'
+          });
+        } catch (error) {
+          thrown = error;
+        }
+        assert(
+          thrown && thrown.code === 'GEMINI_AUTH_FAILED',
+          'Diagnostic logger failure replaced the original generation error.'
+        );
+      });
+    } finally {
+      AppLogger = originalLogger;
+    }
+  });
+
   test('metric emitter logs only controlled low-cardinality metadata and never throws', function() {
     var originalLogger = AppLogger;
     var emitted = [];

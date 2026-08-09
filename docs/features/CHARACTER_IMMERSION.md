@@ -843,6 +843,15 @@ revisions, names, and free-form reasons. The fixed allowlisted
 `characterPackId` and `characterPackVersion` dimensions are the only ID-like
 exception.
 
+Chat generation failures additionally emit the fixed operation
+`CharacterChatGeminiAdapter.diagnostic`. Its details contain only the fixed
+diagnostic token, the allowlisted stage source (`generated`, `rewrite`, or
+`verifier`), an allowlisted error code, and, when available, an allowlisted
+provider stage. It never contains generated or conversation text, prompts,
+raw provider responses, exception messages, IDs, URLs, email addresses, or
+secrets. Diagnostic logging is observational: a logger failure cannot change
+the existing exact-fallback or fail-closed result.
+
 `immersion_unsafe_persisted_or_sent_total` is derived by the read-only
 `inspectPr9PersistenceSafety()` operator. It audits the complete graph of
 persisted `enforced` events and their chat, image-summary, proactive-delivery,
