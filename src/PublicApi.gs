@@ -35,5 +35,8 @@ function getRequestStatus(requestId) {
 }
 
 function inspectGeminiModelRouting() {
-  return GeminiClient.inspectRouting();
+  return logPr9TestResult_(
+    'inspectGeminiModelRouting',
+    GeminiClient.inspectRouting()
+  );
 }
