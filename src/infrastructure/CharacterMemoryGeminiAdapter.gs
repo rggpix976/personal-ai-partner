@@ -330,11 +330,21 @@ var CharacterMemoryGeminiAdapter = (function() {
       'sourceMessageIds',
       'reason'
     ];
+    var hasNullableExistingMemoryId =
+      !requiresExisting &&
+      Object.prototype.hasOwnProperty.call(candidate, 'existingMemoryId') &&
+      candidate.existingMemoryId === null;
     if (requiresExisting) {
       expectedKeys.push('existingMemoryId');
     }
     ensure(
-      hasExactKeys_(candidate, expectedKeys) &&
+      (
+        hasExactKeys_(candidate, expectedKeys) ||
+        (
+          hasNullableExistingMemoryId &&
+          hasExactKeys_(candidate, expectedKeys.concat(['existingMemoryId']))
+        )
+      ) &&
         ['create', 'confirm', 'update', 'ignore'].indexOf(action) !== -1,
       'GEMINI_BAD_RESPONSE',
       'Gemini returned an invalid memory candidate shape.',
