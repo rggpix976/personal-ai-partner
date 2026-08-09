@@ -30,6 +30,32 @@ var CharacterChatGeminiAdapter = (function() {
     'GEMINI_BAD_RESPONSE',
     'GEMINI_TEMPORARY_FAILURE'
   ]);
+  var DIAGNOSTIC_ERROR_CODES = Object.freeze([
+    'VALIDATION_REQUEST_INVALID',
+    'CONFIG_MISSING',
+    'GEMINI_RATE_LIMIT',
+    'GEMINI_AUTH_FAILED',
+    'GEMINI_MODEL_UNAVAILABLE',
+    'GEMINI_BAD_RESPONSE',
+    'GEMINI_TEMPORARY_FAILURE'
+  ]);
+  var SAFE_DIAGNOSTIC_STAGES = Object.freeze([
+    'REQUEST_CONTENTS_INVALID',
+    'STRUCTURED_JSON_INVALID',
+    'RESPONSE_TEXT_MISSING',
+    'RESPONSE_BLOCKED',
+    'HTTP_RATE_LIMITED',
+    'HTTP_AUTH_FAILED',
+    'HTTP_MODEL_UNAVAILABLE',
+    'HTTP_SERVER_FAILURE',
+    'HTTP_REQUEST_REJECTED',
+    'HTTP_FAILURE',
+    'TRANSPORT_FAILURE',
+    'HTTP_RESPONSE_JSON_INVALID',
+    'CHARACTER_TEXT_INVALID',
+    'CHARACTER_IMAGE_INVALID',
+    'SEMANTIC_VERDICT_INVALID'
+  ]);
   var SAFE_ERROR_MESSAGES = Object.freeze({
     CONFIG_MISSING: 'Gemini configuration is missing.',
     GEMINI_RATE_LIMIT: 'Gemini rate limit was reached.',
@@ -73,44 +99,46 @@ var CharacterChatGeminiAdapter = (function() {
       );
       generated = true;
       primaryMode = input.mode;
-      assertImageRoute_(input.surface, preparedImage);
+      return runDiagnosedStage_('generated', function() {
+        assertImageRoute_(input.surface, preparedImage);
 
-      var request = buildGenerationRequest_(
-        input.context,
-        input.surface,
-        input.mode,
-        null,
-        preparedImage
-      );
-      if (input.surface === 'CHAT_IMAGE') {
-        var structured = invoke_(
+        var request = buildGenerationRequest_(
+          input.context,
+          input.surface,
+          input.mode,
+          null,
+          preparedImage
+        );
+        if (input.surface === 'CHAT_IMAGE') {
+          var structured = invoke_(
+            'generated',
+            true,
+            function() {
+              return GeminiClient.generateStructured(
+                request,
+                'character-chat-image'
+              );
+            }
+          );
+          var imagePayload = normalizeImagePayload_(structured.data);
+          structured = null;
+          return imagePayload;
+        }
+
+        var response = invoke_(
           'generated',
-          true,
+          false,
           function() {
-            return GeminiClient.generateStructured(
-              request,
-              'character-chat-image'
-            );
+            return GeminiClient.generateText(request);
           }
         );
-        var imagePayload = normalizeImagePayload_(structured.data);
-        structured = null;
-        return imagePayload;
-      }
-
-      var response = invoke_(
-        'generated',
-        false,
-        function() {
-          return GeminiClient.generateText(request);
-        }
-      );
-      var text = response && typeof response.text === 'string'
-        ? response.text
-        : null;
-      response = null;
-      ensureValidGeneratedText_(text);
-      return { text: text };
+        var text = response && typeof response.text === 'string'
+          ? response.text
+          : null;
+        response = null;
+        ensureValidGeneratedText_(text);
+        return { text: text };
+      });
     }
 
     function rewrite(input) {
@@ -122,47 +150,49 @@ var CharacterChatGeminiAdapter = (function() {
         { reason: 'CHARACTER_REWRITE_REUSED' }
       );
       rewritten = true;
-      assertImageRoute_(input.surface, preparedImage);
+      return runDiagnosedStage_('rewrite', function() {
+        assertImageRoute_(input.surface, preparedImage);
 
-      // The rejected draft is intentionally not accepted or retained by this
-      // API. A rewrite starts from the typed context and one controlled
-      // category only.
-      var request = buildGenerationRequest_(
-        input.context,
-        input.surface,
-        primaryMode,
-        input.category,
-        preparedImage
-      );
-      if (input.surface === 'CHAT_IMAGE') {
-        var structured = invoke_(
+        // The rejected draft is intentionally not accepted or retained by
+        // this API. A rewrite starts from the typed context and one controlled
+        // category only.
+        var request = buildGenerationRequest_(
+          input.context,
+          input.surface,
+          primaryMode,
+          input.category,
+          preparedImage
+        );
+        if (input.surface === 'CHAT_IMAGE') {
+          var structured = invoke_(
+            'rewrite',
+            true,
+            function() {
+              return GeminiClient.generateStructured(
+                request,
+                'character-chat-image'
+              );
+            }
+          );
+          var imagePayload = normalizeImagePayload_(structured.data);
+          structured = null;
+          return imagePayload;
+        }
+
+        var response = invoke_(
           'rewrite',
-          true,
+          false,
           function() {
-            return GeminiClient.generateStructured(
-              request,
-              'character-chat-image'
-            );
+            return GeminiClient.generateText(request);
           }
         );
-        var imagePayload = normalizeImagePayload_(structured.data);
-        structured = null;
-        return imagePayload;
-      }
-
-      var response = invoke_(
-        'rewrite',
-        false,
-        function() {
-          return GeminiClient.generateText(request);
-        }
-      );
-      var text = response && typeof response.text === 'string'
-        ? response.text
-        : null;
-      response = null;
-      ensureValidGeneratedText_(text);
-      return { text: text };
+        var text = response && typeof response.text === 'string'
+          ? response.text
+          : null;
+        response = null;
+        ensureValidGeneratedText_(text);
+        return { text: text };
+      });
     }
 
     function verify(request) {
@@ -174,26 +204,37 @@ var CharacterChatGeminiAdapter = (function() {
         { reason: 'CHARACTER_SEMANTIC_VERIFIER_REUSED' }
       );
       verifierCalls += 1;
-      assertImageRoute_(request.surface, preparedImage);
+      return runDiagnosedStage_('verifier', function() {
+        assertImageRoute_(request.surface, preparedImage);
 
-      var geminiRequest = buildVerifierRequest_(
-        request,
-        preparedImage,
-        primaryMode
-      );
-      var response = invoke_(
-        'verifier',
-        request.surface === 'CHAT_IMAGE',
-        function() {
-          return GeminiClient.generateStructured(
-            geminiRequest,
-            'immersion-semantic-verdict'
-          );
-        }
-      );
-      var verdict = normalizeVerifierVerdict_(response.data);
-      response = null;
-      return verdict;
+        var geminiRequest = buildVerifierRequest_(
+          request,
+          preparedImage,
+          primaryMode
+        );
+        var response = invoke_(
+          'verifier',
+          request.surface === 'CHAT_IMAGE',
+          function() {
+            return GeminiClient.generateStructured(
+              geminiRequest,
+              'immersion-semantic-verdict'
+            );
+          }
+        );
+        var verdict = normalizeVerifierVerdict_(response.data);
+        response = null;
+        return verdict;
+      });
+    }
+
+    function runDiagnosedStage_(source, callback) {
+      try {
+        return callback();
+      } catch (error) {
+        emitFailureDiagnostic_(source, error);
+        throw error;
+      }
     }
 
     function invoke_(source, usesImage, callback) {
@@ -514,7 +555,8 @@ var CharacterChatGeminiAdapter = (function() {
         typeof value.replyText === 'string' &&
         typeof value.imageSummary === 'string',
       'GEMINI_BAD_RESPONSE',
-      'Gemini returned an invalid character image response.'
+      'Gemini returned an invalid character image response.',
+      { safeStage: 'CHARACTER_IMAGE_INVALID' }
     );
     return {
       replyText: value.replyText,
@@ -536,7 +578,8 @@ var CharacterChatGeminiAdapter = (function() {
           return typeof key === 'string';
         }),
       'GEMINI_BAD_RESPONSE',
-      'Gemini returned an invalid semantic verdict.'
+      'Gemini returned an invalid semantic verdict.',
+      { safeStage: 'SEMANTIC_VERDICT_INVALID' }
     );
     return {
       verdict: value.verdict,
@@ -549,7 +592,8 @@ var CharacterChatGeminiAdapter = (function() {
     ensure(
       typeof value === 'string' && value.trim() !== '',
       'GEMINI_BAD_RESPONSE',
-      'Gemini returned an invalid character response.'
+      'Gemini returned an invalid character response.',
+      { safeStage: 'CHARACTER_TEXT_INVALID' }
     );
   }
 
@@ -694,12 +738,50 @@ var CharacterChatGeminiAdapter = (function() {
         options.httpStatus = error.httpStatus;
       }
     }
+    var safeStage = getSafeDiagnosticStage_(error);
     return createAppError(
       code,
       SAFE_ERROR_MESSAGES[code],
-      null,
+      safeStage == null ? null : { safeStage: safeStage },
       options
     );
+  }
+
+  function emitFailureDiagnostic_(source, error) {
+    try {
+      var details = {
+        diagnostic: 'CHAT_GEMINI_STAGE_FAILED',
+        source: SESSION_SOURCES.indexOf(source) !== -1
+          ? source
+          : 'generated',
+        errorCode:
+          error && DIAGNOSTIC_ERROR_CODES.indexOf(error.code) !== -1
+            ? error.code
+            : 'UNKNOWN'
+      };
+      var safeStage = getSafeDiagnosticStage_(error);
+      if (safeStage != null) {
+        details.safeStage = safeStage;
+      }
+      AppLogger.info(
+        'CharacterChatGeminiAdapter.diagnostic',
+        'Character Gemini stage failed.',
+        details
+      );
+    } catch (ignored) {
+      // Diagnostics are observational and must never change fallback or
+      // fail-closed behavior.
+    }
+  }
+
+  function getSafeDiagnosticStage_(error) {
+    var stage = error && isPlainObject_(error.details)
+      ? error.details.safeStage
+      : null;
+    return typeof stage === 'string' &&
+      SAFE_DIAGNOSTIC_STAGES.indexOf(stage) !== -1
+      ? stage
+      : null;
   }
 
   function stringifyPromptJson_(value) {
