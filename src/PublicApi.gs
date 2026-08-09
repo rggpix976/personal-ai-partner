@@ -1,3 +1,10 @@
+function inspectGeminiModelRouting() {
+  return logPr9TestResult_(
+    'inspectGeminiModelRouting',
+    GeminiClient.inspectRouting()
+  );
+}
+
 function doGet() {
   return WebController.doGet();
 }
@@ -32,11 +39,4 @@ function sendChat(request) {
 
 function getRequestStatus(requestId) {
   return WebController.getRequestStatus(requestId);
-}
-
-function inspectGeminiModelRouting() {
-  return logPr9TestResult_(
-    'inspectGeminiModelRouting',
-    GeminiClient.inspectRouting()
-  );
 }
