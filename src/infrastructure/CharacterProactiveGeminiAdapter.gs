@@ -79,7 +79,9 @@ var CharacterProactiveGeminiAdapter = (function() {
         function() {
           return GeminiClient.generateStructured(
             request,
-            'character-proactive'
+            'character-proactive',
+            'GENERATION',
+            { surface: input.surface, source: 'generated' }
           );
         }
       );
@@ -118,7 +120,9 @@ var CharacterProactiveGeminiAdapter = (function() {
         function() {
           return GeminiClient.generateStructured(
             request,
-            'character-proactive'
+            'character-proactive',
+            'GENERATION',
+            { surface: input.surface, source: 'rewrite' }
           );
         }
       );
@@ -145,7 +149,9 @@ var CharacterProactiveGeminiAdapter = (function() {
         function() {
           return GeminiClient.generateStructured(
             geminiRequest,
-            'immersion-semantic-verdict'
+            'immersion-semantic-verdict',
+            'UTILITY',
+            { surface: request.surface, source: 'verifier' }
           );
         }
       );

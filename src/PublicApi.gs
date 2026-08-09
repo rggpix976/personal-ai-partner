@@ -33,3 +33,7 @@ function sendChat(request) {
 function getRequestStatus(requestId) {
   return WebController.getRequestStatus(requestId);
 }
+
+function inspectGeminiModelRouting() {
+  return GeminiClient.inspectRouting();
+}

@@ -1113,7 +1113,13 @@ function runA11CharacterChatIntegrationTests() {
         }
       },
       GeminiClient: {
-        generateText: function() {
+        generateText: function(_, modelRole, metricContext) {
+          assert(
+            modelRole === 'GENERATION' &&
+              metricContext.surface === 'CHAT_TEXT_QUEUED' &&
+              metricContext.source === 'generated',
+            'Legacy queued chat did not use the generation route.'
+          );
           queueEvent.lockedBy =
             'queue-lease:v1:55555555-5555-4555-8555-555555555555';
           return {

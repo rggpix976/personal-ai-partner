@@ -253,10 +253,14 @@ function runA14CharacterMemoryIntegrationTests() {
         generateStructured: function(
           request,
           schemaName,
-          schemaOptions
+          modelRole,
+          metricContext
         ) {
           capturedSchemaName = schemaName;
-          capturedOptions = schemaOptions;
+          capturedOptions = {
+            modelRole: modelRole,
+            metricContext: metricContext
+          };
           return {
             data: {
               candidates: [candidate()]
@@ -276,8 +280,10 @@ function runA14CharacterMemoryIntegrationTests() {
     });
     assert(
       capturedSchemaName === null &&
-        capturedOptions === undefined,
-      'Memory generation did not use schema-less JSON mode.'
+        capturedOptions.modelRole === 'UTILITY' &&
+        capturedOptions.metricContext.surface === 'MEMORY_EXTRACTION' &&
+        capturedOptions.metricContext.source === 'generated',
+      'Memory generation did not use schema-less JSON mode on the utility model.'
     );
   });
 

@@ -1,20 +1,53 @@
 var GeminiClient = (function() {
   var API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/';
+  var MODEL_ROLES = Object.freeze({
+    GENERATION: 'GENERATION',
+    UTILITY: 'UTILITY'
+  });
+  var ROUTING_MODES = Object.freeze([
+    'single',
+    'split'
+  ]);
+  var SUPPORTED_MODELS = Object.freeze([
+    'gemini-2.5-flash',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash-lite'
+  ]);
+  var SAFE_METRIC_SURFACES = Object.freeze([
+    'CHAT_TEXT_SYNC',
+    'CHAT_TEXT_QUEUED',
+    'CHAT_IMAGE',
+    'PROACTIVE_AI',
+    'PROACTIVE_RETRY',
+    'DIARY',
+    'MEMORY_EXTRACTION'
+  ]);
+  var SAFE_METRIC_SOURCES = Object.freeze([
+    'generated',
+    'rewrite',
+    'verifier'
+  ]);
 
-  function generateText(request) {
-    return generateContent_(request, null);
+  function generateText(request, modelRole, metricContext) {
+    return generateContent_(request, null, null, modelRole, metricContext);
   }
 
-  function generateWithImage(request) {
-    return generateContent_(request, request && request.image ? request.image : null);
+  function generateWithImage(request, modelRole, metricContext) {
+    return generateContent_(
+      request,
+      request && request.image ? request.image : null,
+      null,
+      modelRole,
+      metricContext
+    );
   }
 
-  function generateStructured(request, schemaName) {
+  function generateStructured(request, schemaName, modelRole, metricContext) {
     var responseJsonSchema = getStructuredResponseSchema_(schemaName);
     var response = generateContent_(request, request && request.image ? request.image : null, {
       responseMimeType: 'application/json',
       responseJsonSchema: responseJsonSchema
-    });
+    }, modelRole, metricContext);
     try {
       response.data = parseStructuredData_(response.text);
       response.schemaName = schemaName || null;
@@ -24,27 +57,46 @@ var GeminiClient = (function() {
     }
   }
 
-  function generateContent_(request, image, extraConfig) {
+  function generateContent_(request, image, extraConfig, modelRole, metricContext) {
     request = request || {};
-    var model = getConfiguredModel_();
-    var apiKey = getApiKey_();
-    var url = API_BASE_URL + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(apiKey);
-    var body = buildRequestBody_(request, image, extraConfig);
+    var normalizedRole = normalizeModelRole_(modelRole);
+    var model = resolveConfiguredModel_(normalizedRole);
 
     try {
+      var apiKey = getApiKey_();
+      var url = API_BASE_URL + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(apiKey);
+      var body = buildRequestBody_(request, image, extraConfig, model);
       var httpResponse = UrlFetchApp.fetch(url, {
         method: 'post',
         contentType: 'application/json',
         payload: JSON.stringify(body),
         muteHttpExceptions: true
       });
-      return parseGenerateContentResponse_(httpResponse, model);
+      var response = parseGenerateContentResponse_(httpResponse, model);
+      emitRoutingMetric_(
+        'SUCCESS',
+        normalizedRole,
+        model,
+        response,
+        null,
+        metricContext
+      );
+      return response;
     } catch (error) {
-      throw normalizeGeminiError_(error);
+      var normalized = normalizeGeminiError_(error);
+      emitRoutingMetric_(
+        'ERROR',
+        normalizedRole,
+        model,
+        null,
+        normalized,
+        metricContext
+      );
+      throw normalized;
     }
   }
 
-  function buildRequestBody_(request, image, extraConfig) {
+  function buildRequestBody_(request, image, extraConfig, model) {
     var contents = Array.isArray(request.contents) ? cloneContents_(request.contents) : [];
     if (image && image.inlineData) {
       attachInlineImageToLastUserTurn_(contents, image.inlineData);
@@ -55,6 +107,7 @@ var GeminiClient = (function() {
       'Gemini request contents are required.',
       safeStageDetails_('REQUEST_CONTENTS_INVALID')
     );
+    validateFinalTurn_(contents, model || 'gemini-2.5-flash');
 
     var body = {
       contents: contents,
@@ -63,9 +116,9 @@ var GeminiClient = (function() {
           text: String(request.systemInstruction || '')
         }]
       },
-      generationConfig: {
-        temperature: 0.4
-      }
+      generationConfig: buildGenerationConfigForModel_(
+        model || 'gemini-2.5-flash'
+      )
     };
 
     if (extraConfig && extraConfig.responseMimeType) {
@@ -75,6 +128,53 @@ var GeminiClient = (function() {
       body.generationConfig.responseJsonSchema = extraConfig.responseJsonSchema;
     }
     return body;
+  }
+
+  function buildGenerationConfigForModel_(model) {
+    validateSupportedModel_(model);
+    if (
+      model === 'gemini-3.6-flash' ||
+      model === 'gemini-3.5-flash-lite'
+    ) {
+      return {};
+    }
+    return {
+      temperature: 0.4
+    };
+  }
+
+  function validateFinalTurn_(contents, model) {
+    if (
+      model !== 'gemini-3.6-flash' &&
+      model !== 'gemini-3.5-flash-lite'
+    ) {
+      return true;
+    }
+    var finalNonEmptyTurn = null;
+    for (var index = contents.length - 1; index >= 0; index -= 1) {
+      var parts = contents[index] && Array.isArray(contents[index].parts)
+        ? contents[index].parts
+        : [];
+      var hasContent = parts.some(function(part) {
+        return Boolean(
+          part && (
+            part.inlineData ||
+            typeof part.text === 'string' && part.text !== ''
+          )
+        );
+      });
+      if (hasContent) {
+        finalNonEmptyTurn = contents[index];
+        break;
+      }
+    }
+    ensure(
+      finalNonEmptyTurn && finalNonEmptyTurn.role !== 'model',
+      'GEMINI_BAD_RESPONSE',
+      'Gemini 3.x requests must not end with a prefilled model turn.',
+      safeStageDetails_('REQUEST_PREFILLED_MODEL_TURN')
+    );
+    return true;
   }
 
   function getStructuredResponseSchema_(schemaName) {
@@ -376,6 +476,9 @@ var GeminiClient = (function() {
     }
     var parts = candidate.content && Array.isArray(candidate.content.parts) ? candidate.content.parts : [];
     return parts
+      .filter(function(part) {
+        return !(part && part.thought === true);
+      })
       .map(function(part) {
         return part && part.text ? String(part.text) : '';
       })
@@ -501,21 +604,146 @@ var GeminiClient = (function() {
     return apiKey;
   }
 
-  function getConfiguredModel_() {
-    var config = ConfigRepository.getByKey('GEMINI_MODEL');
-    var model = config && config.value ? String(config.value) : '';
-    ensure(model, 'CONFIG_MISSING', 'GEMINI_MODEL is not configured.');
-    return model;
+  function normalizeModelRole_(modelRole) {
+    var normalized = modelRole == null || modelRole === ''
+      ? MODEL_ROLES.GENERATION
+      : String(modelRole).toUpperCase();
+    ensure(
+      normalized === MODEL_ROLES.GENERATION ||
+        normalized === MODEL_ROLES.UTILITY,
+      'CONFIG_MISSING',
+      'Gemini model role is invalid.'
+    );
+    return normalized;
+  }
+
+  function getConfigString_(key, required) {
+    var config = ConfigRepository.getByKey(key);
+    var value = config && config.value != null
+      ? String(config.value).trim()
+      : '';
+    if (required) {
+      ensure(value, 'CONFIG_MISSING', key + ' is not configured.');
+    }
+    return value;
+  }
+
+  function getRoutingMode_() {
+    var mode = getConfigString_('GEMINI_MODEL_ROUTING_MODE', false) || 'single';
+    mode = mode.toLowerCase();
+    ensure(
+      ROUTING_MODES.indexOf(mode) !== -1,
+      'CONFIG_MISSING',
+      'GEMINI_MODEL_ROUTING_MODE must be single or split.'
+    );
+    return mode;
+  }
+
+  function validateSupportedModel_(model) {
+    ensure(
+      SUPPORTED_MODELS.indexOf(String(model || '')) !== -1,
+      'CONFIG_MISSING',
+      'Configured Gemini model is not in the approved model allowlist.'
+    );
+    return String(model);
+  }
+
+  function resolveConfiguredModel_(modelRole) {
+    var role = normalizeModelRole_(modelRole);
+    var mode = getRoutingMode_();
+    var key = 'GEMINI_MODEL';
+    if (mode === 'split') {
+      key = role === MODEL_ROLES.UTILITY
+        ? 'GEMINI_UTILITY_MODEL'
+        : 'GEMINI_GENERATION_MODEL';
+    }
+    return validateSupportedModel_(getConfigString_(key, true));
+  }
+
+  function inspectRouting() {
+    var mode = getRoutingMode_();
+    var generationModel = resolveConfiguredModel_(MODEL_ROLES.GENERATION);
+    var utilityModel = resolveConfiguredModel_(MODEL_ROLES.UTILITY);
+    return {
+      ok: true,
+      routingMode: mode,
+      roles: {
+        generation: {
+          model: generationModel,
+          samplingParametersOmitted: generationModel === 'gemini-3.6-flash' ||
+            generationModel === 'gemini-3.5-flash-lite'
+        },
+        utility: {
+          model: utilityModel,
+          samplingParametersOmitted: utilityModel === 'gemini-3.6-flash' ||
+            utilityModel === 'gemini-3.5-flash-lite'
+        }
+      }
+    };
+  }
+
+  function emitRoutingMetric_(
+    outcome,
+    modelRole,
+    model,
+    response,
+    error,
+    metricContext
+  ) {
+    try {
+      var errorCode = error && /^[A-Z0-9_]{1,64}$/.test(String(error.code || ''))
+        ? String(error.code)
+        : null;
+      var safeStage = error && error.details &&
+        /^[A-Z0-9_]{1,64}$/.test(String(error.details.safeStage || ''))
+        ? String(error.details.safeStage)
+        : null;
+      var surface = metricContext &&
+        SAFE_METRIC_SURFACES.indexOf(metricContext.surface) !== -1
+        ? metricContext.surface
+        : null;
+      var source = metricContext &&
+        SAFE_METRIC_SOURCES.indexOf(metricContext.source) !== -1
+        ? metricContext.source
+        : null;
+      AppLogger.info(
+        'GeminiClient.metric',
+        'Gemini model routing metric.',
+        {
+          outcome: outcome === 'SUCCESS' ? 'SUCCESS' : 'ERROR',
+          modelRole: normalizeModelRole_(modelRole),
+          model: validateSupportedModel_(model),
+          surface: surface,
+          source: source,
+          apiCalls: 1,
+          inputTokens: response && response.usage
+            ? response.usage.inputTokens || null
+            : null,
+          outputTokens: response && response.usage
+            ? response.usage.outputTokens || null
+            : null,
+          errorCode: errorCode,
+          safeStage: safeStage
+        }
+      );
+    } catch (ignored) {
+      // Diagnostics must never change generation behavior.
+    }
   }
 
   return {
     generateText: generateText,
     generateStructured: generateStructured,
     generateWithImage: generateWithImage,
+    inspectRouting: inspectRouting,
     __test: {
       mapHttpError: mapHttpError_,
       extractTextFromCandidate: extractTextFromCandidate_,
       buildRequestBody: buildRequestBody_,
+      buildGenerationConfigForModel: buildGenerationConfigForModel_,
+      normalizeModelRole: normalizeModelRole_,
+      resolveConfiguredModel: resolveConfiguredModel_,
+      validateFinalTurn: validateFinalTurn_,
       getStructuredResponseSchema: getStructuredResponseSchema_,
       parseStructuredData: parseStructuredData_,
       normalizeGeminiError: normalizeGeminiError_

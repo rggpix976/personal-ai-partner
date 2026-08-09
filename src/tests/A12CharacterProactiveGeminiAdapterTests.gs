@@ -148,10 +148,22 @@ function runA12CharacterProactiveGeminiAdapterTests() {
   test('primary generation uses strict proactive schema and allowlisted prompt data', function() {
     var captured = null;
     var schemaName = null;
+    var modelRole = null;
     withGeminiStub({
-      generateStructured: function(request, requestedSchema) {
+      generateStructured: function(
+        request,
+        requestedSchema,
+        requestedRole,
+        metricContext
+      ) {
         captured = request;
         schemaName = requestedSchema;
+        modelRole = requestedRole;
+        assert(
+          metricContext.surface === 'PROACTIVE_AI' &&
+            metricContext.source === 'generated',
+          'Primary proactive metric context was incorrect.'
+        );
         return {
           data: {
             subject: 'A small hello',
@@ -177,8 +189,9 @@ function runA12CharacterProactiveGeminiAdapterTests() {
         session.getGenerationMetadata('generated');
 
       assert(
-        schemaName === 'character-proactive',
-        'Primary generation used the wrong structured schema.'
+        schemaName === 'character-proactive' &&
+          modelRole === 'GENERATION',
+        'Primary generation used the wrong schema or model role.'
       );
       assert(
         payload.subject === 'A small hello' &&
@@ -397,10 +410,12 @@ function runA12CharacterProactiveGeminiAdapterTests() {
   test('semantic verifier supports new and retry surfaces with a two-call limit', function() {
     var calls = [];
     withGeminiStub({
-      generateStructured: function(request, schemaName) {
+      generateStructured: function(request, schemaName, modelRole, metricContext) {
         calls.push({
           request: request,
-          schemaName: schemaName
+          schemaName: schemaName,
+          modelRole: modelRole,
+          metricContext: metricContext
         });
         return {
           data: {
@@ -459,9 +474,11 @@ function runA12CharacterProactiveGeminiAdapterTests() {
       assert(
         calls.every(function(call) {
           return call.schemaName ===
-            'immersion-semantic-verdict';
+            'immersion-semantic-verdict' &&
+            call.modelRole === 'UTILITY' &&
+            call.metricContext.source === 'verifier';
         }),
-        'Verifier used an unexpected structured schema.'
+        'Verifier used an unexpected schema or model role.'
       );
       assert(
         thirdError &&

@@ -137,3 +137,26 @@ of the pair.
 Never overwrite the production spreadsheet or diary document during the
 restore rehearsal. Restore copies into isolated test resources, validate them,
 and remove them only after their exact locations have been confirmed.
+
+## 5. Gemini model routing rollout
+
+Geminiの用途別モデルを本番で検証する場合は、
+[用途別Geminiモデル本番テスト手順](../qa/GEMINI_MODEL_ROUTING_PRODUCTION_TEST_JA.md)
+を使用する。コード配置とモデル切替を同時に行ってはならない。
+
+1. 現行Webアプリのimmutable versionと対象commitを非公開の運用記録へ残す。
+2. reviewed `src/`をApps Script editorへ配置する。この時点ではWeb App deploymentを
+   旧versionから動かさない。
+3. editor HEADでself-testを合格させる。
+4. `migrateSchema()`で不足するモデル設定だけを追加する。既存値は上書きされず、
+   routing modeは`single`のままである。
+5. `inspectGeminiModelRouting()`が既存`GEMINI_MODEL`を両roleへ解決することを確認する。
+6. 新しいimmutable versionを作成し、Web App deploymentを更新する。
+7. health checkとsingleモードのテキスト会話を合格させる。
+8. 新しいRPD期間に`GEMINI_MODEL_ROUTING_MODE=split`だけを変更する。
+9. 生成が`gemini-3.6-flash`、検証と記憶が`gemini-3.5-flash-lite`へ解決されることを
+   確認してから本番受入テストを開始する。
+
+問題があれば最初に`GEMINI_MODEL_ROUTING_MODE=single`へ戻す。これで復旧しない場合は、
+単一のowner-only Web App deploymentを事前記録したimmutable versionへ戻す。
+rate limit時に別roleのモデルへ自動fallbackしてはならない。

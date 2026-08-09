@@ -124,7 +124,9 @@ var DiaryService = (function() {
         recentDiarySummaries,
         diaryConfig
       ),
-      'diary-entry'
+      'diary-entry',
+      'GENERATION',
+      { surface: 'DIARY', source: 'generated' }
     );
     var diary = normalizeDiaryEntry_(
       generation.data,

@@ -99,7 +99,9 @@ var CharacterDiaryGeminiAdapter = (function() {
           request,
           source === 'verifier'
             ? 'immersion-semantic-verdict'
-            : 'character-diary'
+            : 'character-diary',
+          source === 'verifier' ? 'UTILITY' : 'GENERATION',
+          { surface: SURFACE, source: source }
         );
       } catch (error) {
         throw sanitizeGeminiError_(error);

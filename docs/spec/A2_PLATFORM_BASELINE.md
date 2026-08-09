@@ -225,7 +225,10 @@ Script Propertiesは検証時点を分離する。
 | CHARACTER_PROFILE_V2 | json | minimalなvalid v2 profile（休眠） |
 | CHARACTER_PROFILE_V2_REVISION | int | 0 |
 | PROACTIVE_FREQUENCY | string | normal |
-| GEMINI_MODEL | string | 実装時点の無料枠対応安定版 |
+| GEMINI_MODEL | string | gemini-2.5-flash（singleモードの復帰先） |
+| GEMINI_MODEL_ROUTING_MODE | string | single |
+| GEMINI_GENERATION_MODEL | string | gemini-3.6-flash |
+| GEMINI_UTILITY_MODEL | string | gemini-3.5-flash-lite |
 | MAX_USER_TEXT_CHARS | int | 4000 |
 | RECENT_MESSAGE_LIMIT | int | 20 |
 | MEMORY_CONTEXT_LIMIT | int | 20 |
@@ -253,6 +256,14 @@ Script Propertiesは検証時点を分離する。
 | LOG_RETENTION_DAYS | int | 30 |
 | BACKUP_RETENTION_COUNT | int | 4 |
 | FREE_ONLY_MODE | bool | true |
+
+`GEMINI_MODEL_ROUTING_MODE=single`では、生成・検証・記憶を含むすべての
+Gemini呼び出しが既存の`GEMINI_MODEL`を使用する。このモードはコード配置時と
+緊急rollback時の互換経路である。`split`では、利用者へ見える会話、画像応答、
+自発発言、日記とそれらのrewriteが`GEMINI_GENERATION_MODEL`を使用し、意味検証と
+記憶抽出・記憶rewriteが`GEMINI_UTILITY_MODEL`を使用する。未設定またはallowlist外の
+モデルへ暗黙にfallbackしてはならない。429を別モデルへ迂回させず、既存の安全な
+エラー・固定fallback契約を維持する。
 
 `DIARY_MIN_CHARS` is a generation target, not a persistence gate. A non-empty
 structured narrative below that target is accepted with a controlled warning;

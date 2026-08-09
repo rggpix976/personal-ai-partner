@@ -1716,7 +1716,13 @@ function runA8ProactiveConversationTests() {
         }
       },
       GeminiClient: {
-        generateText: function() {
+        generateText: function(_, modelRole, metricContext) {
+          assert(
+            modelRole === 'GENERATION' &&
+              metricContext.surface === 'PROACTIVE_AI' &&
+              metricContext.source === 'generated',
+            'Legacy proactive generation did not use the generation route.'
+          );
           throw createAppError(
             'GEMINI_TEMPORARY_FAILURE',
             'temporary'
