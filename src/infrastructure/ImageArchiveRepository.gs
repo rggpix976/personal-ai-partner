@@ -27,8 +27,8 @@ var ImageArchiveRepository = (function() {
     );
 
     try {
+      var folder = ensureFolder();
       return LockManager.withScriptLock('image-archive-' + messageId, function() {
-        var folder = ensureFolder();
         var existing = DriveTempRepository.getUniqueFileDataByName(
           folder,
           messageId,

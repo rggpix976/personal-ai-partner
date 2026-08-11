@@ -5,12 +5,23 @@ var DriveTempRepository = (function() {
     if (folderId) {
       return DriveApp.getFolderById(folderId);
     }
-    var folder = DriveApp.createFolder(folderName);
     return LockManager.withScriptLock('folderPropertyWrite', function() {
       var existingId = properties.getProperty(propertyKey);
       if (existingId) {
         return DriveApp.getFolderById(existingId);
       }
+      var matchingFolders = DriveApp.getFoldersByName(folderName);
+      if (matchingFolders.hasNext()) {
+        var existingFolder = matchingFolders.next();
+        ensure(
+          !matchingFolders.hasNext(),
+          'STORAGE_DATA_CORRUPTED',
+          'Multiple unconfigured folders share the managed folder name.'
+        );
+        properties.setProperty(propertyKey, existingFolder.getId());
+        return existingFolder;
+      }
+      var folder = DriveApp.createFolder(folderName);
       properties.setProperty(propertyKey, folder.getId());
       return folder;
     });

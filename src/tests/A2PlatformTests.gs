@@ -90,6 +90,7 @@ function runA2PlatformTests() {
     var originalUtilities = Utilities;
     var storedFile = null;
     var createCount = 0;
+    var folderResolvedBeforeArchiveLock = false;
     var folder = {};
     DriveTempRepository = {
       getOrCreateFolder: function(propertyKey, folderName) {
@@ -98,6 +99,7 @@ function runA2PlatformTests() {
           'Archive property key mismatch.'
         );
         assert(folderName === 'Personal AI Partner Image Archive', 'Archive folder name mismatch.');
+        folderResolvedBeforeArchiveLock = true;
         return folder;
       },
       getUniqueFileDataByName: function(candidateFolder, fileName) {
@@ -117,6 +119,7 @@ function runA2PlatformTests() {
     };
     LockManager = {
       withScriptLock: function(_, callback) {
+        assert(folderResolvedBeforeArchiveLock, 'Archive folder must resolve before the archive lock.');
         return callback();
       }
     };
@@ -143,6 +146,55 @@ function runA2PlatformTests() {
       DriveTempRepository = originalDriveTempRepository;
       LockManager = originalLockManager;
       Utilities = originalUtilities;
+    }
+  });
+
+  test('folder setup adopts one interrupted orphan instead of creating another', function() {
+    var originalPropertiesService = PropertiesService;
+    var originalDriveApp = typeof DriveApp === 'undefined' ? undefined : DriveApp;
+    var originalLockManager = LockManager;
+    var propertyValue = null;
+    var createCalls = 0;
+    var orphanFolder = {
+      getId: function() { return 'recovered-folder'; }
+    };
+    PropertiesService = {
+      getScriptProperties: function() {
+        return {
+          getProperty: function() { return propertyValue; },
+          setProperty: function(_, value) { propertyValue = value; }
+        };
+      }
+    };
+    DriveApp = {
+      getFolderById: function() { return orphanFolder; },
+      getFoldersByName: function() {
+        var returned = false;
+        return {
+          hasNext: function() { return !returned; },
+          next: function() { returned = true; return orphanFolder; }
+        };
+      },
+      createFolder: function() {
+        createCalls += 1;
+        throw new Error('A second folder must not be created.');
+      }
+    };
+    LockManager = {
+      withScriptLock: function(_, callback) { return callback(); }
+    };
+    try {
+      var resolved = DriveTempRepository.getOrCreateFolder(
+        APP_CONSTANTS.PROPERTY_KEYS.IMAGE_ARCHIVE_FOLDER_ID,
+        'Personal AI Partner Image Archive'
+      );
+      assert(resolved === orphanFolder, 'The interrupted folder should be adopted.');
+      assert(propertyValue === 'recovered-folder', 'The recovered folder ID should be configured.');
+      assert(createCalls === 0, 'No duplicate folder should be created.');
+    } finally {
+      PropertiesService = originalPropertiesService;
+      DriveApp = originalDriveApp;
+      LockManager = originalLockManager;
     }
   });
 

@@ -27,6 +27,7 @@ function setup() {
 }
 
 function migrateSchema() {
+  ImageArchiveRepository.ensureFolder();
   return LockManager.withScriptLock('migrateSchema', function() {
     var spreadsheet = ensurePlatformSpreadsheet_();
     var changes = [];
@@ -35,7 +36,6 @@ function migrateSchema() {
     });
     ConfigRepository.ensureDefaults();
     ConfigRepository.validateDefaultsPresent();
-    ImageArchiveRepository.ensureFolder();
     PropertiesService.getScriptProperties().setProperty(
       APP_CONSTANTS.PROPERTY_KEYS.SCHEMA_VERSION,
       APP_CONSTANTS.SCHEMA_VERSION
