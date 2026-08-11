@@ -176,6 +176,16 @@
       </footer>
     </div>
 
+    <div class="image-lightbox hidden" id="image-lightbox" role="dialog" aria-modal="true" aria-labelledby="image-lightbox-title">
+      <div class="image-lightbox-panel">
+        <div class="image-lightbox-heading">
+          <strong id="image-lightbox-title">添付画像</strong>
+          <button class="ghost-button" id="image-lightbox-close" type="button">閉じる</button>
+        </div>
+        <img id="image-lightbox-image" class="image-lightbox-image" alt="">
+      </div>
+    </div>
+
     <?!= includePartial_('web/Client'); ?>
   </body>
 </html>

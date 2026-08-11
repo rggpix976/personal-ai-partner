@@ -45,7 +45,8 @@
 1. reviewed branchの`src/`をApps Script editorへ配置する。この時点では既存Web App
    deploymentを旧versionから動かさない。
 2. Apps Script editor HEADで全self-testを実行する。
-3. `migrateSchema()`を1回実行する。新しいconfigの初期値は`single`である。
+3. `migrateSchema()`を1回実行する。新しいconfigの初期値は`single`であり、
+   `IMAGE_ARCHIVE_FOLDER_ID`も作成される。
 4. `validatePostSetupProperties()`を実行する。
 5. `inspectGeminiModelRouting()`を実行し、次の期待結果と一致することを確認する。
 6. 新しいimmutable versionを作成する。
@@ -143,6 +144,10 @@ Webアプリで、保存されてもよい実際の内容を3件送信する。�
 - 画像付き利用者発言と返答の表示順が正しい。
 - 生成は3.6の`GENERATION`、意味検証は3.5 Flash-Liteの`UTILITY`である。
 - 一時画像が既存のcleanup契約に従って削除される。
+- 同じ画像付き発言を履歴で見返すと、恒久保存された画像が吹き出し内に表示される。
+  画像をクリックすると拡大表示でき、閉じると会話へ戻れる。
+- この変更より前に送った画像は復元されず、ファイル名などのメタデータと
+  「この過去画像は保存されていません。」の表示になる。
 
 ## 9. 24〜72時間の実運用観察
 

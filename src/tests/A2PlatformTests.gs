@@ -58,6 +58,94 @@ function runA2PlatformTests() {
     assert(Validators.parseConfigValue('json', '{"ok":true}').ok === true, 'json parse failed');
   });
 
+  test('post-setup properties require the private image archive folder', function() {
+    var properties = {
+      GEMINI_API_KEY: 'stub',
+      OWNER_EMAIL: 'owner@example.com',
+      APP_ENV: 'test',
+      SPREADSHEET_ID: 'sheet',
+      DIARY_DOC_ID: 'doc',
+      TEMP_FOLDER_ID: 'temp',
+      BACKUP_FOLDER_ID: 'backup',
+      IMAGE_ARCHIVE_FOLDER_ID: 'image-archive',
+      SCHEMA_VERSION: APP_CONSTANTS.SCHEMA_VERSION
+    };
+    assert(
+      Validators.validateScriptProperties(properties, 'postSetup') === true,
+      'A configured private image archive should pass post-setup validation.'
+    );
+    delete properties.IMAGE_ARCHIVE_FOLDER_ID;
+    var thrown = null;
+    try {
+      Validators.validateScriptProperties(properties, 'postSetup');
+    } catch (error) {
+      thrown = error;
+    }
+    assert(thrown && thrown.code === 'CONFIG_MISSING', 'Missing image archive must fail closed.');
+  });
+
+  test('image archive writes exact bytes once and is idempotent by message id', function() {
+    var originalDriveTempRepository = DriveTempRepository;
+    var originalLockManager = LockManager;
+    var originalUtilities = Utilities;
+    var storedFile = null;
+    var createCount = 0;
+    var folder = {};
+    DriveTempRepository = {
+      getOrCreateFolder: function(propertyKey, folderName) {
+        assert(
+          propertyKey === APP_CONSTANTS.PROPERTY_KEYS.IMAGE_ARCHIVE_FOLDER_ID,
+          'Archive property key mismatch.'
+        );
+        assert(folderName === 'Personal AI Partner Image Archive', 'Archive folder name mismatch.');
+        return folder;
+      },
+      getUniqueFileDataByName: function(candidateFolder, fileName) {
+        assert(candidateFolder === folder, 'Archive folder mismatch.');
+        assert(fileName === '22222222-2222-4222-8222-222222222222', 'Archive key mismatch.');
+        return storedFile;
+      },
+      createFileFromBytes: function(candidateFolder, input) {
+        assert(candidateFolder === folder, 'Archive creation folder mismatch.');
+        createCount += 1;
+        storedFile = {
+          mimeType: input.mimeType,
+          base64: 'Zm9v',
+          sizeBytes: input.bytes.length
+        };
+      }
+    };
+    LockManager = {
+      withScriptLock: function(_, callback) {
+        return callback();
+      }
+    };
+    Utilities = Object.assign({}, Utilities, {
+      base64Decode: function(value) {
+        assert(value === 'Zm9v', 'Archive base64 mismatch.');
+        return [102, 111, 111];
+      },
+      base64Encode: function() { return 'Zm9v'; }
+    });
+    try {
+      var prepared = {
+        inlineData: {
+          mimeType: 'image/png',
+          data: 'Zm9v'
+        }
+      };
+      var messageId = '22222222-2222-4222-8222-222222222222';
+      var first = ImageArchiveRepository.ensureArchived(prepared, messageId);
+      var second = ImageArchiveRepository.ensureArchived(prepared, messageId);
+      assert(first.created === true && second.created === false, 'Archive retry must be idempotent.');
+      assert(createCount === 1, 'Exactly one archived file should be created.');
+    } finally {
+      DriveTempRepository = originalDriveTempRepository;
+      LockManager = originalLockManager;
+      Utilities = originalUtilities;
+    }
+  });
+
   expectThrows('validators config invalid bool', function() {
     Validators.parseConfigValue('bool', 'yes');
   }, 'CONFIG_MISSING');

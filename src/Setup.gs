@@ -7,6 +7,7 @@ function setup() {
   ensureRequiredSheets_(spreadsheet);
   var diaryDocument = DocumentRepository.createOrOpenDiaryDocument();
   var folders = DriveTempRepository.ensureFolders();
+  var imageArchiveFolder = ImageArchiveRepository.ensureFolder();
   ConfigRepository.ensureDefaults();
   ConfigRepository.validateDefaultsPresent();
   SheetRepository.ensureDefaultUserState();
@@ -20,6 +21,7 @@ function setup() {
     diaryDocumentId: diaryDocument.getId(),
     tempFolderId: folders.tempFolder.getId(),
     backupFolderId: folders.backupFolder.getId(),
+    imageArchiveFolderId: imageArchiveFolder.getId(),
     schemaVersion: APP_CONSTANTS.SCHEMA_VERSION
   };
 }
@@ -33,6 +35,7 @@ function migrateSchema() {
     });
     ConfigRepository.ensureDefaults();
     ConfigRepository.validateDefaultsPresent();
+    ImageArchiveRepository.ensureFolder();
     PropertiesService.getScriptProperties().setProperty(
       APP_CONSTANTS.PROPERTY_KEYS.SCHEMA_VERSION,
       APP_CONSTANTS.SCHEMA_VERSION
@@ -66,6 +69,9 @@ function validatePostSetupProperties() {
   DocumentRepository.validateDiaryDocument(properties[APP_CONSTANTS.PROPERTY_KEYS.DIARY_DOC_ID]);
   DriveTempRepository.validateFolder(properties[APP_CONSTANTS.PROPERTY_KEYS.TEMP_FOLDER_ID]);
   DriveTempRepository.validateFolder(properties[APP_CONSTANTS.PROPERTY_KEYS.BACKUP_FOLDER_ID]);
+  DriveTempRepository.validateFolder(
+    properties[APP_CONSTANTS.PROPERTY_KEYS.IMAGE_ARCHIVE_FOLDER_ID]
+  );
   ConfigRepository.validateDefaultsPresent();
   ensure(SheetRepository.getUserState() != null, 'CONFIG_MISSING', 'user_state default row is missing.');
   return true;

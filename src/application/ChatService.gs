@@ -52,6 +52,9 @@ var ChatService = (function() {
 
       userMessage = state.userMessage;
       event = state.event;
+      if (preparedImage) {
+        ImageArchiveRepository.ensureArchived(preparedImage, userMessage.messageId);
+      }
       var completedResult = runtime.mode === 'enforced'
         ? executeEnforcedSync_(
           normalizedRequest,
@@ -489,6 +492,9 @@ var ChatService = (function() {
         now: nowIso,
         requestText: pair.userMessage.text
       }) : null;
+      if (preparedImage) {
+        ImageArchiveRepository.ensureArchived(preparedImage, pair.userMessage.messageId);
+      }
       var result = runtime.mode === 'enforced'
         ? executeEnforcedQueued_(
           payload,

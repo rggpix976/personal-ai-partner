@@ -135,6 +135,27 @@ Web clients fetch newly appended conversation messages with
 pause polling while the page is hidden, and resume immediately when it
 becomes visible.
 
+### Image archive contract
+
+New image messages keep an exact private copy in the owner account's Drive folder
+identified by the Script Property `IMAGE_ARCHIVE_FOLDER_ID`. The archive filename is
+the user message UUID, so retries are idempotent without adding a Drive identifier to
+`conversation_logs`.
+
+- The archive write completes before Gemini generation and before temporary-image
+  cleanup. A failed archive write follows the existing retryable
+  `STORAGE_WRITE_FAILED` queue path.
+- The normal message DTO continues to expose only image name, MIME type, and summary.
+  Drive file IDs, folder IDs, and URLs never cross the Web App boundary.
+- `loadMessageImage(messageId)` first enforces owner-only Web App access and verifies
+  that the ID belongs to a visible user image message. It returns only MIME type and
+  base64 bytes.
+- Images sent before this contract was deployed cannot be reconstructed after their
+  temporary files were deleted. Those rows remain visible with metadata and an
+  explicit unavailable state.
+- Archived images follow conversation-history retention. A future conversation
+  deletion feature must delete the corresponding archived image in the same operation.
+
 `DEAD` の手動再試行は既存行を変更せず、新しいイベントとして作成する。
 `CHAT_REPLY` は `CHAT_REPLY_MANUAL`、`DIARY_GENERATE` は
 `DIARY_GENERATE_REPAIR` を使い、既存 `dedupe_key` を再利用しない。同じ
