@@ -282,16 +282,19 @@
     }
 
     var requestId = generateRequestId();
+    var clientTimestamp = toOffsetIsoString(new Date());
     var request = {
       requestId: requestId,
       text: text,
-      clientTimestamp: toOffsetIsoString(new Date()),
+      clientTimestamp: clientTimestamp,
       image: state.selectedImage ? {
         name: state.selectedImage.name,
         mimeType: state.selectedImage.mimeType,
         base64: state.selectedImage.base64
       } : null
     };
+
+    addOptimisticMessage(requestId, text, clientTimestamp, state.selectedImage);
 
     state.sending = true;
     state.activeRequestId = requestId;
@@ -301,15 +304,19 @@
 
     callServer('sendChat', [request])
       .then(function(result) {
-        if (result && result.ok && result.userMessage) {
+        if (result && result.userMessage) {
           upsertMessage(result.userMessage);
           renderMessages('bottom');
         }
 
-        if (result && result.ok) {
+        if (result && (result.ok || result.userMessage)) {
           elements.messageInput.value = '';
           autoResizeTextarea();
           clearSelectedImage();
+        }
+
+        if (!result || (result.status === 'failed' && !result.userMessage)) {
+          markOptimisticMessageFailed(requestId);
         }
 
         handleChatResult(result, true);
@@ -319,12 +326,64 @@
         }
       })
       .catch(function(error) {
+        markOptimisticMessageFailed(requestId);
         setStatus('retryable-failure', '送信失敗', error.message || 'メッセージを送信できませんでした。');
       })
       .finally(function() {
         state.sending = false;
         setBusyState(false);
       });
+  }
+
+  function addOptimisticMessage(requestId, text, createdAt, selectedImage) {
+    var messageId = 'pending-' + requestId;
+    var pendingMessage = {
+      messageId: messageId,
+      requestId: requestId,
+      role: 'user',
+      messageType: selectedImage ? 'image' : 'text',
+      text: text,
+      createdAt: createdAt,
+      image: selectedImage ? {
+        name: selectedImage.name,
+        mimeType: selectedImage.mimeType,
+        summary: ''
+      } : null,
+      clientDeliveryState: 'sending'
+    };
+
+    if (selectedImage && selectedImage.previewUrl) {
+      state.messageImages[messageId] = {
+        status: 'available',
+        dataUrl: selectedImage.previewUrl
+      };
+    }
+
+    state.messages.push(pendingMessage);
+    state.messages.sort(compareMessagesChronologically);
+    renderMessages('bottom');
+  }
+
+  function markOptimisticMessageFailed(requestId) {
+    var changed = false;
+    state.messages = state.messages.map(function(message) {
+      if (
+        message.requestId === requestId &&
+        message.clientDeliveryState === 'sending'
+      ) {
+        changed = true;
+        var failedMessage = {};
+        Object.keys(message).forEach(function(key) {
+          failedMessage[key] = message[key];
+        });
+        failedMessage.clientDeliveryState = 'failed';
+        return failedMessage;
+      }
+      return message;
+    });
+    if (changed) {
+      renderMessages('bottom');
+    }
   }
 
   function handleChatResult(result, fromSend) {
@@ -1031,6 +1090,19 @@
       bubble.appendChild(imageMeta);
     }
 
+    if (message.clientDeliveryState) {
+      var deliveryStatus = document.createElement('p');
+      deliveryStatus.className = 'bubble-delivery-status';
+      deliveryStatus.setAttribute(
+        'data-state',
+        message.clientDeliveryState
+      );
+      deliveryStatus.textContent = message.clientDeliveryState === 'failed'
+        ? '送信できませんでした。入力内容を確認して、もう一度送信してください。'
+        : '送信中…';
+      bubble.appendChild(deliveryStatus);
+    }
+
     row.appendChild(bubble);
     return row;
   }
@@ -1219,6 +1291,8 @@
       return false;
     }
 
+    reconcileOptimisticMessage(message);
+
     var found = false;
     var changed = false;
 
@@ -1243,6 +1317,35 @@
     }
 
     return changed;
+  }
+
+  function reconcileOptimisticMessage(message) {
+    if (!message || !message.messageId || !message.requestId) {
+      return;
+    }
+
+    var pendingMessage = null;
+    state.messages = state.messages.filter(function(existing) {
+      var matches =
+        existing.messageId !== message.messageId &&
+        existing.requestId === message.requestId &&
+        Boolean(existing.clientDeliveryState);
+      if (matches) {
+        pendingMessage = existing;
+        return false;
+      }
+      return true;
+    });
+
+    if (!pendingMessage) {
+      return;
+    }
+
+    var pendingImage = state.messageImages[pendingMessage.messageId];
+    if (pendingImage) {
+      state.messageImages[message.messageId] = pendingImage;
+      delete state.messageImages[pendingMessage.messageId];
+    }
   }
 
   function callServer(functionName, args) {
