@@ -45,6 +45,7 @@ function runA3WebUiTests() {
     assert(typeof saveCharacterSettings === 'function', 'saveCharacterSettings should exist.');
     assert(typeof loadMessages === 'function', 'loadMessages should exist.');
     assert(typeof loadNewMessages === 'function', 'loadNewMessages should exist.');
+    assert(typeof loadMessageImage === 'function', 'loadMessageImage should exist.');
     assert(typeof loadDiaryEntries === 'function', 'loadDiaryEntries should exist.');
     assert(typeof sendChat === 'function', 'sendChat should exist.');
     assert(typeof getRequestStatus === 'function', 'getRequestStatus should exist.');
@@ -163,6 +164,133 @@ function runA3WebUiTests() {
           result.messages[0].messageType === 'image' &&
           result.messages[1].role === 'assistant',
         'The displayed pair must remain user then assistant.'
+      );
+    });
+  });
+
+  test('web controller returns an owner-only archived image without storage identifiers', function() {
+    withOverrides({
+      Session: {
+        getActiveUser: function() {
+          return { getEmail: function() { return 'owner@example.com'; } };
+        }
+      },
+      PropertiesService: {
+        getScriptProperties: function() {
+          return {
+            getProperty: function(key) {
+              return key === APP_CONSTANTS.PROPERTY_KEYS.OWNER_EMAIL
+                ? 'owner@example.com'
+                : null;
+            }
+          };
+        }
+      },
+      SheetRepository: {
+        listMessagesByIds: function() {
+          return [{
+            messageId: '22222222-2222-4222-8222-222222222222',
+            role: 'user',
+            messageType: 'image',
+            image: { name: 'photo.png', mimeType: 'image/png', summary: '' }
+          }];
+        }
+      },
+      ImageArchiveRepository: {
+        getArchivedImage: function(messageId, mimeType) {
+          assert(messageId === '22222222-2222-4222-8222-222222222222', 'Message ID mismatch.');
+          assert(mimeType === 'image/png', 'MIME mismatch.');
+          return { mimeType: 'image/png', base64: 'Zm9v', sizeBytes: 3 };
+        }
+      }
+    }, function() {
+      var result = WebController.loadMessageImage(
+        '22222222-2222-4222-8222-222222222222'
+      );
+      assert(result.ok === true && result.available === true, 'Archived image should be available.');
+      assert(result.mimeType === 'image/png' && result.base64 === 'Zm9v', 'Image bytes should be returned.');
+      assert(result.fileId == null && result.url == null, 'Storage identifiers must not be exposed.');
+    });
+  });
+
+  test('web controller treats a legacy image without an archive as unavailable', function() {
+    withOverrides({
+      Session: {
+        getActiveUser: function() {
+          return { getEmail: function() { return 'owner@example.com'; } };
+        }
+      },
+      PropertiesService: {
+        getScriptProperties: function() {
+          return {
+            getProperty: function(key) {
+              return key === APP_CONSTANTS.PROPERTY_KEYS.OWNER_EMAIL
+                ? 'owner@example.com'
+                : null;
+            }
+          };
+        }
+      },
+      SheetRepository: {
+        listMessagesByIds: function() {
+          return [{
+            messageId: '22222222-2222-4222-8222-222222222222',
+            role: 'user',
+            messageType: 'image',
+            image: { name: 'old.png', mimeType: 'image/png', summary: '' }
+          }];
+        }
+      },
+      ImageArchiveRepository: {
+        getArchivedImage: function() {
+          return null;
+        }
+      }
+    }, function() {
+      var result = WebController.loadMessageImage(
+        '22222222-2222-4222-8222-222222222222'
+      );
+      assert(result.ok === true && result.available === false, 'Legacy image should stay metadata-only.');
+      assert(result.base64 == null, 'Legacy response must not fabricate image data.');
+    });
+  });
+
+  test('web controller fails closed for a non-image lookup', function() {
+    withOverrides({
+      Session: {
+        getActiveUser: function() {
+          return { getEmail: function() { return 'owner@example.com'; } };
+        }
+      },
+      PropertiesService: {
+        getScriptProperties: function() {
+          return {
+            getProperty: function(key) {
+              return key === APP_CONSTANTS.PROPERTY_KEYS.OWNER_EMAIL
+                ? 'owner@example.com'
+                : null;
+            }
+          };
+        }
+      },
+      SheetRepository: {
+        listMessagesByIds: function() {
+          return [{
+            messageId: '22222222-2222-4222-8222-222222222222',
+            role: 'assistant',
+            messageType: 'text',
+            image: null
+          }];
+        }
+      }
+    }, function() {
+      var result = WebController.loadMessageImage(
+        '22222222-2222-4222-8222-222222222222'
+      );
+      assert(result.ok === false, 'Non-image lookup must fail closed.');
+      assert(
+        result.error && result.error.code === 'IMAGE_ARCHIVE_UNAVAILABLE',
+        'The browser must receive only the neutral image error.'
       );
     });
   });

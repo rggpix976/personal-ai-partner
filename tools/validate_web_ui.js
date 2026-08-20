@@ -33,6 +33,25 @@ if (unsafeDomWrite.test(clientScript)) {
   throw new Error('Client.html must not render server content with unsafe HTML assignment.');
 }
 
+const optimisticImageRequirements = [
+  "addOptimisticMessage(requestId, text, clientTimestamp, state.selectedImage)",
+  "clientDeliveryState: 'sending'",
+  "dataUrl: selectedImage.previewUrl",
+  'reconcileOptimisticMessage(message)',
+  "delete state.messageImages[pendingMessage.messageId]",
+  "markOptimisticMessageFailed(requestId)",
+  "deliveryStatus.textContent = message.clientDeliveryState === 'failed'"
+];
+const missingOptimisticImageRequirements = optimisticImageRequirements.filter(
+  (requirement) => !clientScript.includes(requirement)
+);
+
+if (missingOptimisticImageRequirements.length > 0) {
+  throw new Error(
+    `Client.html is missing optimistic image delivery behavior: ${missingOptimisticImageRequirements.join(', ')}`
+  );
+}
+
 console.log(
-  `WEB_UI_VALIDATION_OK referencedIds=${referencedIds.length} missingIds=0 innerHtmlWrites=0`
+  `WEB_UI_VALIDATION_OK referencedIds=${referencedIds.length} missingIds=0 innerHtmlWrites=0 optimisticImageRequirements=${optimisticImageRequirements.length}`
 );

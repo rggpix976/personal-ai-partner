@@ -130,6 +130,7 @@ vm.createContext(context);
   'src/infrastructure/SheetRepository.gs',
   'src/infrastructure/CharacterConfigRepository.gs',
   'src/infrastructure/DriveTempRepository.gs',
+  'src/infrastructure/ImageArchiveRepository.gs',
   'src/infrastructure/DocumentRepository.gs',
   'src/infrastructure/GeminiClient.gs',
   'src/infrastructure/CharacterChatGeminiAdapter.gs',

@@ -730,6 +730,7 @@ function runA4ChatGeminiTests() {
               DIARY_DOC_ID: 'doc',
               TEMP_FOLDER_ID: 'temp',
               BACKUP_FOLDER_ID: 'backup',
+              IMAGE_ARCHIVE_FOLDER_ID: 'image-archive',
               SCHEMA_VERSION: APP_CONSTANTS.SCHEMA_VERSION
             };
           }
@@ -839,6 +840,7 @@ function runA4ChatGeminiTests() {
               DIARY_DOC_ID: 'doc',
               TEMP_FOLDER_ID: 'temp',
               BACKUP_FOLDER_ID: 'backup',
+              IMAGE_ARCHIVE_FOLDER_ID: 'image-archive',
               SCHEMA_VERSION: APP_CONSTANTS.SCHEMA_VERSION
             };
           }
@@ -1062,6 +1064,7 @@ function runA4ChatGeminiTests() {
               DIARY_DOC_ID: 'doc',
               TEMP_FOLDER_ID: 'temp',
               BACKUP_FOLDER_ID: 'backup',
+              IMAGE_ARCHIVE_FOLDER_ID: 'image-archive',
               SCHEMA_VERSION: APP_CONSTANTS.SCHEMA_VERSION
             };
           }

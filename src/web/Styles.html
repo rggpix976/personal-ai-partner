@@ -426,6 +426,77 @@
     font-size: 13px;
   }
 
+  .bubble-image-frame {
+    margin-top: 10px;
+  }
+
+  .bubble-image-preview {
+    display: block;
+    width: auto;
+    max-width: 100%;
+    max-height: 360px;
+    border: 0;
+    border-radius: 14px;
+    object-fit: contain;
+    cursor: zoom-in;
+    background: rgba(255, 255, 255, 0.28);
+  }
+
+  .bubble-image-status {
+    margin: 0;
+    font-size: 13px;
+    opacity: 0.82;
+  }
+
+  .bubble-delivery-status {
+    margin: 10px 0 0;
+    font-size: 13px;
+    opacity: 0.82;
+  }
+
+  .bubble-delivery-status[data-state="failed"] {
+    color: #ffd7c7;
+    opacity: 1;
+  }
+
+  .image-lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    background: rgba(31, 24, 19, 0.78);
+  }
+
+  .image-lightbox.hidden {
+    display: none;
+  }
+
+  .image-lightbox-panel {
+    width: min(960px, 100%);
+    max-height: 94vh;
+    padding: 14px;
+    border-radius: var(--radius-lg);
+    background: var(--panel-strong);
+    box-shadow: var(--shadow);
+  }
+
+  .image-lightbox-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+
+  .image-lightbox-image {
+    display: block;
+    width: 100%;
+    max-height: calc(94vh - 74px);
+    object-fit: contain;
+  }
+
   .message-row[data-role="assistant"] .bubble-image-meta,
   .message-row[data-role="system"] .bubble-image-meta {
     border-top-color: rgba(110, 83, 55, 0.12);

@@ -5,12 +5,23 @@ var DriveTempRepository = (function() {
     if (folderId) {
       return DriveApp.getFolderById(folderId);
     }
-    var folder = DriveApp.createFolder(folderName);
     return LockManager.withScriptLock('folderPropertyWrite', function() {
       var existingId = properties.getProperty(propertyKey);
       if (existingId) {
         return DriveApp.getFolderById(existingId);
       }
+      var matchingFolders = DriveApp.getFoldersByName(folderName);
+      if (matchingFolders.hasNext()) {
+        var existingFolder = matchingFolders.next();
+        ensure(
+          !matchingFolders.hasNext(),
+          'STORAGE_DATA_CORRUPTED',
+          'Multiple unconfigured folders share the managed folder name.'
+        );
+        properties.setProperty(propertyKey, existingFolder.getId());
+        return existingFolder;
+      }
+      var folder = DriveApp.createFolder(folderName);
       properties.setProperty(propertyKey, folder.getId());
       return folder;
     });
@@ -26,6 +37,47 @@ var DriveTempRepository = (function() {
   function validateFolder(folderId) {
     var folder = DriveApp.getFolderById(folderId);
     ensure(folder != null, 'CONFIG_MISSING', 'Folder could not be opened.');
+    return true;
+  }
+
+  function getConfiguredFolder(propertyKey) {
+    var folderId = PropertiesService.getScriptProperties().getProperty(propertyKey);
+    ensure(folderId, 'CONFIG_MISSING', propertyKey + ' is not configured.');
+    return DriveApp.getFolderById(folderId);
+  }
+
+  function getUniqueFileDataByName(folder, fileName, maxBytes) {
+    var files = folder.getFilesByName(fileName);
+    if (!files.hasNext()) {
+      return null;
+    }
+    var file = files.next();
+    ensure(
+      !files.hasNext(),
+      'STORAGE_DATA_CORRUPTED',
+      'Multiple files exist for one archive key.'
+    );
+    var declaredSize = Number(file.getSize());
+    if (isFinite(Number(maxBytes)) && Number(maxBytes) > 0) {
+      ensure(
+        declaredSize <= Number(maxBytes),
+        'STORAGE_DATA_CORRUPTED',
+        'Stored file exceeds the supported byte limit.'
+      );
+    }
+    var blob = file.getBlob();
+    var bytes = blob.getBytes();
+    return {
+      mimeType: blob.getContentType(),
+      base64: Utilities.base64Encode(bytes),
+      sizeBytes: bytes.length
+    };
+  }
+
+  function createFileFromBytes(folder, input) {
+    ensure(input && typeof input === 'object', 'CONFIG_MISSING', 'File input is required.');
+    var blob = Utilities.newBlob(input.bytes, input.mimeType, input.name);
+    folder.createFile(blob);
     return true;
   }
 
@@ -122,6 +174,9 @@ var DriveTempRepository = (function() {
     getOrCreateFolder: getOrCreateFolder,
     ensureFolders: ensureFolders,
     validateFolder: validateFolder,
+    getConfiguredFolder: getConfiguredFolder,
+    getUniqueFileDataByName: getUniqueFileDataByName,
+    createFileFromBytes: createFileFromBytes,
     createTempImage: createTempImage,
     getTempImageData: getTempImageData,
     trashTempImage: trashTempImage,

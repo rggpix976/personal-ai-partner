@@ -29,6 +29,10 @@ function loadNewMessages(afterMessageId, limit) {
   return WebController.loadNewMessages(afterMessageId, limit);
 }
 
+function loadMessageImage(messageId) {
+  return WebController.loadMessageImage(messageId);
+}
+
 function loadDiaryEntries(beforeDate, limit) {
   return WebController.loadDiaryEntries(beforeDate, limit);
 }
