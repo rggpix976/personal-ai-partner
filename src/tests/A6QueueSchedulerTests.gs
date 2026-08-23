@@ -1798,6 +1798,132 @@ function runA6QueueSchedulerTests() {
   });
 
   test(
+    'production diary scheduling targets the current Tokyo date after the due time',
+    function() {
+      var lifecycleDates = [];
+      var enqueuedDate = null;
+      var result = null;
+      withOverrides({
+        ConfigRepository: {
+          getByKey: function(key) {
+            return key === 'DIARY_DUE_TIME'
+              ? { value: '23:30' }
+              : null;
+          }
+        },
+        DiaryService: {
+          getLifecycleState: function(diaryDate) {
+            lifecycleDates.push(diaryDate);
+            return {
+              status: diaryDate === '2026-07-29' ? 'DONE' : 'MISSING'
+            };
+          },
+          enqueue: function(diaryDate) {
+            enqueuedDate = diaryDate;
+            return {
+              enqueued: true,
+              diaryDate: diaryDate
+            };
+          }
+        }
+      }, function() {
+        result = enqueueDiaryIfDue_(
+          new Date('2026-07-30T23:30:00+09:00')
+        );
+      });
+      assert(
+        lifecycleDates.join(',') === '2026-07-29,2026-07-30' &&
+          enqueuedDate === '2026-07-30' &&
+          result.enqueued === true,
+        'The production diary scheduler did not target the current Tokyo date.'
+      );
+    }
+  );
+
+  test(
+    'a failed previous diary does not block the current date after the due time',
+    function() {
+      var lifecycleDates = [];
+      var enqueuedDate = null;
+      var result = null;
+      withOverrides({
+        ConfigRepository: {
+          getByKey: function(key) {
+            return key === 'DIARY_DUE_TIME'
+              ? { value: '23:30' }
+              : null;
+          }
+        },
+        DiaryService: {
+          getLifecycleState: function(diaryDate) {
+            lifecycleDates.push(diaryDate);
+            return {
+              status: diaryDate === '2026-07-29' ? 'FAILED' : 'MISSING'
+            };
+          },
+          enqueue: function(diaryDate) {
+            enqueuedDate = diaryDate;
+            return {
+              enqueued: true,
+              diaryDate: diaryDate
+            };
+          }
+        }
+      }, function() {
+        result = enqueueDiaryIfDue_(
+          new Date('2026-07-30T23:30:00+09:00')
+        );
+      });
+      assert(
+        lifecycleDates.join(',') === '2026-07-29,2026-07-30' &&
+          enqueuedDate === '2026-07-30' &&
+          result.enqueued === true,
+        'A failed previous diary incorrectly blocked the current date.'
+      );
+    }
+  );
+
+  test(
+    'production diary scheduling catches up a missing previous date before today due time',
+    function() {
+      var enqueuedDate = null;
+      var result = null;
+      withOverrides({
+        ConfigRepository: {
+          getByKey: function() {
+            throw new Error(
+              'Previous-date catch-up must run before reading the current due time.'
+            );
+          }
+        },
+        DiaryService: {
+          getLifecycleState: function(diaryDate) {
+            return {
+              status: diaryDate === '2026-07-29' ? 'MISSING' : 'DONE'
+            };
+          },
+          enqueue: function(diaryDate) {
+            enqueuedDate = diaryDate;
+            return {
+              enqueued: true,
+              diaryDate: diaryDate
+            };
+          }
+        }
+      }, function() {
+        result = enqueueDiaryIfDue_(
+          new Date('2026-07-30T00:15:00+09:00')
+        );
+      });
+      assert(
+        enqueuedDate === '2026-07-29' &&
+          result.enqueued === true,
+        'The scheduler did not recover the missing previous diary date.'
+      );
+    }
+  );
+
+  test(
     'manual diary release can enqueue the previous Tokyo date before the production due time',
     function() {
       var lifecycleDate = null;
@@ -1856,7 +1982,7 @@ function runA6QueueSchedulerTests() {
           getLifecycleState: function() {
             diaryReads += 1;
             return {
-              status: null
+              status: 'DONE'
             };
           },
           enqueue: function() {
@@ -1874,7 +2000,7 @@ function runA6QueueSchedulerTests() {
       assert(
         result.enqueued === false &&
           result.reason === 'DIARY_TIME_NOT_REACHED' &&
-          diaryReads === 0,
+          diaryReads === 1,
         'The production diary scheduler bypassed its configured due time.'
       );
     }
