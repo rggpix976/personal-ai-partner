@@ -332,6 +332,56 @@ function runA16ImmersionSafetyAuditTests() {
   );
 
   test(
+    'delivery quarantine resolves an accepted proactive ambiguity',
+    function() {
+      var eventBinding = binding(5);
+      var eventId =
+        '11111111-1111-4111-8111-111111111111';
+      var dedupeKey = 'proactive-dedupe-quarantined';
+      var proactiveApproval = approval(
+        'PROACTIVE_AI',
+        'generated',
+        eventBinding
+      );
+      var marker = merge(
+        {
+          message_id:
+            '22222222-2222-4222-8222-222222222222',
+          request_id: dedupeKey,
+          role: 'system',
+          message_type: 'proactive',
+          text: 'secret-body',
+          proactive_subject: 'secret-subject',
+          proactive_origin_event_id: eventId,
+          status: 'failed',
+          error_code: 'PROACTIVE_DELIVERY_QUARANTINED'
+        },
+        approvalColumns(proactiveApproval)
+      );
+      var result = inspect({
+        events: [
+          enforcedEvent(
+            eventId,
+            'PROACTIVE_SEND',
+            eventBinding,
+            { messageDedupeKey: dedupeKey },
+            'DONE'
+          )
+        ],
+        conversations: [marker]
+      });
+      assert(
+        result.valid === true &&
+          result.unsafePersistedOrSent.total === 0 &&
+          result.issues.indexOf(
+            'PROACTIVE_DELIVERY_UNRESOLVED'
+          ) === -1,
+        'A safely quarantined delivery remained unresolved.'
+      );
+    }
+  );
+
+  test(
     'completed retry revalidation may use a later profile revision',
     function() {
       var originalBinding = binding(2);

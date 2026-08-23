@@ -243,8 +243,12 @@ function runA12CharacterProactiveIntegrationTests() {
       if (
         marker &&
         marker.error &&
-        marker.error.code ===
-          'PROACTIVE_RETRY_QUARANTINED'
+        (
+          marker.error.code ===
+            'PROACTIVE_RETRY_QUARANTINED' ||
+          marker.error.code ===
+            'PROACTIVE_DELIVERY_QUARANTINED'
+        )
       ) {
         return (
           originEventId &&
@@ -434,6 +438,30 @@ function runA12CharacterProactiveIntegrationTests() {
           error: copy(marker.error),
           proactiveOriginEventId:
             marker.proactiveOriginEventId
+        });
+        return marker;
+      },
+      quarantineAcceptedProactiveMarker: function(
+        messageId,
+        originEventId
+      ) {
+        assert(
+          marker && marker.messageId === messageId,
+          'Unexpected accepted proactive marker quarantine.'
+        );
+        assert(
+          marker.status === 'accepted' &&
+            marker.proactiveOriginEventId === originEventId,
+          'Accepted proactive quarantine lost its origin binding.'
+        );
+        marker.status = 'failed';
+        marker.error = {
+          code: 'PROACTIVE_DELIVERY_QUARANTINED'
+        };
+        trace.markerUpdates.push({
+          status: 'failed',
+          error: copy(marker.error),
+          proactiveOriginEventId: originEventId
         });
         return marker;
       },
@@ -1355,6 +1383,46 @@ function runA12CharacterProactiveIntegrationTests() {
   );
 
   test(
+    'an accepted marker from the same event is quarantined without resend',
+    function() {
+      var eventId =
+        'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+      var harness = makeHarness({
+        marker: makeFailedMarker({
+          status: 'accepted',
+          error: null,
+          proactiveOriginEventId: eventId
+        }),
+        blockTemplates: true
+      });
+      var result;
+      withGlobals(harness.overrides, function() {
+        result = ProactiveMessageService.prepareDispatch(
+          makePayload(),
+          '2026-07-24T12:00:00+09:00',
+          queueOptions(harness)
+        );
+      });
+      assert(
+        result.eligible === false &&
+          result.reason ===
+            'PROACTIVE_DELIVERY_QUARANTINED' &&
+          result.message === null,
+        'Ambiguous accepted delivery was not stopped safely.'
+      );
+      assert(
+        harness.getMarker().status === 'failed' &&
+          harness.getMarker().error &&
+          harness.getMarker().error.code ===
+            'PROACTIVE_DELIVERY_QUARANTINED' &&
+          harness.trace.gmail.length === 0 &&
+          harness.trace.contextBuilds === 0,
+        'Accepted delivery was resent or regenerated.'
+      );
+    }
+  );
+
+  test(
     'a different queue event cannot take over an active failed marker',
     function() {
       var originalEventId =
@@ -1388,6 +1456,150 @@ function runA12CharacterProactiveIntegrationTests() {
           harness.trace.markerUpdates.length === 0 &&
           harness.trace.gmail.length === 0,
         'Origin-mismatched marker was mutated or delivered.'
+      );
+    }
+  );
+
+  test(
+    'operator recovery quarantines only accepted markers owned by DONE events',
+    function() {
+      var eventId =
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      var messageId =
+        'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+      var dedupeKey = 'PROACTIVE_MESSAGE:2099-07-24:1';
+      var marker = {
+        message_id: messageId,
+        request_id: dedupeKey,
+        created_at: '2026-07-24T12:00:00+09:00',
+        role: 'system',
+        message_type: 'proactive',
+        status: 'accepted',
+        error_code: null,
+        proactive_origin_event_id: eventId
+      };
+      var quarantineCalls = 0;
+      var repository = {
+        getRows: function() {
+          return [marker];
+        },
+        listEventsByType: function(eventType) {
+          assert(
+            eventType === 'PROACTIVE_SEND',
+            'Recovery inspected an unrelated event type.'
+          );
+          return [{
+            eventId: eventId,
+            eventType: 'PROACTIVE_SEND',
+            status: 'DONE',
+            payload: {
+              messageDedupeKey: dedupeKey
+            }
+          }];
+        },
+        quarantineAcceptedProactiveMarker: function(
+          requestedMessageId,
+          requestedEventId
+        ) {
+          assert(
+            requestedMessageId === messageId &&
+              requestedEventId === eventId,
+            'Recovery crossed a delivery binding.'
+          );
+          quarantineCalls += 1;
+          marker.status = 'failed';
+          marker.error_code =
+            'PROACTIVE_DELIVERY_QUARANTINED';
+          return marker;
+        }
+      };
+      var result;
+      withGlobals({
+        SheetRepository: repository,
+        LockManager: {
+          withScriptLock: function(_, callback) {
+            return callback();
+          }
+        }
+      }, function() {
+        var inspection =
+          ProactiveMessageService.inspectUnresolvedDeliveries();
+        assert(
+          inspection.acceptedCount === 1 &&
+            inspection.quarantinableCount === 1 &&
+            inspection.blockedCount === 0 &&
+            inspection.safeToQuarantine === true,
+          'Recovery inspection did not prove its safety gate.'
+        );
+        result =
+          ProactiveMessageService.quarantineUnresolvedDeliveries();
+      });
+      assert(
+        quarantineCalls === 1 &&
+          result.quarantinedCount === 1 &&
+          result.remainingAcceptedCount === 0 &&
+          result.status === 'DONE',
+        'Safe operator recovery did not settle the accepted marker.'
+      );
+    }
+  );
+
+  test(
+    'operator recovery fails closed while an accepted event is active',
+    function() {
+      var writes = 0;
+      var eventId =
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      var dedupeKey = 'PROACTIVE_MESSAGE:2099-07-24:active';
+      withGlobals({
+        SheetRepository: {
+          getRows: function() {
+            return [{
+              message_id:
+                'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+              request_id: dedupeKey,
+              created_at: '2026-07-24T12:00:00+09:00',
+              role: 'system',
+              message_type: 'proactive',
+              status: 'accepted',
+              error_code: null,
+              proactive_origin_event_id: eventId
+            }];
+          },
+          listEventsByType: function() {
+            return [{
+              eventId: eventId,
+              eventType: 'PROACTIVE_SEND',
+              status: 'PROCESSING',
+              payload: {
+                messageDedupeKey: dedupeKey
+              }
+            }];
+          },
+          quarantineAcceptedProactiveMarker: function() {
+            writes += 1;
+          }
+        },
+        LockManager: {
+          withScriptLock: function(_, callback) {
+            return callback();
+          }
+        }
+      }, function() {
+        var inspection =
+          ProactiveMessageService.inspectUnresolvedDeliveries();
+        assert(
+          inspection.safeToQuarantine === false &&
+            inspection.blockedCount === 1,
+          'An active delivery passed the read-only safety gate.'
+        );
+        expectCode(function() {
+          ProactiveMessageService.quarantineUnresolvedDeliveries();
+        }, 'STORAGE_DATA_CORRUPTED');
+      });
+      assert(
+        writes === 0,
+        'Fail-closed recovery mutated an active delivery.'
       );
     }
   );

@@ -356,13 +356,13 @@ var ProactiveMessageService = (function() {
     if (
       existing &&
       existing.error &&
-      existing.error.code === 'PROACTIVE_RETRY_QUARANTINED'
+      isResolvedQuarantineCode_(existing.error.code)
     ) {
       return completeManagedNoSend_(
         payload,
         nowIso,
         queueClaim,
-        'PROACTIVE_RETRY_QUARANTINED'
+        existing.error.code
       );
     }
 
@@ -383,6 +383,34 @@ var ProactiveMessageService = (function() {
           probability: payload.probability,
           sample: payload.sample,
           decisionSlot: payload.decisionSlot
+        }
+      );
+    }
+
+    if (
+      existing &&
+      existing.status === 'accepted' &&
+      queueClaim &&
+      existing.proactiveOriginEventId === queueClaim.eventId
+    ) {
+      quarantineAcceptedProactiveMarker_(
+        existing,
+        queueClaim,
+        payload,
+        nowIso
+      );
+      return buildDispatchResult_(
+        false,
+        'PROACTIVE_DELIVERY_QUARANTINED',
+        null,
+        nowIso,
+        {
+          usedAi:
+            payload.characterRuntimeMode === 'enforced',
+          probability: payload.probability,
+          sample: payload.sample,
+          decisionSlot: payload.decisionSlot,
+          fallbackReason: null
         }
       );
     }
@@ -1378,6 +1406,177 @@ var ProactiveMessageService = (function() {
         );
       }
     );
+  }
+
+  function quarantineAcceptedProactiveMarker_(
+    marker,
+    queueClaim,
+    payload,
+    nowIso
+  ) {
+    if (!marker || !marker.messageId) {
+      return null;
+    }
+    return LockManager.withScriptLock(
+      'proactive-accepted-quarantine-' + marker.messageId,
+      function() {
+        assertQueueClaimCurrent_(queueClaim, payload);
+        var current = findExistingMarker_(
+          payload.messageDedupeKey,
+          queueClaim ? queueClaim.eventId : null
+        );
+        if (!current || current.messageId !== marker.messageId) {
+          return null;
+        }
+        ensure(
+          current.status === 'accepted' &&
+            current.proactiveOriginEventId === queueClaim.eventId,
+          'STORAGE_DATA_CORRUPTED',
+          'Accepted proactive delivery changed before quarantine.'
+        );
+        ensure(
+          typeof SheetRepository.quarantineAcceptedProactiveMarker ===
+            'function',
+          'STORAGE_DATA_CORRUPTED',
+          'Accepted proactive quarantine storage boundary is unavailable.'
+        );
+        var quarantined =
+          SheetRepository.quarantineAcceptedProactiveMarker(
+          marker.messageId,
+          queueClaim.eventId
+        );
+        updateStateAfterSend_(
+          payload,
+          current.createdAt || nowIso
+        );
+        return quarantined;
+      }
+    );
+  }
+
+  function inspectUnresolvedDeliveries() {
+    return summarizeUnresolvedDeliveryState_(
+      inspectUnresolvedDeliveryState_()
+    );
+  }
+
+  function quarantineUnresolvedDeliveries() {
+    return LockManager.withScriptLock(
+      'proactive-unresolved-delivery-repair',
+      function() {
+        var before = inspectUnresolvedDeliveryState_();
+        ensure(
+          before.blocked.length === 0,
+          'STORAGE_DATA_CORRUPTED',
+          'Unresolved proactive deliveries failed the repair safety gate.',
+          {
+            acceptedCount: before.accepted.length,
+            quarantinableCount: before.targets.length,
+            blockedCount: before.blocked.length
+          }
+        );
+        before.targets.forEach(function(target) {
+          SheetRepository.quarantineAcceptedProactiveMarker(
+            target.messageId,
+            target.originEventId
+          );
+        });
+        var after = inspectUnresolvedDeliveryState_();
+        ensure(
+          after.accepted.length === 0,
+          'STORAGE_WRITE_FAILED',
+          'Accepted proactive deliveries remain after quarantine.',
+          {
+            remainingAcceptedCount: after.accepted.length
+          }
+        );
+        return {
+          quarantinedCount: before.targets.length,
+          remainingAcceptedCount: after.accepted.length,
+          blockedCount: after.blocked.length,
+          status: 'DONE'
+        };
+      }
+    );
+  }
+
+  function inspectUnresolvedDeliveryState_() {
+    var events = SheetRepository.listEventsByType('PROACTIVE_SEND') || [];
+    var eventsById = {};
+    events.forEach(function(event) {
+      if (event && event.eventId) {
+        eventsById[event.eventId] = event;
+      }
+    });
+    var accepted = (SheetRepository.getRows(
+      APP_CONSTANTS.SHEETS.CONVERSATION_LOGS
+    ) || []).filter(function(row) {
+      return row &&
+        row.role === 'system' &&
+        row.message_type === 'proactive' &&
+        row.status === 'accepted';
+    });
+    var targets = [];
+    var blocked = [];
+    accepted.forEach(function(row) {
+      var originEventId = String(
+        row.proactive_origin_event_id || ''
+      );
+      var event = eventsById[originEventId] || null;
+      var valid = Boolean(
+        Validators.isUuidV4(originEventId) &&
+          event &&
+          event.eventType === 'PROACTIVE_SEND' &&
+          event.status === 'DONE' &&
+          event.payload &&
+          String(event.payload.messageDedupeKey || '') !== '' &&
+          String(event.payload.messageDedupeKey) ===
+            String(row.request_id || '') &&
+          !row.error_code
+      );
+      var candidate = {
+        messageId: row.message_id,
+        originEventId: originEventId,
+        createdAt: row.created_at || null
+      };
+      if (valid) {
+        targets.push(candidate);
+      } else {
+        blocked.push(candidate);
+      }
+    });
+    return {
+      accepted: accepted,
+      targets: targets,
+      blocked: blocked
+    };
+  }
+
+  function summarizeUnresolvedDeliveryState_(state) {
+    var dates = state.targets.map(function(target) {
+      return target.createdAt;
+    }).filter(function(value) {
+      return Boolean(value);
+    }).sort(function(left, right) {
+      return getIsoTimeMillis(left) - getIsoTimeMillis(right);
+    });
+    return {
+      acceptedCount: state.accepted.length,
+      quarantinableCount: state.targets.length,
+      blockedCount: state.blocked.length,
+      oldestAcceptedAt: dates.length > 0 ? dates[0] : null,
+      newestAcceptedAt: dates.length > 0
+        ? dates[dates.length - 1]
+        : null,
+      safeToQuarantine:
+        state.accepted.length === state.targets.length &&
+        state.blocked.length === 0
+    };
+  }
+
+  function isResolvedQuarantineCode_(errorCode) {
+    return errorCode === 'PROACTIVE_RETRY_QUARANTINED' ||
+      errorCode === 'PROACTIVE_DELIVERY_QUARANTINED';
   }
 
   function isRetryableApprovedMarker_(marker) {
@@ -3102,6 +3301,9 @@ var ProactiveMessageService = (function() {
     evaluateByAi: evaluateByAi,
     prepareDispatch: prepareDispatch,
     send: send,
+    inspectUnresolvedDeliveries: inspectUnresolvedDeliveries,
+    quarantineUnresolvedDeliveries:
+      quarantineUnresolvedDeliveries,
     inspectPolicy: inspectPolicy,
     assertAutomaticTriggerReady: assertAutomaticTriggerReady,
     assertManualTestReady: assertManualTestReady,

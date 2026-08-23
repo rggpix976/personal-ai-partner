@@ -523,7 +523,10 @@ Before calling MailApp, the service claims a short-lived marker in
 Marker behavior:
 
 - `completed`: do not send again; reconcile state idempotently
-- `accepted`: treat delivery as already in progress
+- `accepted` owned by the same retried event: never resend; quarantine the
+  ambiguous delivery and conservatively advance cooldown/count state
+- `accepted` owned by another lifecycle: return `DELIVERY_IN_PROGRESS`; the
+  queue worker must retry and must not mark the event `DONE`
 - `failed` with saved text: reset the same marker to `accepted` and reuse its
   body
 - no marker: append one `accepted` proactive marker before the external side
@@ -564,9 +567,10 @@ always treats any completed marker for the message key as globally
 authoritative, then returns the latest non-quarantine active marker regardless
 of origin. Only when neither exists may an optional exact origin event UUID
 retrieve its matching quarantine row for audit/reconciliation. A lookup
-without that origin does not return quarantine. Because the send count did not
-advance, a later fresh eligibility decision may use the same daily sequence
-and append a new marker without mutating the quarantined row.
+without that origin does not return quarantine. A rejected retry quarantine
+does not advance send count. An ambiguous accepted delivery quarantine does
+advance cooldown/count state as though delivery occurred, because suppressing
+a later extra notification is safer than assuming the mail was not sent.
 
 Partial or invalid approval metadata is tolerated only by this internal marker
 reader: it clears the returned body/subject, returns no approval object, and
@@ -583,6 +587,23 @@ The worker rechecks its queue lease before enforced generation and immediately
 before the protected marker/mail sink. A worker that is already stale at either
 checkpoint cannot generate or acquire the delivery marker; mail follows only
 after the protected marker claim succeeds.
+
+If execution stops after the `accepted` claim, the next owner never sends that
+saved pair again. It changes the marker to
+`failed / PROACTIVE_DELIVERY_QUARANTINED`, preserves the approved subject/body
+as audit evidence, applies the conservative cooldown/count state, and then
+finishes the queue event as a managed no-send. An origin mismatch remains
+retryable as `PROACTIVE_DELIVERY_UNRESOLVED` instead of becoming `DONE`.
+
+Historical cleanup is explicit and fail-closed:
+
+- `inspectUnresolvedProactiveDeliveries()` returns counts and the oldest/newest
+  accepted timestamps without body, IDs, URL, or recipient data
+- `quarantineUnresolvedProactiveDeliveries()` changes only accepted markers
+  whose exact origin event is `DONE / PROACTIVE_SEND` and whose dedupe binding
+  still matches
+- any active, missing, foreign, or malformed binding blocks the entire repair
+- cleanup never calls Gmail, generation, rewrite, or the proactive scheduler
 
 After successful delivery:
 

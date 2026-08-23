@@ -241,6 +241,7 @@ SheetRepository.listRecentMessages(limit)
 SheetRepository.listMessagesBefore(messageId, limit)
 SheetRepository.getProactiveMarkerByDedupeKey(dedupeKey, originEventId?)
 SheetRepository.quarantineProactiveMarker(messageId, originEventId)
+SheetRepository.quarantineAcceptedProactiveMarker(messageId, originEventId)
 SheetRepository.assertProactiveDeliveryColumns()
 SheetRepository.getUserState()
 SheetRepository.updateUserState(patch)
@@ -269,6 +270,19 @@ SheetRepository.upsertMemory(memory)
 `proactiveOriginEventId` を返し、通常の公開MessageDtoへは露出しない。partial/invalid
 approvalは本文・subjectを返さず `invalidCharacterApproval=true` としてquarantine可能に
 する。quarantine markerは同じorigin eventの再実行にだけ返す。
+`quarantineAcceptedProactiveMarker`は、外部送信の成否を確定できない`accepted` markerを
+再送せず`failed / PROACTIVE_DELIVERY_QUARANTINED`へ移す専用境界である。markerと
+origin eventの完全一致を必須とし、本文・subject・approvalは変更しない。
+
+```javascript
+inspectUnresolvedProactiveDeliveries()
+quarantineUnresolvedProactiveDeliveries()
+```
+
+前者は件数と時刻だけを返す読み取り専用診断である。後者は、すべての`accepted`
+markerが同じdedupe keyの`DONE / PROACTIVE_SEND` eventに結び付く場合だけ、一括して
+delivery quarantineへ移す。active event、由来欠損、dedupe不一致が1件でもあれば、
+変更前に全体を停止する。
 
 ## 3.10 `CharacterProfileService` / `CharacterPackService`
 

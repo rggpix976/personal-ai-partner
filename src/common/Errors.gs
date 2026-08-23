@@ -19,6 +19,7 @@ var APP_ERROR_DEFINITIONS = Object.freeze({
   STORAGE_DATA_CORRUPTED: { userMessage: '保存されているデータに問題があります。', retryable: false, retryStrategy: 'NONE', httpStatus: 500 },
   MAIL_SEND_FAILED: { userMessage: 'メールを一時的に送信できません。', retryable: true, retryStrategy: 'COMMON_BACKOFF', httpStatus: 503 },
   MAIL_QUOTA_EXHAUSTED: { userMessage: '本日分のメール送信上限に達しました。', retryable: true, retryStrategy: 'NEXT_DAILY_WINDOW', httpStatus: 429 },
+  PROACTIVE_DELIVERY_UNRESOLVED: { userMessage: '自発発言の配信状態を確認しています。', retryable: true, retryStrategy: 'COMMON_BACKOFF', httpStatus: 503 },
   QUEUE_LOCK_BUSY: { userMessage: '別の処理を実行中です。少し待ってから、もう一度お試しください。', retryable: true, retryStrategy: 'COMMON_BACKOFF', httpStatus: 409 },
   QUEUE_DEAD: { userMessage: '処理の再試行回数が上限に達しました。', retryable: false, retryStrategy: 'NONE', httpStatus: 409 },
   UNKNOWN: { userMessage: '予期しないエラーが発生しました。', retryable: false, retryStrategy: 'NONE', httpStatus: 500 }
