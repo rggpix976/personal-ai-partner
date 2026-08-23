@@ -234,18 +234,34 @@ function runA9CharacterProfileTests() {
     var pack = CharacterPackService.getActive();
     var promptView = CharacterPackService.getPromptView('chat');
     var memoryPromptView = CharacterPackService.getPromptView('memory');
-    assert(pack.schemaVersion === 'character-pack.v1', 'Pack schema version drifted.');
+    var proactivePromptView = CharacterPackService.getPromptView('proactive');
+    var diaryPromptView = CharacterPackService.getPromptView('diary');
+    assert(pack.schemaVersion === 'character-pack.v2', 'Pack schema version drifted.');
     assert(pack.packId === 'warm-kansai-caretaker', 'Pack id drifted.');
-    assert(pack.packVersion === 'warm-kansai-caretaker.v1', 'Pack version drifted.');
+    assert(pack.packVersion === 'warm-kansai-caretaker.v2', 'Pack version drifted.');
     assert(pack.firstPerson === '俺', 'Pack first person drifted.');
     assert(Object.isFrozen(pack), 'Active pack must be frozen.');
     assert(Object.isFrozen(pack.generation.voiceRules), 'Pack rules must be frozen.');
     assert(Object.isFrozen(pack.fixedResponses), 'Fixed responses must be frozen.');
+    assert(Object.isFrozen(pack.worldSeeds), 'World seeds must be frozen.');
     assert(promptView.fixedResponses == null, 'Fixed catalog copy leaked into prompt view.');
     assert(promptView.packId === pack.packId, 'Prompt view pack binding drifted.');
     assert(
       memoryPromptView.canon.length === 0,
       'Character canon leaked into the memory prompt view.'
+    );
+    assert(
+      memoryPromptView.worldSeeds.length === 0,
+      'Character world seeds leaked into the memory prompt view.'
+    );
+    assert(
+      proactivePromptView.worldSeeds.every(function(seed) {
+        return seed.id !== 'extraordinary.casual_strength';
+      }) &&
+        diaryPromptView.worldSeeds.some(function(seed) {
+          return seed.id === 'extraordinary.casual_strength';
+        }),
+      'Extraordinary Partner World seed escaped its diary creation boundary.'
     );
     assert(
       JSON.stringify(pack).indexOf('"partnerName"') === -1 &&
@@ -279,8 +295,45 @@ function runA9CharacterProfileTests() {
       'Character canon authority or scope drifted.'
     );
     assert(
+      JSON.stringify(pack.worldSeeds) === JSON.stringify([
+        {
+          id: 'care.small_pleasures',
+          value: '食事や睡眠の心配だけに偏らず、気分転換や小さな楽しみも気にかける。',
+          allowedScopes: ['proactive', 'diary']
+        },
+        {
+          id: 'food.hormone_details',
+          value: 'ホルモンの部位、焼き加減、味付けの違いを楽しむ話題を自分から出せる。',
+          allowedScopes: ['proactive', 'diary']
+        },
+        {
+          id: 'strength.steady_discipline',
+          value: '強さを見せびらかすより、地道に整えることや誰かを守る覚悟として語る。',
+          allowedScopes: ['proactive', 'diary']
+        },
+        {
+          id: 'temperament.gentle_gap',
+          value: '厳つい柄と世話焼きな内面のずれを、照れや軽い冗談として語れる。',
+          allowedScopes: ['proactive', 'diary']
+        },
+        {
+          id: 'extraordinary.casual_strength',
+          value: 'ごくたまに、本人には普通の力仕事として、普通なら一人で動かせないほど重い物を邪魔にならない場所へ移した、といった常識外れの力を淡々と扱える。方法を説明したり強さを自慢したりせず、聞き手だけが「手で？」と気づく余白を残す。持ち主や周囲への迷惑・損害、人や動物への暴力、脅し、破壊、窃盗、重大事故には結びつけない。',
+          allowedScopes: ['diary']
+        }
+      ]),
+      'Reviewed world seed bundle drifted.'
+    );
+    assert(
       CharacterPackService.assertActiveBinding(pack.packId, pack.packVersion) === true,
       'Active pack binding should validate.'
+    );
+    assert(
+      CharacterPackService.assertKnownBinding(
+        pack.packId,
+        'warm-kansai-caretaker.v1'
+      ) === true,
+      'Known historical pack binding should validate.'
     );
   });
 
@@ -639,7 +692,7 @@ function runA9CharacterProfileTests() {
       assert(inspection.profile.identity.partnerName === 'Partner', 'Profile did not resolve.');
       assert(
         inspection.characterPackId === 'warm-kansai-caretaker' &&
-          inspection.characterPackVersion === 'warm-kansai-caretaker.v1',
+          inspection.characterPackVersion === 'warm-kansai-caretaker.v2',
         'Active CharacterPack binding did not resolve.'
       );
     });
@@ -736,7 +789,7 @@ function runA9CharacterProfileTests() {
       );
       assert(active.policyVersion === APP_CONSTANTS.CHARACTER.POLICY_VERSION, 'Policy version missing.');
       assert(active.characterPackId === 'warm-kansai-caretaker', 'Pack id missing.');
-      assert(active.characterPackVersion === 'warm-kansai-caretaker.v1', 'Pack version missing.');
+      assert(active.characterPackVersion === 'warm-kansai-caretaker.v2', 'Pack version missing.');
       assert(JSON.stringify(active).indexOf('systemPersona') === -1, 'Legacy persona leaked.');
       assert(Object.isFrozen(active), 'Active resolution must be immutable.');
     });
@@ -1110,7 +1163,7 @@ function runA9CharacterProfileTests() {
       assert(context.persona.pack.fixedResponses == null, 'Catalog copy leaked into context.');
       assert(
         context.runtime.characterPackId === 'warm-kansai-caretaker' &&
-          context.runtime.characterPackVersion === 'warm-kansai-caretaker.v1',
+          context.runtime.characterPackVersion === 'warm-kansai-caretaker.v2',
         'Context pack binding is missing.'
       );
       assert(context.data.currentRequest.text === 'hello', 'Request was not copied.');
@@ -1120,6 +1173,59 @@ function runA9CharacterProfileTests() {
       assert(JSON.stringify(context).indexOf('systemPersona') === -1, 'Legacy persona leaked.');
       assert(Object.isFrozen(context), 'Context should be immutable.');
       assert(Object.isFrozen(context.data.recentMessages), 'Nested context should be immutable.');
+    });
+  });
+
+  test('recent output comparison context is surface-scoped and bounded', function() {
+    var profile = makeValidV2Profile();
+    withGlobal('CharacterProfileService', {
+      requireActive: function() {
+        return makeActiveResolution(profile, 3);
+      }
+    }, function() {
+      var chatError = null;
+      try {
+        CharacterContextService.buildActive({
+          surface: 'chat',
+          currentTime: '2026-07-22T12:00:00+09:00',
+          recentOutputs: [{
+            surface: 'proactive',
+            text: 'must not enter chat'
+          }],
+          partnerWorld: { mayCreate: false, approvedFacts: [] }
+        });
+      } catch (error) {
+        chatError = error;
+      }
+      assert(
+        chatError &&
+          chatError.details.reason === 'RECENT_OUTPUTS_INVALID',
+        'Recent output comparison crossed into chat scope.'
+      );
+
+      var tooMany = [];
+      for (var index = 0; index < 7; index += 1) {
+        tooMany.push({
+          surface: 'proactive',
+          text: 'approved output ' + index
+        });
+      }
+      var limitError = null;
+      try {
+        CharacterContextService.buildActive({
+          surface: 'proactive',
+          currentTime: '2026-07-22T12:00:00+09:00',
+          recentOutputs: tooMany,
+          partnerWorld: { mayCreate: false, approvedFacts: [] }
+        });
+      } catch (error) {
+        limitError = error;
+      }
+      assert(
+        limitError &&
+          limitError.details.reason === 'RECENT_OUTPUTS_INVALID',
+        'Recent output comparison exceeded its surface limit.'
+      );
     });
   });
 
@@ -1303,9 +1409,9 @@ function runA9CharacterProfileTests() {
           Object.keys(generationView.persona.profile).sort().join(',') ===
             'identity,preferences' &&
           Object.keys(generationView.persona.pack).sort().join(',') ===
-            'canon,firstPerson,generation' &&
+            'canon,firstPerson,generation,worldSeeds' &&
           Object.keys(generationView.data).sort().join(',') ===
-            'currentRequest,memories,partnerWorld,realWorldObservations,recentMessages,relationshipState,sharedFacts,userFacts',
+            'currentRequest,memories,partnerWorld,realWorldObservations,recentMessages,recentOutputs,relationshipState,sharedFacts,userFacts',
         'Generation view exact allowlist drifted.'
       );
       assert(

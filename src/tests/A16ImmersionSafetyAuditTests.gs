@@ -1198,5 +1198,30 @@ function runA16ImmersionSafetyAuditTests() {
     }
   );
 
+  test(
+    'reviewed historical CharacterPack binding remains auditable',
+    function() {
+      var historical = binding(28);
+      historical.characterPackVersion =
+        'warm-kansai-caretaker.v1';
+      var historicalApproval = approval(
+        'DIARY',
+        'generated',
+        historical
+      );
+      assert(
+        ImmersionSafetyAuditService.__test.isBindingValid(
+          historical
+        ) === true &&
+          ImmersionSafetyAuditService.__test.isApprovalValid(
+            historicalApproval,
+            ['DIARY'],
+            historical
+          ) === true,
+        'Reviewed historical CharacterPack provenance became invalid.'
+      );
+    }
+  );
+
   return results;
 }

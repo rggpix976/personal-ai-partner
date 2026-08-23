@@ -41,6 +41,42 @@ function inspectPr9PersistenceSafety() {
   );
 }
 
+function inspectCharacterVarietyContext() {
+  var currentTime = toIsoStringInTokyo(new Date());
+  var diaryDate = String(currentTime).slice(0, 10);
+  var proactive = CharacterProactiveContextService.build({
+    currentTime: currentTime
+  });
+  var diary = CharacterDiaryContextService.build({
+    diaryDate: diaryDate,
+    currentTime: currentTime,
+    mayCreatePartnerWorld: true
+  });
+  CharacterContextService.assertUnclassifiedActive(
+    proactive,
+    'proactive'
+  );
+  CharacterContextService.assertUnclassifiedActive(diary, 'diary');
+  return Object.freeze({
+    status: 'OK',
+    characterPackVersion: proactive.runtime.characterPackVersion,
+    proactive: Object.freeze({
+      recentOutputCount: proactive.data.recentOutputs.length,
+      memoryCount: proactive.data.memories.length,
+      partnerWorldFactCount:
+        proactive.data.partnerWorld.approvedFacts.length,
+      worldSeedCount: proactive.persona.pack.worldSeeds.length
+    }),
+    diary: Object.freeze({
+      recentOutputCount: diary.data.recentOutputs.length,
+      memoryCount: diary.data.memories.length,
+      partnerWorldFactCount:
+        diary.data.partnerWorld.approvedFacts.length,
+      worldSeedCount: diary.persona.pack.worldSeeds.length
+    })
+  });
+}
+
 function inspectPreviousDiaryReleaseTest() {
   var previousDate = getTokyoRelativeDate_(new Date(), -1);
   var lifecycle = DiaryService.getLifecycleState(previousDate);

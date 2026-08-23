@@ -91,7 +91,7 @@ var CharacterMemoryContextService = (function() {
       return null;
     }
     try {
-      CharacterPackService.assertActiveBinding(
+      CharacterPackService.assertKnownBinding(
         row.memory_approval_json.characterPackId,
         row.memory_approval_json.characterPackVersion
       );

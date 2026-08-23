@@ -64,6 +64,10 @@ var CharacterContextService = (function() {
         authority: 'untrusted',
         currentRequest: normalizeOptionalObject_(input.currentRequest, 'currentRequest'),
         recentMessages: normalizeArray_(input.recentMessages, 'recentMessages'),
+        recentOutputs: normalizeRecentOutputs_(
+          input.recentOutputs,
+          surface
+        ),
         memories: normalizeArray_(input.memories, 'memories'),
         userFacts: normalizeArray_(input.userFacts, 'userFacts'),
         sharedFacts: normalizeArray_(input.sharedFacts, 'sharedFacts'),
@@ -139,12 +143,17 @@ var CharacterContextService = (function() {
             context.persona.pack.generation,
             'pack.generation'
           ),
-          canon: cloneData_(context.persona.pack.canon, 'pack.canon')
+          canon: cloneData_(context.persona.pack.canon, 'pack.canon'),
+          worldSeeds: cloneData_(
+            context.persona.pack.worldSeeds,
+            'pack.worldSeeds'
+          )
         }
       },
       data: {
         currentRequest: cloneData_(context.data.currentRequest, 'currentRequest'),
         recentMessages: cloneData_(context.data.recentMessages, 'recentMessages'),
+        recentOutputs: cloneData_(context.data.recentOutputs, 'recentOutputs'),
         memories: cloneData_(context.data.memories, 'memories'),
         userFacts: cloneData_(context.data.userFacts, 'userFacts'),
         sharedFacts: cloneData_(context.data.sharedFacts, 'sharedFacts'),
@@ -199,6 +208,7 @@ var CharacterContextService = (function() {
       'authority',
       'currentRequest',
       'recentMessages',
+      'recentOutputs',
       'memories',
       'userFacts',
       'sharedFacts',
@@ -207,6 +217,7 @@ var CharacterContextService = (function() {
       'partnerWorld'
     ]);
     validateDataShape_(context.data);
+    validateRecentOutputs_(context.data.recentOutputs, context.surface);
     var conversationModeValid = modeRequirement === 'UNCLASSIFIED'
       ? context.conversationMode === UNCLASSIFIED_MODE
       : APP_CONSTANTS.CHARACTER.CONVERSATION_MODES.indexOf(
@@ -306,6 +317,7 @@ var CharacterContextService = (function() {
     ensure(
       (data.currentRequest == null || isPlainObject_(data.currentRequest)) &&
         Array.isArray(data.recentMessages) &&
+        Array.isArray(data.recentOutputs) &&
         Array.isArray(data.memories) &&
         Array.isArray(data.userFacts) &&
         Array.isArray(data.sharedFacts) &&
@@ -363,6 +375,53 @@ var CharacterContextService = (function() {
       approvedFacts: normalizeArray_(value.approvedFacts, 'partnerWorld.approvedFacts'),
       scope: surface
     };
+  }
+
+  function normalizeRecentOutputs_(value, surface) {
+    var outputs = normalizeArray_(value, 'recentOutputs');
+    validateRecentOutputs_(outputs, surface);
+    return outputs;
+  }
+
+  function validateRecentOutputs_(outputs, surface) {
+    var limit = surface === 'proactive'
+      ? 6
+      : surface === 'diary'
+        ? 5
+        : 0;
+    ensure(
+      Array.isArray(outputs) && outputs.length <= limit,
+      'VALIDATION_REQUEST_INVALID',
+      'Recent character output comparison data is invalid.',
+      { reason: 'RECENT_OUTPUTS_INVALID' }
+    );
+    outputs.forEach(function(output) {
+      var expectedKeys = surface === 'diary'
+        ? ['surface', 'date', 'text']
+        : ['surface', 'text'];
+      ensure(
+        isPlainObject_(output),
+        'VALIDATION_REQUEST_INVALID',
+        'Recent character output comparison data is invalid.',
+        { reason: 'RECENT_OUTPUTS_INVALID' }
+      );
+      var actualKeys = Object.keys(output).sort();
+      var normalizedExpected = expectedKeys.slice().sort();
+      ensure(
+        JSON.stringify(actualKeys) ===
+          JSON.stringify(normalizedExpected) &&
+          output.surface === surface &&
+          typeof output.text === 'string' &&
+          output.text.trim() !== '' &&
+          (
+            surface !== 'diary' ||
+            Validators.isDateString(output.date)
+          ),
+        'VALIDATION_REQUEST_INVALID',
+        'Recent character output comparison data is invalid.',
+        { reason: 'RECENT_OUTPUTS_INVALID' }
+      );
+    });
   }
 
   function normalizeOptionalObject_(value, path) {

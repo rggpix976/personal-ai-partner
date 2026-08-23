@@ -365,20 +365,23 @@ writeで更新し、profile JSON内へrevisionを入れない。profile modeは 
 残すが、V2へ自動変換、fallback、部分mergeしない。`SYSTEM_PERSONA`、speech preset、
 warmth、flavor、example lineもV2へコピーしない。
 
-Active CharacterPackはcode-ownedなexact `character-pack.v1` objectであり、次の
+Active CharacterPackはcode-ownedなexact `character-pack.v2` objectであり、次の
 metadataを持つ。
 
 ```text
 packId = warm-kansai-caretaker
-packVersion = warm-kansai-caretaker.v1
+packVersion = warm-kansai-caretaker.v2
 firstPerson = 俺
 ```
 
-packはgeneration rules、`CHARACTER_CANON` entries、fixed responsesを所有する。
+packはgeneration rules、`CHARACTER_CANON` entries、review済み`worldSeeds`、
+fixed responsesを所有する。
 profile JSONやCONFIG rowからpack内容を上書きできない。pack prompt viewは
 fixed responsesを含まず、`allowedScopes` をcontext構築前に適用する。memory
-prompt viewは `canon=[]` であり、memory生成器やsemantic verifierへ
-`CHARACTER_CANON` を渡さない。
+prompt viewは `canon=[]`, `worldSeeds=[]` であり、memory生成器やsemantic verifierへ
+proactive/diary専用のcharacter authorityを渡さない。承認済みの過去出力・記憶を読む場合だけ
+v1/v2 bindingを既知として受理できるが、active contextと新規・待機eventはv2完全一致を
+要求する。
 
 これらは既存config sheetへの後方互換な休眠key追加であり、sheet列契約は変更
 しない。platform `SCHEMA_VERSION` は既存production compatibilityのため
