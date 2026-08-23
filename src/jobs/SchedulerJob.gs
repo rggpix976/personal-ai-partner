@@ -225,6 +225,13 @@ function enqueueProactiveIfEligible_(now, options) {
 }
 
 function enqueueDiaryIfDue_(now) {
+  var previousResult = enqueueDiaryForDate_(
+    getTokyoRelativeDate_(now, -1)
+  );
+  if (!isDiaryScheduleDateAccountedFor_(previousResult)) {
+    return previousResult;
+  }
+
   var dueTime = getConfigString_('DIARY_DUE_TIME', '23:30');
   if (!hasPastTokyoTime_(now, dueTime)) {
     return {
@@ -232,7 +239,7 @@ function enqueueDiaryIfDue_(now) {
       reason: 'DIARY_TIME_NOT_REACHED'
     };
   }
-  return enqueueDiaryForDate_(getTokyoRelativeDate_(now, -1));
+  return enqueueDiaryForDate_(getTokyoRelativeDate_(now, 0));
 }
 
 function enqueuePreviousDiaryForReleaseTest_(now) {
@@ -257,6 +264,24 @@ function enqueueDiaryForDate_(diaryDate) {
     };
   }
   return DiaryService.enqueue(diaryDate);
+}
+
+function isDiaryScheduleDateAccountedFor_(result) {
+  result = result || {};
+  if (result.enqueued) {
+    return false;
+  }
+  if (result.duplicate) {
+    return true;
+  }
+  var accountedReasons = {
+    ALREADY_GENERATED: true,
+    DIARY_NOT_REQUIRED: true,
+    DIARY_ALREADY_PENDING: true,
+    DIARY_MANUAL_REPAIR_REQUIRED: true,
+    DIARY_MANUAL_REVIEW_REQUIRED: true
+  };
+  return Boolean(accountedReasons[result.reason]);
 }
 
 function enqueueMemoryExtractionIfDue_(nowIso) {

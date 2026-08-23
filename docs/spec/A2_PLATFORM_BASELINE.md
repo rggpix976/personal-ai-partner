@@ -269,6 +269,14 @@ Gemini呼び出しが既存の`GEMINI_MODEL`を使用する。このモードは
 structured narrative below that target is accepted with a controlled warning;
 `DIARY_MAX_CHARS` remains a hard validation limit.
 
+本番の`schedulerJob()`は、日本時間で`DIARY_DUE_TIME`に到達した後、その当日を
+`DIARY_GENERATE`の対象日にする。既定値では当日23:30以降の最初のscheduler実行で
+起票される。日付変更前に起票できなかった場合は、翌日の最初のscheduler実行が
+未生成の前日分を1回だけ先に起票する。`DONE`、`NONE`、`PENDING`、`FAILED`、
+`INCONSISTENT`の前日状態を自動再実行せず、日付単位のdedupeと専用修復契約を維持する。
+日記へ含まれる会話は、実際に日記イベントが処理された時点で保存済みの対象日会話に
+限られる。
+
 Active character targetは `CHARACTER_PROFILE_MODE=v2`、
 `character-profile.v2`、code-owned
 `warm-kansai-caretaker / warm-kansai-caretaker.v1` CharacterPackの組合せ
