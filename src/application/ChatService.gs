@@ -819,7 +819,7 @@ var ChatService = (function() {
         context.requestId,
         userMessage,
         computeRetryAfterSeconds_(currentEvent),
-        ['Reply generation is temporarily queued for retry.']
+        ['返信生成を一時的に待機しています。']
       );
     });
   }
@@ -1380,13 +1380,13 @@ var ChatService = (function() {
       return [];
     }
     if (event.status === 'DONE') {
-      return ['Reply processing finished, but the assistant message is not visible yet.'];
+      return ['返信処理は完了しましたが、まだ画面に表示されていません。'];
     }
     if (event.status === 'PROCESSING') {
-      return ['Reply generation is already in progress for this request.'];
+      return ['このメッセージへの返信を生成しています。'];
     }
     if (event.status === 'PENDING' || event.status === 'RETRY_WAIT') {
-      return ['Reply generation is temporarily queued for retry.'];
+      return ['返信生成を一時的に待機しています。'];
     }
     return [];
   }

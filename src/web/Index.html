@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html>
+<html lang="ja">
   <head>
     <base target="_top">
     <meta charset="utf-8">
     <meta name="format-detection" content="telephone=no">
-    <meta name="apple-mobile-web-app-title" content="AI Partner">
+    <meta name="apple-mobile-web-app-title" content="パーソナルAIパートナー">
     <script>
       window.__A3_BOOTSTRAP__ = <?!= bootstrapJson ?>;
     </script>
@@ -14,8 +14,8 @@
     <div class="app-shell">
       <header class="topbar">
         <div>
-          <p class="eyebrow">Personal AI Partner</p>
-          <h1 class="title" id="partner-title">Partner</h1>
+          <p class="eyebrow">パーソナルAIパートナー</p>
+          <h1 class="title" id="partner-title">推し</h1>
         </div>
         <div class="topbar-actions">
           <button class="ghost-button" id="about-button" type="button" aria-expanded="false">このアプリについて</button>
@@ -26,14 +26,14 @@
       </header>
 
       <section class="status-panel" id="status-panel" aria-live="polite">
-        <strong class="status-label" id="status-label">Loading</strong>
-        <p class="status-text" id="status-text">Preparing the chat screen.</p>
+        <strong class="status-label" id="status-label">読み込み中</strong>
+        <p class="status-text" id="status-text">チャット画面を準備しています。</p>
       </section>
 
       <section class="info-panel hidden" id="about-panel" aria-labelledby="about-title">
         <div class="panel-heading">
           <div>
-            <p class="eyebrow">Product information</p>
+            <p class="eyebrow">アプリ情報</p>
             <h2 id="about-title">このアプリについて</h2>
           </div>
           <button class="ghost-button" id="about-close-button" type="button">閉じる</button>
@@ -46,7 +46,7 @@
       <section class="info-panel diary-panel hidden" id="diary-panel" aria-labelledby="diary-title">
         <div class="panel-heading">
           <div>
-            <p class="eyebrow">Diary</p>
+            <p class="eyebrow">日記</p>
             <h2 id="diary-title">日記</h2>
           </div>
           <div class="panel-heading-actions">
@@ -73,7 +73,7 @@
       <section class="info-panel hidden" id="settings-panel" aria-labelledby="settings-title">
         <div class="panel-heading">
           <div>
-            <p class="eyebrow">Settings</p>
+            <p class="eyebrow">設定</p>
             <h2 id="settings-title">推しとの会話設定</h2>
           </div>
           <button class="ghost-button" id="settings-close-button" type="button">閉じる</button>
@@ -135,42 +135,42 @@
 
       <main class="chat-panel">
         <div class="history-toolbar">
-          <button class="ghost-button" id="load-older-button" type="button">Load older messages</button>
-          <span class="history-note" id="history-note">Latest messages</span>
+          <button class="ghost-button" id="load-older-button" type="button">以前のメッセージを読み込む</button>
+          <span class="history-note" id="history-note">最新のメッセージ</span>
         </div>
 
-        <section class="messages" id="messages" aria-live="polite" aria-label="Conversation"></section>
+        <section class="messages" id="messages" aria-live="polite" aria-label="会話"></section>
       </main>
 
       <footer class="composer-shell">
         <form class="composer" id="composer-form">
-          <label class="sr-only" for="message-input">Message</label>
+          <label class="sr-only" for="message-input">メッセージ</label>
           <textarea
             id="message-input"
             class="message-input"
             rows="1"
             maxlength="4000"
-            placeholder="Write a message for your partner"
+            placeholder="推しへのメッセージを入力"
           ></textarea>
 
           <div class="attachment-row">
-            <label class="attach-button" for="image-input">Attach image</label>
+            <label class="attach-button" for="image-input">画像を添付</label>
             <input id="image-input" class="sr-only" type="file" accept="image/jpeg,image/png,image/webp">
-            <span class="attachment-meta" id="attachment-meta">JPEG, PNG, or WebP</span>
+            <span class="attachment-meta" id="attachment-meta">JPEG、PNG、WebP</span>
           </div>
 
           <div class="preview-card hidden" id="preview-card">
-            <img id="preview-image" class="preview-image" alt="Selected preview">
+            <img id="preview-image" class="preview-image" alt="選択した画像のプレビュー">
             <div class="preview-copy">
               <p class="preview-name" id="preview-name"></p>
               <p class="preview-size" id="preview-size"></p>
             </div>
-            <button class="ghost-button" id="remove-image-button" type="button">Remove</button>
+            <button class="ghost-button" id="remove-image-button" type="button">削除</button>
           </div>
 
           <div class="composer-actions">
-            <span class="helper-text" id="helper-text">Message text is safely escaped before display.</span>
-            <button class="send-button" id="send-button" type="submit">Send</button>
+            <span class="helper-text" id="helper-text">メッセージ本文は安全にエスケープして表示されます。</span>
+            <button class="send-button" id="send-button" type="submit">送信</button>
           </div>
         </form>
       </footer>

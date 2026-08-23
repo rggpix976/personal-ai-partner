@@ -1,13 +1,13 @@
 var WebController = (function() {
   var DEFAULTS = Object.freeze({
-    appTitle: 'Personal AI Partner',
+    appTitle: 'パーソナルAIパートナー',
     pageSize: 20,
     maxPageSize: 50,
     maxUserTextChars: 4000,
     imageMaxBytes: 4194304,
     tempImageTtlHours: 24,
-    partnerName: 'Partner',
-    userName: 'You',
+    partnerName: '推し',
+    userName: 'あなた',
     pendingRetrySeconds: 3,
     proactiveWebPollSeconds: 60
   });
@@ -291,7 +291,7 @@ var WebController = (function() {
           retryAfterSeconds: computeRetryAfterSeconds_(event),
           error: null,
           warnings: event && event.status === 'DONE'
-            ? ['Reply processing finished, but the assistant message is not visible yet.']
+            ? ['返信処理は完了しましたが、まだ画面に表示されていません。']
             : []
         };
       }
@@ -299,7 +299,7 @@ var WebController = (function() {
       return buildFailedChatResult_(
         requestId,
         createAppError('UNKNOWN', 'No request state was found for the supplied requestId.', null, {
-          userMessage: 'The message request could not be found.'
+          userMessage: '送信したメッセージの処理状態を確認できませんでした。'
         }),
         []
       );
@@ -414,7 +414,7 @@ var WebController = (function() {
       }
     } catch (error) {
       status = 'stopped';
-      warnings.push('The app is not fully configured. Run setup() and validatePostSetupProperties() in Apps Script.');
+      warnings.push('アプリの設定が完了していません。Apps Scriptで setup() と validatePostSetupProperties() を実行してください。');
       warnings.push(normalizeError(error).userMessage);
     }
 
@@ -520,15 +520,15 @@ var WebController = (function() {
 
   function validateChatRequest_(request, requestId) {
     if (!request || typeof request !== 'object') {
-      throw createValidationError_('request must be an object.', 'The request payload is invalid.');
+      throw createValidationError_('request must be an object.', '送信内容が正しくありません。');
     }
     if (!Validators.isUuidV4(requestId)) {
-      throw createValidationError_('requestId must be a UUID v4.', 'The request ID is invalid.');
+      throw createValidationError_('requestId must be a UUID v4.', '送信内容を確認できませんでした。もう一度お試しください。');
     }
     if (!Validators.isIsoDateTimeString(request.clientTimestamp)) {
       throw createValidationError_(
         'clientTimestamp must be an ISO 8601 string.',
-        'The message timestamp is invalid.'
+        'メッセージの送信日時が正しくありません。もう一度お試しください。'
       );
     }
 
@@ -541,7 +541,7 @@ var WebController = (function() {
     if (text.length === 0 && !request.image) {
       throw createValidationError_(
         'Either text or image is required.',
-        'Send a message or attach an image before submitting.'
+        'メッセージを入力するか、画像を添付してから送信してください。'
       );
     }
 
