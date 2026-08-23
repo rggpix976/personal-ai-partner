@@ -52,6 +52,9 @@ var ChatService = (function() {
 
       userMessage = state.userMessage;
       event = state.event;
+      if (preparedImage) {
+        ImageArchiveRepository.ensureArchived(preparedImage, userMessage.messageId);
+      }
       var completedResult = runtime.mode === 'enforced'
         ? executeEnforcedSync_(
           normalizedRequest,
@@ -96,8 +99,16 @@ var ChatService = (function() {
     });
     var geminiRequest = buildGeminiRequest_(request, chatContext, preparedImage);
     var generation = preparedImage
-      ? GeminiClient.generateWithImage(geminiRequest)
-      : GeminiClient.generateText(geminiRequest);
+      ? GeminiClient.generateWithImage(
+        geminiRequest,
+        'GENERATION',
+        { surface: 'CHAT_IMAGE', source: 'generated' }
+      )
+      : GeminiClient.generateText(
+        geminiRequest,
+        'GENERATION',
+        { surface: 'CHAT_TEXT_SYNC', source: 'generated' }
+      );
     var assistantText = normalizeAssistantText_(generation.text);
     ensure(assistantText !== '', 'GEMINI_BAD_RESPONSE', 'Gemini returned an empty response.');
 
@@ -481,6 +492,9 @@ var ChatService = (function() {
         now: nowIso,
         requestText: pair.userMessage.text
       }) : null;
+      if (preparedImage) {
+        ImageArchiveRepository.ensureArchived(preparedImage, pair.userMessage.messageId);
+      }
       var result = runtime.mode === 'enforced'
         ? executeEnforcedQueued_(
           payload,
@@ -577,12 +591,18 @@ var ChatService = (function() {
         requestId: payload.requestId,
         text: pair.userMessage.text || '',
         image: preparedImage
-      }, chatContext, preparedImage))
+      }, chatContext, preparedImage), 'GENERATION', {
+        surface: 'CHAT_IMAGE',
+        source: 'generated'
+      })
       : GeminiClient.generateText(buildGeminiRequest_({
         requestId: payload.requestId,
         text: pair.userMessage.text || '',
         image: null
-      }, chatContext, null));
+      }, chatContext, null), 'GENERATION', {
+        surface: 'CHAT_TEXT_QUEUED',
+        source: 'generated'
+      });
     var assistantText = normalizeAssistantText_(generation.text);
     ensure(assistantText !== '', 'GEMINI_BAD_RESPONSE', 'Gemini returned an empty response.');
 

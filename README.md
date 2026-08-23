@@ -65,7 +65,7 @@ Core services:
 - Apps Script HTML Service Web App
 - Google Sheets for structured state and configuration
 - Google Docs for diary output
-- Google Drive for temporary images and backups
+- Google Drive for private image history, temporary images, and backups
 - MailApp delivery through `GmailNotifier`
 - Gemini API through `GeminiClient`
 
@@ -143,6 +143,7 @@ SPREADSHEET_ID
 DIARY_DOC_ID
 TEMP_FOLDER_ID
 BACKUP_FOLDER_ID
+IMAGE_ARCHIVE_FOLDER_ID
 SCHEMA_VERSION
 WEB_APP_URL
 ```
@@ -170,6 +171,7 @@ doGet()
 getInitialState()
 loadMessages(beforeMessageId, limit)
 loadNewMessages(afterMessageId, limit)
+loadMessageImage(messageId)
 sendChat(request)
 getRequestStatus(requestId)
 ```

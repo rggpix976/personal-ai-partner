@@ -146,10 +146,12 @@ function runA11CharacterChatGeminiAdapterTests() {
 
   test('text generation separates trusted authority from untrusted conversation data', function() {
     var captured = null;
+    var capturedModelRole = null;
     var sentinel = 'UNTRUSTED_INSTRUCTION_SENTINEL_1e03';
     withGeminiStub({
-      generateText: function(request) {
+      generateText: function(request, modelRole) {
         captured = request;
+        capturedModelRole = modelRole;
         return {
           text: 'ぼちぼちや。お前はどうや？',
           model: 'gemini-test',
@@ -170,6 +172,10 @@ function runA11CharacterChatGeminiAdapterTests() {
       var metadata = session.getGenerationMetadata('generated');
 
       assert(payload.text.indexOf('ぼちぼち') !== -1, 'Text payload was lost.');
+      assert(
+        capturedModelRole === 'GENERATION',
+        'Text generation did not use the generation model role.'
+      );
       assert(
         captured.systemInstruction.indexOf('TRUSTED_CHARACTER_AUTHORITY_BEGIN') !== -1 &&
           captured.systemInstruction.indexOf('たろう') !== -1,
@@ -215,10 +221,12 @@ function runA11CharacterChatGeminiAdapterTests() {
     };
     var calls = [];
     withGeminiStub({
-      generateStructured: function(request, schemaName) {
+      generateStructured: function(request, schemaName, modelRole, metricContext) {
         calls.push({
           request: request,
-          schemaName: schemaName
+          schemaName: schemaName,
+          modelRole: modelRole,
+          metricContext: metricContext
         });
         if (schemaName === 'character-chat-image') {
           return {
@@ -266,6 +274,14 @@ function runA11CharacterChatGeminiAdapterTests() {
         calls[0].schemaName === 'character-chat-image' &&
           calls[1].schemaName === 'immersion-semantic-verdict',
         'Image flow used the wrong structured schemas.'
+      );
+      assert(
+        calls[0].modelRole === 'GENERATION' &&
+          calls[1].modelRole === 'UTILITY' &&
+          calls[0].metricContext.surface === 'CHAT_IMAGE' &&
+          calls[0].metricContext.source === 'generated' &&
+          calls[1].metricContext.source === 'verifier',
+        'Image generation and verification did not split model roles.'
       );
       assert(
         calls[0].request.image === preparedImage &&

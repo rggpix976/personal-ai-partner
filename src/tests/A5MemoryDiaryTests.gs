@@ -747,7 +747,14 @@ function runA5MemoryDiaryTests() {
         }
       },
       GeminiClient: {
-        generateStructured: function() {
+        generateStructured: function(_, schemaName, modelRole, metricContext) {
+          assert(
+            schemaName === 'diary-entry' &&
+              modelRole === 'GENERATION' &&
+              metricContext.surface === 'DIARY' &&
+              metricContext.source === 'generated',
+            'Legacy diary did not use the generation route.'
+          );
           return {
             data: {
               title: 'Rain after dusk',
@@ -1007,7 +1014,14 @@ function runA5MemoryDiaryTests() {
         }
       },
       GeminiClient: {
-        generateStructured: function() {
+        generateStructured: function(_, schemaName, modelRole, metricContext) {
+          assert(
+            schemaName === 'memory-candidates' &&
+              modelRole === 'UTILITY' &&
+              metricContext.surface === 'MEMORY_EXTRACTION' &&
+              metricContext.source === 'generated',
+            'Legacy memory extraction did not use the utility route.'
+          );
           throw createAppError('GEMINI_TEMPORARY_FAILURE', 'temporary failure');
         }
       }

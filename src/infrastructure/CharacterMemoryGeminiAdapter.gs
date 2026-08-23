@@ -19,6 +19,7 @@ var CharacterMemoryGeminiAdapter = (function() {
   });
   var SAFE_ERROR_STAGES = Object.freeze([
     'REQUEST_CONTENTS_INVALID',
+    'REQUEST_PREFILLED_MODEL_TURN',
     'HTTP_RESPONSE_JSON_INVALID',
     'HTTP_REQUEST_REJECTED',
     'HTTP_RATE_LIMITED',
@@ -73,6 +74,7 @@ var CharacterMemoryGeminiAdapter = (function() {
         input.context.data.memories
       );
       return invokePayload_(
+        'generated',
         buildGenerationRequest_(input.context, null)
       );
     }
@@ -86,6 +88,7 @@ var CharacterMemoryGeminiAdapter = (function() {
       );
       rewritten = true;
       return invokePayload_(
+        'rewrite',
         buildGenerationRequest_(input.context, input.category)
       );
     }
@@ -99,6 +102,7 @@ var CharacterMemoryGeminiAdapter = (function() {
       );
       verifierCalls += 1;
       var response = invoke_(
+        'verifier',
         buildVerifierRequest_(request),
         'immersion-semantic-verdict'
       );
@@ -108,8 +112,12 @@ var CharacterMemoryGeminiAdapter = (function() {
       );
     }
 
-    function invokePayload_(request) {
-      var response = invoke_(request, 'character-memory-candidates');
+    function invokePayload_(source, request) {
+      var response = invoke_(
+        source,
+        request,
+        'character-memory-candidates'
+      );
       return normalizePayload_(
         response && response.data,
         allowedSourceSet,
@@ -117,7 +125,7 @@ var CharacterMemoryGeminiAdapter = (function() {
       );
     }
 
-    function invoke_(request, schemaName) {
+    function invoke_(source, request, schemaName) {
       usage.apiCalls += 1;
       var response;
       try {
@@ -127,7 +135,9 @@ var CharacterMemoryGeminiAdapter = (function() {
           request,
           schemaName === 'character-memory-candidates'
             ? null
-            : schemaName
+            : schemaName,
+          'UTILITY',
+          { surface: SURFACE, source: source }
         );
       } catch (error) {
         throw sanitizeGeminiError_(error);
@@ -320,11 +330,21 @@ var CharacterMemoryGeminiAdapter = (function() {
       'sourceMessageIds',
       'reason'
     ];
+    var hasNullableExistingMemoryId =
+      !requiresExisting &&
+      Object.prototype.hasOwnProperty.call(candidate, 'existingMemoryId') &&
+      candidate.existingMemoryId === null;
     if (requiresExisting) {
       expectedKeys.push('existingMemoryId');
     }
     ensure(
-      hasExactKeys_(candidate, expectedKeys) &&
+      (
+        hasExactKeys_(candidate, expectedKeys) ||
+        (
+          hasNullableExistingMemoryId &&
+          hasExactKeys_(candidate, expectedKeys.concat(['existingMemoryId']))
+        )
+      ) &&
         ['create', 'confirm', 'update', 'ignore'].indexOf(action) !== -1,
       'GEMINI_BAD_RESPONSE',
       'Gemini returned an invalid memory candidate shape.',

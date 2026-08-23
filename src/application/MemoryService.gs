@@ -107,7 +107,12 @@ var MemoryService = (function() {
     var sourceMessages = SheetRepository.listMessagesByIds(payload.sourceMessageIds);
     ensure(sourceMessages.length > 0, 'VALIDATION_REQUEST_INVALID', 'No source messages were found for memory extraction.');
 
-    var generation = GeminiClient.generateStructured(buildExtractionRequest_(payload, sourceMessages), 'memory-candidates');
+    var generation = GeminiClient.generateStructured(
+      buildExtractionRequest_(payload, sourceMessages),
+      'memory-candidates',
+      'UTILITY',
+      { surface: 'MEMORY_EXTRACTION', source: 'generated' }
+    );
     var candidates = normalizeCandidateList_(generation.data);
     return applyCandidates(candidates);
   }

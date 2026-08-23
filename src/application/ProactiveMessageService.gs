@@ -1845,6 +1845,9 @@ var ProactiveMessageService = (function() {
           text: prompt
         }]
       }]
+    }, 'GENERATION', {
+      surface: 'PROACTIVE_AI',
+      source: 'generated'
     });
 
     try {

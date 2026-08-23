@@ -46,6 +46,8 @@
     backgroundPollInFlight: false,
     backgroundPollToken: 0,
     backgroundPollingEnabled: false,
+    messageImages: {},
+    imageObserver: null,
     settings: null,
     savingSettings: false,
     diary: {
@@ -66,6 +68,7 @@
 
   function init() {
     cacheElements();
+    initializeImageObserver();
     bindEvents();
     elements.messageInput.maxLength = String(bootstrap.maxUserTextChars || 4000);
     renderAttachmentMeta();
@@ -124,6 +127,9 @@
     elements.removeImageButton = document.getElementById('remove-image-button');
     elements.helperText = document.getElementById('helper-text');
     elements.sendButton = document.getElementById('send-button');
+    elements.imageLightbox = document.getElementById('image-lightbox');
+    elements.imageLightboxImage = document.getElementById('image-lightbox-image');
+    elements.imageLightboxClose = document.getElementById('image-lightbox-close');
   }
 
   function bindEvents() {
@@ -160,6 +166,17 @@
     });
     elements.settingsForm.addEventListener('submit', onSettingsSubmit);
     elements.messageInput.addEventListener('input', autoResizeTextarea);
+    elements.imageLightboxClose.addEventListener('click', closeImageLightbox);
+    elements.imageLightbox.addEventListener('click', function(event) {
+      if (event.target === elements.imageLightbox) {
+        closeImageLightbox();
+      }
+    });
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape' && !elements.imageLightbox.classList.contains('hidden')) {
+        closeImageLightbox();
+      }
+    });
     document.addEventListener(
       'visibilitychange',
       onVisibilityChange
@@ -265,16 +282,19 @@
     }
 
     var requestId = generateRequestId();
+    var clientTimestamp = toOffsetIsoString(new Date());
     var request = {
       requestId: requestId,
       text: text,
-      clientTimestamp: toOffsetIsoString(new Date()),
+      clientTimestamp: clientTimestamp,
       image: state.selectedImage ? {
         name: state.selectedImage.name,
         mimeType: state.selectedImage.mimeType,
         base64: state.selectedImage.base64
       } : null
     };
+
+    addOptimisticMessage(requestId, text, clientTimestamp, state.selectedImage);
 
     state.sending = true;
     state.activeRequestId = requestId;
@@ -284,15 +304,19 @@
 
     callServer('sendChat', [request])
       .then(function(result) {
-        if (result && result.ok && result.userMessage) {
+        if (result && result.userMessage) {
           upsertMessage(result.userMessage);
           renderMessages('bottom');
         }
 
-        if (result && result.ok) {
+        if (result && (result.ok || result.userMessage)) {
           elements.messageInput.value = '';
           autoResizeTextarea();
           clearSelectedImage();
+        }
+
+        if (!result || (result.status === 'failed' && !result.userMessage)) {
+          markOptimisticMessageFailed(requestId);
         }
 
         handleChatResult(result, true);
@@ -302,12 +326,64 @@
         }
       })
       .catch(function(error) {
+        markOptimisticMessageFailed(requestId);
         setStatus('retryable-failure', '送信失敗', error.message || 'メッセージを送信できませんでした。');
       })
       .finally(function() {
         state.sending = false;
         setBusyState(false);
       });
+  }
+
+  function addOptimisticMessage(requestId, text, createdAt, selectedImage) {
+    var messageId = 'pending-' + requestId;
+    var pendingMessage = {
+      messageId: messageId,
+      requestId: requestId,
+      role: 'user',
+      messageType: selectedImage ? 'image' : 'text',
+      text: text,
+      createdAt: createdAt,
+      image: selectedImage ? {
+        name: selectedImage.name,
+        mimeType: selectedImage.mimeType,
+        summary: ''
+      } : null,
+      clientDeliveryState: 'sending'
+    };
+
+    if (selectedImage && selectedImage.previewUrl) {
+      state.messageImages[messageId] = {
+        status: 'available',
+        dataUrl: selectedImage.previewUrl
+      };
+    }
+
+    state.messages.push(pendingMessage);
+    state.messages.sort(compareMessagesChronologically);
+    renderMessages('bottom');
+  }
+
+  function markOptimisticMessageFailed(requestId) {
+    var changed = false;
+    state.messages = state.messages.map(function(message) {
+      if (
+        message.requestId === requestId &&
+        message.clientDeliveryState === 'sending'
+      ) {
+        changed = true;
+        var failedMessage = {};
+        Object.keys(message).forEach(function(key) {
+          failedMessage[key] = message[key];
+        });
+        failedMessage.clientDeliveryState = 'failed';
+        return failedMessage;
+      }
+      return message;
+    });
+    if (changed) {
+      renderMessages('bottom');
+    }
   }
 
   function handleChatResult(result, fromSend) {
@@ -1007,14 +1083,149 @@
     bubble.appendChild(text);
 
     if (message.image) {
+      bubble.appendChild(createArchivedImageNode(message));
       var imageMeta = document.createElement('div');
       imageMeta.className = 'bubble-image-meta';
       imageMeta.textContent = 'Image: ' + message.image.name + ' (' + message.image.mimeType + ')';
       bubble.appendChild(imageMeta);
     }
 
+    if (message.clientDeliveryState) {
+      var deliveryStatus = document.createElement('p');
+      deliveryStatus.className = 'bubble-delivery-status';
+      deliveryStatus.setAttribute(
+        'data-state',
+        message.clientDeliveryState
+      );
+      deliveryStatus.textContent = message.clientDeliveryState === 'failed'
+        ? '送信できませんでした。入力内容を確認して、もう一度送信してください。'
+        : '送信中…';
+      bubble.appendChild(deliveryStatus);
+    }
+
     row.appendChild(bubble);
     return row;
+  }
+
+  function initializeImageObserver() {
+    if (!window.IntersectionObserver) {
+      state.imageObserver = null;
+      return;
+    }
+    state.imageObserver = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (!entry.isIntersecting) {
+          return;
+        }
+        state.imageObserver.unobserve(entry.target);
+        loadArchivedImage(entry.target);
+      });
+    }, {
+      root: elements.messages,
+      rootMargin: '160px 0px'
+    });
+  }
+
+  function createArchivedImageNode(message) {
+    var frame = document.createElement('div');
+    frame.className = 'bubble-image-frame';
+    frame.setAttribute('data-message-id', message.messageId);
+    frame.setAttribute('data-image-name', message.image.name || '添付画像');
+
+    var status = document.createElement('p');
+    status.className = 'bubble-image-status';
+    status.textContent = '画像を読み込んでいます…';
+    frame.appendChild(status);
+
+    var cached = state.messageImages[message.messageId];
+    if (cached) {
+      renderArchivedImageState(frame, cached);
+    } else if (state.imageObserver) {
+      state.imageObserver.observe(frame);
+    } else {
+      loadArchivedImage(frame);
+    }
+    return frame;
+  }
+
+  function loadArchivedImage(frame) {
+    var messageId = frame.getAttribute('data-message-id');
+    if (!messageId || state.messageImages[messageId]) {
+      if (messageId) {
+        renderArchivedImageState(frame, state.messageImages[messageId]);
+      }
+      return;
+    }
+    state.messageImages[messageId] = { status: 'loading' };
+    callServer('loadMessageImage', [messageId])
+      .then(function(response) {
+        var imageState;
+        if (response && response.ok && response.available) {
+          imageState = {
+            status: 'available',
+            dataUrl: 'data:' + response.mimeType + ';base64,' + response.base64
+          };
+        } else if (response && response.ok) {
+          imageState = { status: 'missing' };
+        } else {
+          imageState = { status: 'error' };
+        }
+        state.messageImages[messageId] = imageState;
+        renderAllArchivedImageFrames(messageId, imageState);
+      })
+      .catch(function() {
+        var imageState = { status: 'error' };
+        state.messageImages[messageId] = imageState;
+        renderAllArchivedImageFrames(messageId, imageState);
+      });
+  }
+
+  function renderAllArchivedImageFrames(messageId, imageState) {
+    var frames = document.querySelectorAll('.bubble-image-frame[data-message-id="' + messageId + '"]');
+    Array.prototype.forEach.call(frames, function(frame) {
+      renderArchivedImageState(frame, imageState);
+    });
+  }
+
+  function renderArchivedImageState(frame, imageState) {
+    while (frame.firstChild) {
+      frame.removeChild(frame.firstChild);
+    }
+    if (imageState && imageState.status === 'available') {
+      var image = document.createElement('img');
+      image.className = 'bubble-image-preview';
+      image.src = imageState.dataUrl;
+      image.alt = '添付画像: ' + frame.getAttribute('data-image-name');
+      image.loading = 'lazy';
+      image.addEventListener('click', function() {
+        openImageLightbox(imageState.dataUrl, image.alt);
+      });
+      frame.appendChild(image);
+      return;
+    }
+    var status = document.createElement('p');
+    status.className = 'bubble-image-status';
+    if (imageState && imageState.status === 'missing') {
+      status.textContent = 'この過去画像は保存されていません。';
+    } else if (imageState && imageState.status === 'error') {
+      status.textContent = '画像を読み込めませんでした。';
+    } else {
+      status.textContent = '画像を読み込んでいます…';
+    }
+    frame.appendChild(status);
+  }
+
+  function openImageLightbox(dataUrl, alt) {
+    elements.imageLightboxImage.src = dataUrl;
+    elements.imageLightboxImage.alt = alt || '添付画像';
+    elements.imageLightbox.classList.remove('hidden');
+    elements.imageLightboxClose.focus();
+  }
+
+  function closeImageLightbox() {
+    elements.imageLightbox.classList.add('hidden');
+    elements.imageLightboxImage.removeAttribute('src');
+    elements.imageLightboxImage.alt = '';
   }
 
   function setStatus(stateName, label, text) {
@@ -1080,6 +1291,8 @@
       return false;
     }
 
+    reconcileOptimisticMessage(message);
+
     var found = false;
     var changed = false;
 
@@ -1104,6 +1317,35 @@
     }
 
     return changed;
+  }
+
+  function reconcileOptimisticMessage(message) {
+    if (!message || !message.messageId || !message.requestId) {
+      return;
+    }
+
+    var pendingMessage = null;
+    state.messages = state.messages.filter(function(existing) {
+      var matches =
+        existing.messageId !== message.messageId &&
+        existing.requestId === message.requestId &&
+        Boolean(existing.clientDeliveryState);
+      if (matches) {
+        pendingMessage = existing;
+        return false;
+      }
+      return true;
+    });
+
+    if (!pendingMessage) {
+      return;
+    }
+
+    var pendingImage = state.messageImages[pendingMessage.messageId];
+    if (pendingImage) {
+      state.messageImages[message.messageId] = pendingImage;
+      delete state.messageImages[pendingMessage.messageId];
+    }
   }
 
   function callServer(functionName, args) {

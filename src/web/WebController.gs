@@ -131,6 +131,55 @@ var WebController = (function() {
     return listNewMessagePage_(afterMessageId, limit);
   }
 
+  function loadMessageImage(messageId) {
+    try {
+      assertWebAccess_();
+      Validators.assertUuidV4(messageId, 'messageId');
+      var messages = SheetRepository.listMessagesByIds([messageId]);
+      ensure(
+        messages.length === 1 &&
+          messages[0].messageId === messageId &&
+          messages[0].role === 'user' &&
+          messages[0].messageType === 'image' &&
+          messages[0].image &&
+          APP_CONSTANTS.MIME_TYPES.indexOf(messages[0].image.mimeType) !== -1,
+        'VALIDATION_REQUEST_INVALID',
+        'The requested message is not an image message.'
+      );
+      var archived = ImageArchiveRepository.getArchivedImage(
+        messageId,
+        messages[0].image.mimeType
+      );
+      if (!archived) {
+        return {
+          ok: true,
+          available: false,
+          mimeType: null,
+          base64: null,
+          error: null
+        };
+      }
+      return {
+        ok: true,
+        available: true,
+        mimeType: archived.mimeType,
+        base64: archived.base64,
+        error: null
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        available: false,
+        mimeType: null,
+        base64: null,
+        error: {
+          code: 'IMAGE_ARCHIVE_UNAVAILABLE',
+          message: '画像を読み込めませんでした。少し待ってから、もう一度お試しください。'
+        }
+      };
+    }
+  }
+
   function loadDiaryEntries(beforeDate, limit) {
     try {
       assertWebAccess_();
@@ -853,6 +902,7 @@ var WebController = (function() {
     saveCharacterSettings: saveCharacterSettings,
     loadMessages: loadMessages,
     loadNewMessages: loadNewMessages,
+    loadMessageImage: loadMessageImage,
     loadDiaryEntries: loadDiaryEntries,
     sendChat: sendChat,
     getRequestStatus: getRequestStatus,

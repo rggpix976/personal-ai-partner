@@ -1,3 +1,10 @@
+function inspectGeminiModelRouting() {
+  return logPr9TestResult_(
+    'inspectGeminiModelRouting',
+    GeminiClient.inspectRouting()
+  );
+}
+
 function doGet() {
   return WebController.doGet();
 }
@@ -20,6 +27,10 @@ function loadMessages(beforeMessageId, limit) {
 
 function loadNewMessages(afterMessageId, limit) {
   return WebController.loadNewMessages(afterMessageId, limit);
+}
+
+function loadMessageImage(messageId) {
+  return WebController.loadMessageImage(messageId);
 }
 
 function loadDiaryEntries(beforeDate, limit) {

@@ -247,10 +247,12 @@ function runA13CharacterDiaryIntegrationTests() {
     var session;
     withGlobals({
       GeminiClient: {
-        generateStructured: function(request, schemaName) {
+        generateStructured: function(request, schemaName, modelRole, metricContext) {
           calls.push({
             request: request,
-            schemaName: schemaName
+            schemaName: schemaName,
+            modelRole: modelRole,
+            metricContext: metricContext
           });
           if (schemaName === 'character-diary') {
             return {
@@ -301,6 +303,13 @@ function runA13CharacterDiaryIntegrationTests() {
     });
     assert(calls.length === 2, 'Unexpected Gemini call count.');
     assert(calls[0].schemaName === 'character-diary', 'Wrong diary schema.');
+    assert(
+      calls[0].modelRole === 'GENERATION' &&
+        calls[1].modelRole === 'UTILITY' &&
+        calls[0].metricContext.source === 'generated' &&
+        calls[1].metricContext.source === 'verifier',
+      'Diary generation and verification did not split model roles.'
+    );
     assert(
       calls[0].request.systemInstruction.indexOf(
         'Write a reflective diary entry, not a transcript recap'

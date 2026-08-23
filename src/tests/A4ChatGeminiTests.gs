@@ -22,6 +22,46 @@ function runA4ChatGeminiTests() {
     }
   }
 
+  function withGeminiConfig_(values, callback) {
+    var original = ConfigRepository;
+    ConfigRepository = {
+      getByKey: function(key) {
+        return Object.prototype.hasOwnProperty.call(values, key)
+          ? { value: values[key] }
+          : null;
+      }
+    };
+    try {
+      return callback();
+    } finally {
+      ConfigRepository = original;
+    }
+  }
+
+  function withGlobalOverrides_(overrides, callback) {
+    var originalValues = {};
+    var originalPresence = {};
+    Object.keys(overrides).forEach(function(key) {
+      originalPresence[key] = Object.prototype.hasOwnProperty.call(
+        globalThis,
+        key
+      );
+      originalValues[key] = globalThis[key];
+      globalThis[key] = overrides[key];
+    });
+    try {
+      return callback();
+    } finally {
+      Object.keys(overrides).forEach(function(key) {
+        if (originalPresence[key]) {
+          globalThis[key] = originalValues[key];
+        } else {
+          delete globalThis[key];
+        }
+      });
+    }
+  }
+
   function expectThrows(name, callback, expectedCode) {
     test(name, function() {
       var thrown = null;
@@ -173,6 +213,309 @@ function runA4ChatGeminiTests() {
     assert(error.retryable === true, 'Rate limit should be retryable.');
   });
 
+  test('Gemini model routing defaults preserve the legacy single model', function() {
+    withGeminiConfig_({
+      GEMINI_MODEL: 'gemini-2.5-flash'
+    }, function() {
+      assert(
+        GeminiClient.__test.resolveConfiguredModel('GENERATION') ===
+          'gemini-2.5-flash',
+        'Generation did not preserve the legacy model.'
+      );
+      assert(
+        GeminiClient.__test.resolveConfiguredModel('UTILITY') ===
+          'gemini-2.5-flash',
+        'Utility work did not preserve the legacy model.'
+      );
+    });
+  });
+
+  test('Gemini model routing config defaults are safe for staged activation', function() {
+    var defaults = {};
+    APP_CONSTANTS.CONFIG_DEFAULTS.forEach(function(entry) {
+      defaults[entry.key] = entry.value;
+    });
+    assert(
+      defaults.GEMINI_MODEL === 'gemini-2.5-flash' &&
+        defaults.GEMINI_MODEL_ROUTING_MODE === 'single' &&
+        defaults.GEMINI_GENERATION_MODEL === 'gemini-3.6-flash' &&
+        defaults.GEMINI_UTILITY_MODEL === 'gemini-3.5-flash-lite',
+      'Gemini model routing defaults cannot preserve and stage the planned rollout.'
+    );
+  });
+
+  test('Gemini split routing resolves generation and utility independently', function() {
+    withGeminiConfig_({
+      GEMINI_MODEL: 'gemini-2.5-flash',
+      GEMINI_MODEL_ROUTING_MODE: 'split',
+      GEMINI_GENERATION_MODEL: 'gemini-3.6-flash',
+      GEMINI_UTILITY_MODEL: 'gemini-3.5-flash-lite'
+    }, function() {
+      var inspection = GeminiClient.inspectRouting();
+      assert(
+        inspection.routingMode === 'split' &&
+          inspection.roles.generation.model === 'gemini-3.6-flash' &&
+          inspection.roles.utility.model === 'gemini-3.5-flash-lite',
+        'Split model routing did not resolve the approved models.'
+      );
+    });
+  });
+
+  expectThrows('Gemini split routing fails closed when a role model is missing', function() {
+    withGeminiConfig_({
+      GEMINI_MODEL: 'gemini-2.5-flash',
+      GEMINI_MODEL_ROUTING_MODE: 'split',
+      GEMINI_GENERATION_MODEL: 'gemini-3.6-flash'
+    }, function() {
+      GeminiClient.__test.resolveConfiguredModel('UTILITY');
+    });
+  }, 'CONFIG_MISSING');
+
+  expectThrows('Gemini routing rejects models outside the allowlist', function() {
+    withGeminiConfig_({
+      GEMINI_MODEL: 'unapproved-model'
+    }, function() {
+      GeminiClient.__test.resolveConfiguredModel('GENERATION');
+    });
+  }, 'CONFIG_MISSING');
+
+  expectThrows('Gemini routing rejects unknown model roles', function() {
+    GeminiClient.__test.normalizeModelRole('BACKGROUND');
+  }, 'CONFIG_MISSING');
+
+  expectThrows('Gemini routing rejects an unknown routing mode', function() {
+    withGeminiConfig_({
+      GEMINI_MODEL: 'gemini-2.5-flash',
+      GEMINI_MODEL_ROUTING_MODE: 'automatic-fallback'
+    }, function() {
+      GeminiClient.__test.resolveConfiguredModel('GENERATION');
+    });
+  }, 'CONFIG_MISSING');
+
+  test('Gemini split routing reaches separate provider endpoints and emits safe metrics', function() {
+    var urls = [];
+    var bodies = [];
+    var metrics = [];
+    withGeminiConfig_({
+      GEMINI_MODEL: 'gemini-2.5-flash',
+      GEMINI_MODEL_ROUTING_MODE: 'split',
+      GEMINI_GENERATION_MODEL: 'gemini-3.6-flash',
+      GEMINI_UTILITY_MODEL: 'gemini-3.5-flash-lite'
+    }, function() {
+      withGlobalOverrides_({
+        PropertiesService: {
+          getScriptProperties: function() {
+            return {
+              getProperty: function(key) {
+                return key === APP_CONSTANTS.PROPERTY_KEYS.GEMINI_API_KEY
+                  ? 'test-api-key'
+                  : null;
+              }
+            };
+          }
+        },
+        UrlFetchApp: {
+          fetch: function(url, options) {
+            urls.push(url);
+            bodies.push(JSON.parse(options.payload));
+            var isUtility = url.indexOf('gemini-3.5-flash-lite') !== -1;
+            var generatedText = isUtility
+              ? JSON.stringify({
+                verdict: 'allow',
+                category: null,
+                evidenceKeys: []
+              })
+              : '生成された返答';
+            return {
+              getResponseCode: function() {
+                return 200;
+              },
+              getContentText: function() {
+                return JSON.stringify({
+                  candidates: [{
+                    finishReason: 'STOP',
+                    content: {
+                      parts: [{ text: generatedText }]
+                    }
+                  }],
+                  usageMetadata: {
+                    promptTokenCount: 4,
+                    candidatesTokenCount: 2
+                  }
+                });
+              }
+            };
+          }
+        },
+        AppLogger: {
+          info: function(operation, _, details) {
+            assert(
+              operation === 'GeminiClient.metric',
+              'Gemini client emitted an unexpected operation.'
+            );
+            metrics.push(details);
+          }
+        }
+      }, function() {
+        var request = {
+          systemInstruction: 'test',
+          contents: [{
+            role: 'user',
+            parts: [{ text: 'test' }]
+          }]
+        };
+        GeminiClient.generateText(
+          request,
+          'GENERATION',
+          { surface: 'CHAT_TEXT_SYNC', source: 'generated' }
+        );
+        GeminiClient.generateStructured(
+          request,
+          'immersion-semantic-verdict',
+          'UTILITY',
+          { surface: 'CHAT_TEXT_SYNC', source: 'verifier' }
+        );
+      });
+    });
+    assert(
+      urls.length === 2 &&
+        urls[0].indexOf('gemini-3.6-flash') !== -1 &&
+        urls[1].indexOf('gemini-3.5-flash-lite') !== -1,
+      'Split routing did not use separate provider endpoints.'
+    );
+    assert(
+      bodies.every(function(body) {
+        return !Object.prototype.hasOwnProperty.call(
+          body.generationConfig,
+          'temperature'
+        );
+      }),
+      'A Gemini 3.x provider request retained temperature.'
+    );
+    assert(
+      metrics.length === 2 &&
+        metrics[0].modelRole === 'GENERATION' &&
+        metrics[0].model === 'gemini-3.6-flash' &&
+        metrics[0].surface === 'CHAT_TEXT_SYNC' &&
+        metrics[0].source === 'generated' &&
+        metrics[1].modelRole === 'UTILITY' &&
+        metrics[1].model === 'gemini-3.5-flash-lite' &&
+        metrics[1].source === 'verifier' &&
+        metrics.every(function(metric) {
+          return metric.outcome === 'SUCCESS' && metric.apiCalls === 1;
+        }),
+      'Gemini routing metrics were incomplete or unsafe.'
+    );
+  });
+
+  test('Gemini rate limits never fall through to the other model role', function() {
+    var urls = [];
+    var thrown = null;
+    withGeminiConfig_({
+      GEMINI_MODEL: 'gemini-2.5-flash',
+      GEMINI_MODEL_ROUTING_MODE: 'split',
+      GEMINI_GENERATION_MODEL: 'gemini-3.6-flash',
+      GEMINI_UTILITY_MODEL: 'gemini-3.5-flash-lite'
+    }, function() {
+      withGlobalOverrides_({
+        PropertiesService: {
+          getScriptProperties: function() {
+            return {
+              getProperty: function() {
+                return 'test-api-key';
+              }
+            };
+          }
+        },
+        UrlFetchApp: {
+          fetch: function(url) {
+            urls.push(url);
+            return {
+              getResponseCode: function() {
+                return 429;
+              },
+              getContentText: function() {
+                return JSON.stringify({
+                  error: { message: 'Rate limit reached.' }
+                });
+              }
+            };
+          }
+        },
+        AppLogger: {
+          info: function() {}
+        }
+      }, function() {
+        try {
+          GeminiClient.generateText({
+            systemInstruction: 'test',
+            contents: [{
+              role: 'user',
+              parts: [{ text: 'test' }]
+            }]
+          }, 'GENERATION', {
+            surface: 'CHAT_TEXT_SYNC',
+            source: 'generated'
+          });
+        } catch (error) {
+          thrown = error;
+        }
+      });
+    });
+    assert(
+      thrown && thrown.code === 'GEMINI_RATE_LIMIT',
+      'The original rate-limit classification was lost.'
+    );
+    assert(
+      urls.length === 1 &&
+        urls[0].indexOf('gemini-3.6-flash') !== -1 &&
+        urls[0].indexOf('gemini-3.5-flash-lite') === -1,
+      'A rate-limited generation request fell through to the utility model.'
+    );
+  });
+
+  test('Gemini 3.x request bodies omit deprecated sampling parameters', function() {
+    [
+      'gemini-3.6-flash',
+      'gemini-3.5-flash-lite'
+    ].forEach(function(model) {
+      var body = GeminiClient.__test.buildRequestBody({
+        systemInstruction: 'test',
+        contents: [{
+          role: 'user',
+          parts: [{ text: 'test' }]
+        }]
+      }, null, null, model);
+      assert(
+        !Object.prototype.hasOwnProperty.call(
+          body.generationConfig,
+          'temperature'
+        ),
+        model + ' retained a deprecated temperature parameter.'
+      );
+    });
+  });
+
+  test('Gemini 2.5 request bodies preserve the existing temperature', function() {
+    var config = GeminiClient.__test.buildGenerationConfigForModel(
+      'gemini-2.5-flash'
+    );
+    assert(
+      config.temperature === 0.4,
+      'The single-model rollback path changed its sampling behavior.'
+    );
+  });
+
+  expectThrows('Gemini 3.x requests reject a prefilled final model turn', function() {
+    GeminiClient.__test.buildRequestBody({
+      systemInstruction: 'test',
+      contents: [{
+        role: 'model',
+        parts: [{ text: 'prefill' }]
+      }]
+    }, null, null, 'gemini-3.6-flash');
+  }, 'GEMINI_BAD_RESPONSE');
+
   test('Gemini error normalization auth failure', function() {
     var error = GeminiClient.__test.mapHttpError(403, {
       error: {
@@ -181,6 +524,22 @@ function runA4ChatGeminiTests() {
     });
     assert(error.code === 'GEMINI_AUTH_FAILED', '403 should map to GEMINI_AUTH_FAILED.');
     assert(error.retryable === false, 'Auth failures should not be retryable.');
+  });
+
+  test('Gemini response extraction never exposes thinking parts', function() {
+    var text = GeminiClient.__test.extractTextFromCandidate({
+      finishReason: 'STOP',
+      content: {
+        parts: [
+          { text: 'private reasoning', thought: true },
+          { text: '利用者へ返す本文' }
+        ]
+      }
+    });
+    assert(
+      text === '利用者へ返す本文',
+      'Thinking content entered the user-visible response.'
+    );
   });
 
   test('Gemini diary structured schema requires array fields', function() {
@@ -371,6 +730,7 @@ function runA4ChatGeminiTests() {
               DIARY_DOC_ID: 'doc',
               TEMP_FOLDER_ID: 'temp',
               BACKUP_FOLDER_ID: 'backup',
+              IMAGE_ARCHIVE_FOLDER_ID: 'image-archive',
               SCHEMA_VERSION: APP_CONSTANTS.SCHEMA_VERSION
             };
           }
@@ -480,6 +840,7 @@ function runA4ChatGeminiTests() {
               DIARY_DOC_ID: 'doc',
               TEMP_FOLDER_ID: 'temp',
               BACKUP_FOLDER_ID: 'backup',
+              IMAGE_ARCHIVE_FOLDER_ID: 'image-archive',
               SCHEMA_VERSION: APP_CONSTANTS.SCHEMA_VERSION
             };
           }
@@ -703,6 +1064,7 @@ function runA4ChatGeminiTests() {
               DIARY_DOC_ID: 'doc',
               TEMP_FOLDER_ID: 'temp',
               BACKUP_FOLDER_ID: 'backup',
+              IMAGE_ARCHIVE_FOLDER_ID: 'image-archive',
               SCHEMA_VERSION: APP_CONSTANTS.SCHEMA_VERSION
             };
           }

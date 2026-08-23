@@ -1062,6 +1062,9 @@ function buildPr9TestLogPayload_(functionName, result) {
   if (functionName === 'inspectPr9PersistenceSafety') {
     return buildPr9PersistenceSafetyLog_(result);
   }
+  if (functionName === 'inspectGeminiModelRouting') {
+    return buildGeminiModelRoutingLog_(result);
+  }
   if (functionName === 'inspectPreviousDiaryReleaseTest') {
     result = result || {};
     return {
@@ -1277,6 +1280,31 @@ function buildPr9PersistenceSafetyLog_(result) {
   };
 }
 
+function buildGeminiModelRoutingLog_(result) {
+  result = result || {};
+  var roles = result.roles || {};
+  var generation = roles.generation || {};
+  var utility = roles.utility || {};
+  return {
+    ok: pr9SafeBoolean_(result.ok),
+    routingMode: pr9SafeLowerToken_(result.routingMode),
+    roles: {
+      generation: {
+        model: pr9SafeGeminiModel_(generation.model),
+        samplingParametersOmitted: pr9SafeBoolean_(
+          generation.samplingParametersOmitted
+        )
+      },
+      utility: {
+        model: pr9SafeGeminiModel_(utility.model),
+        samplingParametersOmitted: pr9SafeBoolean_(
+          utility.samplingParametersOmitted
+        )
+      }
+    }
+  };
+}
+
 function buildPr9ReleaseTestLog_(result) {
   result = result || {};
   return {
@@ -1359,6 +1387,17 @@ function pr9SafeLowerToken_(value) {
   var token = String(value);
   return /^[a-z][a-z0-9_-]{0,63}$/.test(token)
     ? token
+    : null;
+}
+
+function pr9SafeGeminiModel_(value) {
+  var model = value == null ? '' : String(value);
+  return [
+    'gemini-2.5-flash',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash-lite'
+  ].indexOf(model) !== -1
+    ? model
     : null;
 }
 

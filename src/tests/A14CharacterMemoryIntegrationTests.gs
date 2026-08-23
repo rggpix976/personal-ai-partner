@@ -245,6 +245,76 @@ function runA14CharacterMemoryIntegrationTests() {
     );
   });
 
+  test('memory adapter normalizes a nullable unused existing-memory id', function() {
+    var value = candidate();
+    value.existingMemoryId = null;
+    var generated = null;
+    withGlobals({
+      GeminiClient: {
+        generateStructured: function() {
+          return {
+            data: {
+              candidates: [value]
+            }
+          };
+        }
+      }
+    }, function() {
+      generated = CharacterMemoryGeminiAdapter.createSession({
+        allowedSourceMessageIds: [sourceMessageId()]
+      }).generate({
+        context: generationView(),
+        surface: 'MEMORY_EXTRACTION',
+        mode: 'CHARACTER'
+      });
+    });
+    assert(
+      generated &&
+        generated.candidates.length === 1 &&
+        !Object.prototype.hasOwnProperty.call(
+          generated.candidates[0],
+          'existingMemoryId'
+        ),
+      'Nullable unused existingMemoryId was not safely normalized.'
+    );
+  });
+
+  test('memory adapter still rejects a non-null unused existing-memory id', function() {
+    var value = candidate();
+    var error = null;
+    value.existingMemoryId = sourceMessageId();
+    withGlobals({
+      GeminiClient: {
+        generateStructured: function() {
+          return {
+            data: {
+              candidates: [value]
+            }
+          };
+        }
+      }
+    }, function() {
+      try {
+        CharacterMemoryGeminiAdapter.createSession({
+          allowedSourceMessageIds: [sourceMessageId()]
+        }).generate({
+          context: generationView(),
+          surface: 'MEMORY_EXTRACTION',
+          mode: 'CHARACTER'
+        });
+      } catch (caught) {
+        error = caught;
+      }
+    });
+    assert(
+      error &&
+        error.code === 'GEMINI_BAD_RESPONSE' &&
+        error.details &&
+        error.details.safeStage === 'MEMORY_CANDIDATE_SHAPE_INVALID',
+      'A non-null unused existingMemoryId was accepted.'
+    );
+  });
+
   test('memory adapter uses JSON mode before strict local grounding', function() {
     var capturedSchemaName = 'unset';
     var capturedOptions = 'unset';
@@ -253,10 +323,14 @@ function runA14CharacterMemoryIntegrationTests() {
         generateStructured: function(
           request,
           schemaName,
-          schemaOptions
+          modelRole,
+          metricContext
         ) {
           capturedSchemaName = schemaName;
-          capturedOptions = schemaOptions;
+          capturedOptions = {
+            modelRole: modelRole,
+            metricContext: metricContext
+          };
           return {
             data: {
               candidates: [candidate()]
@@ -276,8 +350,10 @@ function runA14CharacterMemoryIntegrationTests() {
     });
     assert(
       capturedSchemaName === null &&
-        capturedOptions === undefined,
-      'Memory generation did not use schema-less JSON mode.'
+        capturedOptions.modelRole === 'UTILITY' &&
+        capturedOptions.metricContext.surface === 'MEMORY_EXTRACTION' &&
+        capturedOptions.metricContext.source === 'generated',
+      'Memory generation did not use schema-less JSON mode on the utility model.'
     );
   });
 

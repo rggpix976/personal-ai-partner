@@ -41,6 +41,7 @@ var CharacterChatGeminiAdapter = (function() {
   ]);
   var SAFE_DIAGNOSTIC_STAGES = Object.freeze([
     'REQUEST_CONTENTS_INVALID',
+    'REQUEST_PREFILLED_MODEL_TURN',
     'STRUCTURED_JSON_INVALID',
     'RESPONSE_TEXT_MISSING',
     'RESPONSE_BLOCKED',
@@ -116,7 +117,9 @@ var CharacterChatGeminiAdapter = (function() {
             function() {
               return GeminiClient.generateStructured(
                 request,
-                'character-chat-image'
+                'character-chat-image',
+                'GENERATION',
+                { surface: input.surface, source: 'generated' }
               );
             }
           );
@@ -129,7 +132,11 @@ var CharacterChatGeminiAdapter = (function() {
           'generated',
           false,
           function() {
-            return GeminiClient.generateText(request);
+            return GeminiClient.generateText(
+              request,
+              'GENERATION',
+              { surface: input.surface, source: 'generated' }
+            );
           }
         );
         var text = response && typeof response.text === 'string'
@@ -170,7 +177,9 @@ var CharacterChatGeminiAdapter = (function() {
             function() {
               return GeminiClient.generateStructured(
                 request,
-                'character-chat-image'
+                'character-chat-image',
+                'GENERATION',
+                { surface: input.surface, source: 'rewrite' }
               );
             }
           );
@@ -183,7 +192,11 @@ var CharacterChatGeminiAdapter = (function() {
           'rewrite',
           false,
           function() {
-            return GeminiClient.generateText(request);
+            return GeminiClient.generateText(
+              request,
+              'GENERATION',
+              { surface: input.surface, source: 'rewrite' }
+            );
           }
         );
         var text = response && typeof response.text === 'string'
@@ -218,7 +231,9 @@ var CharacterChatGeminiAdapter = (function() {
           function() {
             return GeminiClient.generateStructured(
               geminiRequest,
-              'immersion-semantic-verdict'
+              'immersion-semantic-verdict',
+              'UTILITY',
+              { surface: request.surface, source: 'verifier' }
             );
           }
         );

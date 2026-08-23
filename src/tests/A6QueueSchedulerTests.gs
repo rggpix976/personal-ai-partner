@@ -3338,6 +3338,23 @@ function runA6QueueSchedulerTests() {
         issues: [],
         url: secretUrl
       };
+      var routingResult = {
+        ok: true,
+        routingMode: 'split',
+        roles: {
+          generation: {
+            model: 'gemini-3.6-flash',
+            samplingParametersOmitted: true,
+            body: secretBody
+          },
+          utility: {
+            model: 'gemini-3.5-flash-lite',
+            samplingParametersOmitted: true,
+            url: secretUrl
+          }
+        },
+        eventId: secretId
+      };
       var proactiveReadyCalls = 0;
       var results = {};
 
@@ -3394,6 +3411,11 @@ function runA6QueueSchedulerTests() {
         ImmersionSafetyAuditService: {
           inspect: function() {
             return persistenceSafetyResult;
+          }
+        },
+        GeminiClient: {
+          inspectRouting: function() {
+            return routingResult;
           }
         },
         ScriptApp: {
@@ -3468,6 +3490,7 @@ function runA6QueueSchedulerTests() {
         results.policy = inspectProactivePolicy();
         results.persistenceSafety =
           inspectPr9PersistenceSafety();
+        results.routing = inspectGeminiModelRouting();
         results.diaryInspection =
           inspectPreviousDiaryReleaseTest();
         results.diary = runDiaryReleaseTest();
@@ -3490,7 +3513,8 @@ function runA6QueueSchedulerTests() {
         results.health === healthResult &&
           results.policy === policyResult &&
           results.persistenceSafety ===
-            persistenceSafetyResult,
+            persistenceSafetyResult &&
+          results.routing === routingResult,
         'Logging changed an inspection return object.'
       );
       assert(
@@ -3516,7 +3540,7 @@ function runA6QueueSchedulerTests() {
         'Trigger inspection or readiness return behavior changed.'
       );
       assert(
-        logs.length === 11,
+        logs.length === 12,
         'Every PR9 public operator must emit exactly one result line.'
       );
 
@@ -3597,6 +3621,22 @@ function runA6QueueSchedulerTests() {
             .immersion_unsafe_persisted_or_sent_total === 0 &&
           persistenceSafetyLog.url === undefined,
         'Persistence safety log omitted or leaked audit evidence.'
+      );
+
+      var routingLog = readLog('inspectGeminiModelRouting');
+      assert(
+        routingLog.ok === true &&
+          routingLog.routingMode === 'split' &&
+          routingLog.roles.generation.model ===
+            'gemini-3.6-flash' &&
+          routingLog.roles.utility.model ===
+            'gemini-3.5-flash-lite' &&
+          routingLog.roles.generation
+            .samplingParametersOmitted === true &&
+          routingLog.roles.utility
+            .samplingParametersOmitted === true &&
+          routingLog.eventId === undefined,
+        'Gemini routing log omitted or leaked routing evidence.'
       );
 
       [

@@ -204,6 +204,10 @@ var Validators = (function() {
       assertNonEmptyString(propertyMap[keys.DIARY_DOC_ID], keys.DIARY_DOC_ID);
       assertNonEmptyString(propertyMap[keys.TEMP_FOLDER_ID], keys.TEMP_FOLDER_ID);
       assertNonEmptyString(propertyMap[keys.BACKUP_FOLDER_ID], keys.BACKUP_FOLDER_ID);
+      assertNonEmptyString(
+        propertyMap[keys.IMAGE_ARCHIVE_FOLDER_ID],
+        keys.IMAGE_ARCHIVE_FOLDER_ID
+      );
       if (propertyMap[keys.SCHEMA_VERSION] !== APP_CONSTANTS.SCHEMA_VERSION) {
         throw createAppError('CONFIG_MISSING', 'SCHEMA_VERSION does not match the expected version.', {
           actual: propertyMap[keys.SCHEMA_VERSION],

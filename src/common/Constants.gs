@@ -12,6 +12,7 @@ var APP_CONSTANTS = Object.freeze({
     DIARY_DOC_ID: 'DIARY_DOC_ID',
     TEMP_FOLDER_ID: 'TEMP_FOLDER_ID',
     BACKUP_FOLDER_ID: 'BACKUP_FOLDER_ID',
+    IMAGE_ARCHIVE_FOLDER_ID: 'IMAGE_ARCHIVE_FOLDER_ID',
     SCHEMA_VERSION: 'SCHEMA_VERSION',
     WEB_APP_URL: 'WEB_APP_URL',
     OPS_ALERT_STATE: 'OPS_ALERT_STATE'
@@ -187,6 +188,9 @@ var APP_CONSTANTS = Object.freeze({
     { key: 'CHARACTER_PROFILE_V2_REVISION', value: '0', type: 'int', description: 'System-managed v2 character profile revision' },
     { key: 'PROACTIVE_FREQUENCY', value: 'normal', type: 'string', description: 'Proactive interaction frequency preference' },
     { key: 'GEMINI_MODEL', value: 'gemini-2.5-flash', type: 'string', description: 'Default Gemini model name' },
+    { key: 'GEMINI_MODEL_ROUTING_MODE', value: 'single', type: 'string', description: 'Gemini model routing mode: single or split' },
+    { key: 'GEMINI_GENERATION_MODEL', value: 'gemini-3.6-flash', type: 'string', description: 'Gemini model for user-visible generation and rewrites' },
+    { key: 'GEMINI_UTILITY_MODEL', value: 'gemini-3.5-flash-lite', type: 'string', description: 'Gemini model for verification and memory extraction' },
     { key: 'MAX_USER_TEXT_CHARS', value: '4000', type: 'int', description: 'Maximum user text length' },
     { key: 'RECENT_MESSAGE_LIMIT', value: '20', type: 'int', description: 'Recent message context size' },
     { key: 'MEMORY_CONTEXT_LIMIT', value: '20', type: 'int', description: 'Memory context size' },
