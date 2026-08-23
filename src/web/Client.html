@@ -3,8 +3,8 @@
   var bootstrap = window.__A3_BOOTSTRAP__ || {};
 
   var DEFAULT_LABELS = Object.freeze({
-    userName: 'You',
-    partnerName: 'Partner'
+    userName: 'あなた',
+    partnerName: '推し'
   });
 
   var RETRYABLE_CODES = {
@@ -443,7 +443,7 @@
     }
 
     if (attemptIndex >= POLL_DELAYS_SECONDS.length) {
-      setStatus('succeeded', '返信待ち', '返信はまだ生成中です。Refreshで最新状態を確認できます。');
+      setStatus('succeeded', '返信待ち', '返信はまだ生成中です。「更新」で最新状態を確認できます。');
       return;
     }
 
@@ -478,7 +478,7 @@
           schedulePoll(requestId, attemptIndex + 1);
         })
         .catch(function(error) {
-          setStatus('retryable-failure', '状態確認失敗', error.message || '返信状態を確認できませんでした。Refreshで再確認できます。');
+          setStatus('retryable-failure', '状態確認失敗', error.message || '返信状態を確認できませんでした。「更新」で再確認できます。');
           schedulePoll(requestId, attemptIndex + 1);
         });
     }, delaySeconds * 1000);
@@ -1086,7 +1086,7 @@
       bubble.appendChild(createArchivedImageNode(message));
       var imageMeta = document.createElement('div');
       imageMeta.className = 'bubble-image-meta';
-      imageMeta.textContent = 'Image: ' + message.image.name + ' (' + message.image.mimeType + ')';
+      imageMeta.textContent = '画像: ' + message.image.name + '（' + message.image.mimeType + '）';
       bubble.appendChild(imageMeta);
     }
 
@@ -1251,12 +1251,12 @@
 
   function updatePaginationUi() {
     elements.loadOlderButton.disabled = !state.pagination.hasMore || state.loadingOlder;
-    elements.loadOlderButton.textContent = state.loadingOlder ? 'Loading...' : 'Load older messages';
+    elements.loadOlderButton.textContent = state.loadingOlder ? '読み込み中…' : '以前のメッセージを読み込む';
   }
 
   function renderAttachmentMeta() {
     var maxBytes = bootstrap.imageMaxBytes || 4194304;
-    elements.attachmentMeta.textContent = 'JPEG, PNG, or WebP up to ' + formatBytes(maxBytes);
+    elements.attachmentMeta.textContent = 'JPEG、PNG、WebP（' + formatBytes(maxBytes) + 'まで）';
   }
 
   function autoResizeTextarea() {
@@ -1452,7 +1452,7 @@
       return state.system.partnerName;
     }
 
-    return 'System';
+    return 'アプリ';
   }
 
   function formatBytes(bytes) {

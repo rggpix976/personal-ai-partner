@@ -649,7 +649,7 @@ function runA4ChatGeminiTests() {
       status: 'PROCESSING'
     });
     assert(warnings.length === 1, 'Processing event should produce one warning.');
-    assert(warnings[0].indexOf('already in progress') !== -1, 'Processing warning should mention in-progress work.');
+    assert(warnings[0].indexOf('返信を生成しています') !== -1, 'Processing warning should explain the in-progress work in Japanese.');
   });
 
   test('processing event returns queued result from user-message state helper', function() {

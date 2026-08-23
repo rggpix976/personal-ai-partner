@@ -470,7 +470,7 @@ var GeminiClient = (function() {
         {
           retryable: false,
           httpStatus: 400,
-          userMessage: 'The AI could not answer that request.'
+          userMessage: 'AIサービスから返信を受け取れませんでした。'
         }
       );
     }
@@ -541,7 +541,7 @@ var GeminiClient = (function() {
           retryable: false,
           retryStrategy: 'NONE',
           httpStatus: 400,
-          userMessage: 'The AI request could not be processed.'
+          userMessage: 'AIサービスでリクエストを処理できませんでした。'
         }
       );
     }
