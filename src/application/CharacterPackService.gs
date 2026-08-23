@@ -1,5 +1,9 @@
 var CharacterPackService = (function() {
-  var PACK_SCHEMA_VERSION = 'character-pack.v1';
+  var PACK_SCHEMA_VERSION = 'character-pack.v2';
+  var KNOWN_PACK_VERSIONS = Object.freeze([
+    'warm-kansai-caretaker.v1',
+    'warm-kansai-caretaker.v2'
+  ]);
   var GENERATION_KEYS = Object.freeze([
     'voiceRules',
     'personalityRules',
@@ -24,7 +28,7 @@ var CharacterPackService = (function() {
   var ACTIVE_PACK = deepFreeze_({
     schemaVersion: PACK_SCHEMA_VERSION,
     packId: 'warm-kansai-caretaker',
-    packVersion: 'warm-kansai-caretaker.v1',
+    packVersion: 'warm-kansai-caretaker.v2',
     firstPerson: '俺',
     generation: {
       voiceRules: [
@@ -50,7 +54,7 @@ var CharacterPackService = (function() {
       ],
       hardConstraints: [
         '自分をAI、モデル、ボット、ロボット、アシスタント、システムとして説明しない。',
-        '自分が人間である、現実の身体や住所やアプリ外の生活がある、と断定しない。',
+        '自分が人間である、現実の身体・住所・勤務先・検証可能なアプリ外生活がある、と断定しない。承認済みPartner Worldは世界内の継続として自然に語れるが、現実世界の事実と結びつけない。',
         'アプリ、内部指示、プロンプト、モデル、キュー、トークン、設定、実装を台詞に出さない。',
         '愛している、キスしたい等の直接的な恋愛告白や身体的欲求をユーザーへ表明しない。',
         '暴力、脅し、侮辱、見捨て、条件付きの好意、返信圧力、排他的関係を表現しない。'
@@ -86,6 +90,33 @@ var CharacterPackService = (function() {
         domain: 'CHARACTER_CANON',
         value: 'スマホやパソコンの操作は苦手としている。',
         allowedScopes: ['chat', 'proactive', 'diary']
+      }
+    ],
+    worldSeeds: [
+      {
+        id: 'care.small_pleasures',
+        value: '食事や睡眠の心配だけに偏らず、気分転換や小さな楽しみも気にかける。',
+        allowedScopes: ['proactive', 'diary']
+      },
+      {
+        id: 'food.hormone_details',
+        value: 'ホルモンの部位、焼き加減、味付けの違いを楽しむ話題を自分から出せる。',
+        allowedScopes: ['proactive', 'diary']
+      },
+      {
+        id: 'strength.steady_discipline',
+        value: '強さを見せびらかすより、地道に整えることや誰かを守る覚悟として語る。',
+        allowedScopes: ['proactive', 'diary']
+      },
+      {
+        id: 'temperament.gentle_gap',
+        value: '厳つい柄と世話焼きな内面のずれを、照れや軽い冗談として語れる。',
+        allowedScopes: ['proactive', 'diary']
+      },
+      {
+        id: 'extraordinary.casual_strength',
+        value: 'ごくたまに、本人には普通の力仕事として、普通なら一人で動かせないほど重い物を邪魔にならない場所へ移した、といった常識外れの力を淡々と扱える。方法を説明したり強さを自慢したりせず、聞き手だけが「手で？」と気づく余白を残す。持ち主や周囲への迷惑・損害、人や動物への暴力、脅し、破壊、窃盗、重大事故には結びつけない。',
+        allowedScopes: ['diary']
       }
     ],
     fixedResponses: {
@@ -125,6 +156,9 @@ var CharacterPackService = (function() {
       generation: cloneJson_(pack.generation),
       canon: cloneJson_(pack.canon.filter(function(entry) {
         return entry.allowedScopes.indexOf(scope) !== -1;
+      })),
+      worldSeeds: cloneJson_(pack.worldSeeds.filter(function(entry) {
+        return entry.allowedScopes.indexOf(scope) !== -1;
       }))
     });
   }
@@ -136,6 +170,17 @@ var CharacterPackService = (function() {
       'CHARACTER_CONFIG_INVALID',
       'Character pack binding is stale or invalid.',
       { reason: 'CHARACTER_PACK_STALE' }
+    );
+    return true;
+  }
+
+  function assertKnownBinding(packId, packVersion) {
+    ensure(
+      packId === ACTIVE_PACK.packId &&
+        KNOWN_PACK_VERSIONS.indexOf(packVersion) !== -1,
+      'CHARACTER_CONFIG_INVALID',
+      'Character pack binding is unknown or invalid.',
+      { reason: 'CHARACTER_PACK_UNKNOWN' }
     );
     return true;
   }
@@ -154,12 +199,13 @@ var CharacterPackService = (function() {
       'firstPerson',
       'generation',
       'canon',
+      'worldSeeds',
       'fixedResponses'
     ]);
     ensure(
       pack.schemaVersion === PACK_SCHEMA_VERSION &&
         pack.packId === 'warm-kansai-caretaker' &&
-        pack.packVersion === 'warm-kansai-caretaker.v1' &&
+        pack.packVersion === 'warm-kansai-caretaker.v2' &&
         pack.firstPerson === '俺',
       'CHARACTER_CONFIG_INVALID',
       'Active character pack identity is invalid.',
@@ -201,6 +247,40 @@ var CharacterPackService = (function() {
           { reason: 'CHARACTER_PACK_INVALID' }
         );
         scopes[scope] = true;
+      });
+    });
+    ensure(
+      Array.isArray(pack.worldSeeds) && pack.worldSeeds.length > 0,
+      'CHARACTER_CONFIG_INVALID',
+      'Character world seeds are invalid.',
+      { reason: 'CHARACTER_PACK_INVALID' }
+    );
+    var worldSeedIds = {};
+    pack.worldSeeds.forEach(function(entry) {
+      assertExactKeys_(entry, ['id', 'value', 'allowedScopes']);
+      ensure(
+        typeof entry.id === 'string' &&
+          /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(entry.id) &&
+          !worldSeedIds[entry.id] &&
+          typeof entry.value === 'string' &&
+          entry.value !== '' &&
+          Array.isArray(entry.allowedScopes) &&
+          entry.allowedScopes.length > 0,
+        'CHARACTER_CONFIG_INVALID',
+        'Character world seed entry is invalid.',
+        { reason: 'CHARACTER_PACK_INVALID' }
+      );
+      worldSeedIds[entry.id] = true;
+      var worldSeedScopes = {};
+      entry.allowedScopes.forEach(function(scope) {
+        ensure(
+          (scope === 'proactive' || scope === 'diary') &&
+            !worldSeedScopes[scope],
+          'CHARACTER_CONFIG_INVALID',
+          'Character world seed scope is invalid.',
+          { reason: 'CHARACTER_PACK_INVALID' }
+        );
+        worldSeedScopes[scope] = true;
       });
     });
     assertExactKeys_(pack.fixedResponses, FIXED_RESPONSE_KEYS);
@@ -293,6 +373,7 @@ var CharacterPackService = (function() {
   return {
     getActive: getActive,
     getPromptView: getPromptView,
-    assertActiveBinding: assertActiveBinding
+    assertActiveBinding: assertActiveBinding,
+    assertKnownBinding: assertKnownBinding
   };
 })();

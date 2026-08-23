@@ -5,6 +5,8 @@ var CharacterProactiveContextService = (function() {
   var RELEVANT_MEMORY_LIMIT = 5;
   var CONTINUITY_MEMORY_LIMIT = 5;
   var MAX_MEMORY_FACTS = 10;
+  var MAX_RECENT_OUTPUTS = 6;
+  var RECENT_OUTPUT_QUERY_LIMIT = 100;
   var BINDING_KEYS = Object.freeze([
     'profileSchemaVersion',
     'profileRevision',
@@ -28,7 +30,9 @@ var CharacterProactiveContextService = (function() {
       'Proactive character context time is invalid.'
     );
 
-    var recentMessages = loadRecentMessages_();
+    var recentHistory = loadRecentHistory_();
+    var recentMessages = loadRecentMessages_(recentHistory);
+    var recentOutputs = loadRecentOutputs_(recentHistory);
     var acceptedMemories = loadBalancedAcceptedMemories_(
       recentMessages.map(function(message) {
         return message.text;
@@ -52,6 +56,7 @@ var CharacterProactiveContextService = (function() {
       // character evidence merely to give the generator a synthetic prompt.
       currentRequest: null,
       recentMessages: recentMessages,
+      recentOutputs: recentOutputs,
       memories: acceptedMemories,
       userFacts: [],
       sharedFacts: [],
@@ -162,13 +167,20 @@ var CharacterProactiveContextService = (function() {
     });
   }
 
-  function loadRecentMessages_() {
+  function loadRecentHistory_() {
     var limit = getRecentMessageLimit_();
     var queryLimit = Math.max(
-      limit,
+      RECENT_OUTPUT_QUERY_LIMIT,
       limit * HISTORY_QUERY_MULTIPLIER
     );
-    var messages = SheetRepository.listRecentMessages(queryLimit) || [];
+    return SheetRepository.listRecentMessages(queryLimit) || [];
+  }
+
+  function loadRecentMessages_(messages) {
+    var limit = getRecentMessageLimit_();
+    messages = Array.isArray(messages)
+      ? messages
+      : loadRecentHistory_();
     return messages
       .map(normalizeHistoricalMessage_)
       .filter(function(message) {
@@ -177,6 +189,72 @@ var CharacterProactiveContextService = (function() {
       .slice(0, limit)
       .reverse();
   }
+
+  function loadRecentOutputs_(messages) {
+    messages = Array.isArray(messages)
+      ? messages
+      : loadRecentHistory_();
+    return messages
+      .map(normalizeRecentOutput_)
+      .filter(function(output) {
+        return output != null;
+      })
+      .slice(0, MAX_RECENT_OUTPUTS)
+      .reverse();
+  }
+
+  function normalizeRecentOutput_(message) {
+    if (
+      !message ||
+      message.role !== 'system' ||
+      message.messageType !== 'proactive' ||
+      message.status !== 'completed' ||
+      String(message.text || '').trim() === ''
+    ) {
+      return null;
+    }
+    var approval = message.characterApproval;
+    if (
+      !approval ||
+      !isPlainObject_(approval) ||
+      !hasExactKeys_(approval, APP_CONSTANTS.CHARACTER.APPROVAL_FIELDS) ||
+      PARTNER_APPROVAL_SURFACES_.indexOf(approval.surface) === -1 ||
+      (
+        approval.surface === 'PROACTIVE_AI' &&
+        approval.source !== 'generated' &&
+        approval.source !== 'rewrite'
+      ) ||
+      (
+        approval.surface === 'PROACTIVE_RETRY' &&
+        approval.source !== 'legacy_revalidated'
+      ) ||
+      approval.policyVersion !== APP_CONSTANTS.CHARACTER.POLICY_VERSION ||
+      approval.catalogVersion !== APP_CONSTANTS.CHARACTER.CATALOG_VERSION ||
+      approval.profileSchemaVersion !==
+        APP_CONSTANTS.CHARACTER.PROFILE_SCHEMA_VERSION ||
+      !Number.isSafeInteger(Number(approval.profileRevision)) ||
+      Number(approval.profileRevision) < 1
+    ) {
+      return null;
+    }
+    try {
+      CharacterPackService.assertKnownBinding(
+        approval.characterPackId,
+        approval.characterPackVersion
+      );
+    } catch (ignored) {
+      return null;
+    }
+    return {
+      surface: 'proactive',
+      text: String(message.text)
+    };
+  }
+
+  var PARTNER_APPROVAL_SURFACES_ = Object.freeze([
+    'PROACTIVE_AI',
+    'PROACTIVE_RETRY'
+  ]);
 
   function normalizeHistoricalMessage_(message) {
     if (!message || typeof message !== 'object') {
@@ -319,6 +397,9 @@ var CharacterProactiveContextService = (function() {
     classificationSignals: classificationSignals,
     __test: Object.freeze({
       normalizeHistoricalMessage: normalizeHistoricalMessage_,
+      normalizeRecentOutput: normalizeRecentOutput_,
+      loadRecentOutputs: loadRecentOutputs_,
+      loadRecentHistory: loadRecentHistory_,
       getRecentMessageLimit: getRecentMessageLimit_,
       loadBalancedAcceptedMemories: loadBalancedAcceptedMemories_
     })

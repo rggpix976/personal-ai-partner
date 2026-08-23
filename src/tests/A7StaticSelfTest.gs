@@ -46,6 +46,7 @@ function runA7StaticSelfTest() {
     assert(typeof runOperationalHealthCheck === 'function', 'runOperationalHealthCheck is missing.');
     assert(typeof inspectProactivePolicy === 'function', 'inspectProactivePolicy is missing.');
     assert(typeof inspectPr9PersistenceSafety === 'function', 'inspectPr9PersistenceSafety is missing.');
+    assert(typeof inspectCharacterVarietyContext === 'function', 'inspectCharacterVarietyContext is missing.');
     assert(typeof inspectPreviousDiaryReleaseTest === 'function', 'inspectPreviousDiaryReleaseTest is missing.');
     assert(typeof runDiaryReleaseTest === 'function', 'runDiaryReleaseTest is missing.');
     assert(typeof runMemoryReleaseTest === 'function', 'runMemoryReleaseTest is missing.');
@@ -118,6 +119,7 @@ function runA7StaticSelfTest() {
     assert(hasFunction('CharacterPackService', 'getActive'), 'CharacterPackService.getActive is missing.');
     assert(hasFunction('CharacterPackService', 'getPromptView'), 'CharacterPackService.getPromptView is missing.');
     assert(hasFunction('CharacterPackService', 'assertActiveBinding'), 'CharacterPackService.assertActiveBinding is missing.');
+    assert(hasFunction('CharacterPackService', 'assertKnownBinding'), 'CharacterPackService.assertKnownBinding is missing.');
     assert(hasFunction('CharacterContextService', 'buildActive'), 'CharacterContextService.buildActive is missing.');
     assert(hasFunction('CharacterContextService', 'withConversationMode'), 'CharacterContextService.withConversationMode is missing.');
   });

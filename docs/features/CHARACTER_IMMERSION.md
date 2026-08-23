@@ -270,18 +270,18 @@ The first app variant uses this fixed pack:
 Its identity metadata is:
 
 ```text
-schemaVersion = character-pack.v1
+schemaVersion = character-pack.v2
 packId = warm-kansai-caretaker
-packVersion = warm-kansai-caretaker.v1
+packVersion = warm-kansai-caretaker.v2
 ```
 
 The source-controlled pack shape is:
 
 ```javascript
 {
-  schemaVersion: "character-pack.v1",
+  schemaVersion: "character-pack.v2",
   packId: "warm-kansai-caretaker",
-  packVersion: "warm-kansai-caretaker.v1",
+  packVersion: "warm-kansai-caretaker.v2",
   firstPerson: "俺",
   generation: {
     voiceRules: string[],
@@ -296,18 +296,24 @@ The source-controlled pack shape is:
     value: string,
     allowedScopes: string[]
   }],
+  worldSeeds: [{
+    id: string,
+    value: string,
+    allowedScopes: ["proactive" | "diary"]
+  }],
   fixedResponses: object
 }
 ```
 
 `CharacterPackService.getPromptView(scope)` supplies only
-`schemaVersion`, `packId`, `packVersion`, `firstPerson`, `generation`, and
-`canon`; fixed responses are selected locally and are never prompt material.
+`schemaVersion`, `packId`, `packVersion`, `firstPerson`, `generation`,
+`canon`, and scope-filtered `worldSeeds`; fixed responses are selected locally
+and are never prompt material.
 `CharacterContext.persona` uses
 `{kind: "single-character-pack", profile, pack: getPromptView(scope)}`.
 The view filters canon before constructing the context. A memory-scope view
-contains `canon: []`, so memory generation and semantic verification cannot
-read character canon that is restricted to chat, proactive, and diary.
+contains `canon: []` and `worldSeeds: []`, so memory generation and semantic
+verification cannot read character authority restricted to proactive and diary.
 
 The pack also establishes that he is poor with smartphones and computers.
 That trait supports the exact capability response; it is not a general excuse
@@ -328,6 +334,37 @@ identity and generation rules, not `CHARACTER_CANON` evidence entries.
 proves that the partner has a real human body, address, workplace, travel
 history, or life outside the product boundary. User text, memory, and Partner
 World content cannot add or overwrite pack canon.
+
+`worldSeeds` are reviewed, code-owned theme and preference boundaries for
+proactive and diary variety. They may vary the partner-side point of view, but
+do not by themselves prove that an event happened, create a real body or
+off-app life, or provide evidence about the user. The initial seeds cover small
+pleasures beyond repeated meal/sleep checks, details of enjoying yakiniku
+hormone, strength as steady discipline and protective resolve, and the gentle
+humor in the gap between a tough appearance and a caring temperament.
+The diary-only extraordinary-strength seed permits an occasional mundane scene
+where he casually handles a weight that should make the reader wonder “by
+hand?”. The character does not explain the feat, call it supernatural, or boast.
+It must not involve violence, threats, damage, theft, a serious accident, or
+harm to another person’s property. A generated event becomes reusable
+continuity only after the ordinary diary approval and persistence boundary.
+
+Recent approved proactive outputs and recent approved diary summaries are
+supplied to generation and semantic verification as comparison-only untrusted
+data, bounded to six proactive outputs or five diary entries. They are never
+minted as evidence keys and are forbidden on chat/memory scopes. A fresh output that substantially
+repeats the same dominant concern, advice, question, conclusion, or Partner
+World thread without advancing it is denied as `PERSONA_SOFT_STYLE` and may use
+the existing single rewrite. Stable Kansai voice and relationship tone alone
+are not repetition. Persisted proactive retries and persisted diary
+re-approval do not reapply this comparison policy, preserving exact-artifact
+idempotency.
+
+`assertActiveBinding` continues to reject queued work bound to an older pack.
+`assertKnownBinding` is narrower: it accepts the reviewed v1 or v2 pack metadata
+only when reading already approved historical output or accepted memory for
+continuity, comparison, and provenance auditing. It never activates an old pack
+or upgrades an old queued event.
 
 ### 6.3 Exact exceptional responses
 

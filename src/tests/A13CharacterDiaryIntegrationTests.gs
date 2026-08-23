@@ -95,12 +95,22 @@ function runA13CharacterDiaryIntegrationTests() {
         pack: {
           firstPerson: '俺',
           generation: {},
-          canon: {}
+          canon: [],
+          worldSeeds: [{
+            id: 'care.small_pleasures',
+            value: 'Vary the writer perspective.',
+            allowedScopes: ['diary']
+          }]
         }
       },
       data: {
         currentRequest: null,
         recentMessages: [],
+        recentOutputs: [{
+          surface: 'diary',
+          date: '2026-07-22',
+          text: 'RECENT_DIARY_OUTPUT_SENTINEL'
+        }],
         memories: [],
         partnerWorld: {
           scope: 'diary',
@@ -177,6 +187,7 @@ function runA13CharacterDiaryIntegrationTests() {
         '22222222-2222-4222-8222-222222222222'
     }];
     var facts;
+    var outputs;
     withGlobals({
       SheetRepository: {
         listRecentDiarySummariesBefore: function() {
@@ -184,7 +195,7 @@ function runA13CharacterDiaryIntegrationTests() {
         }
       },
       CharacterPackService: {
-        assertActiveBinding: function(packId, packVersion) {
+        assertKnownBinding: function(packId, packVersion) {
           assert(packId === binding().characterPackId, 'Wrong pack id.');
           assert(packVersion === binding().characterPackVersion, 'Wrong pack version.');
           return true;
@@ -196,9 +207,17 @@ function runA13CharacterDiaryIntegrationTests() {
           '2026-07-23',
           10
         );
+      outputs = CharacterDiaryContextService.__test
+        .loadRecentDiaryOutputs('2026-07-23');
     });
     assert(facts.length === 1, 'Unapproved Partner World fact was accepted.');
     assert(facts[0].date === '2026-07-22', 'Approved fact date was lost.');
+    assert(
+      outputs.length === 1 &&
+        outputs[0].date === '2026-07-22' &&
+        outputs[0].text.indexOf(payload.groundedSummary) !== -1,
+      'Approved recent diary comparison history was not normalized safely.'
+    );
   });
 
   test('diary context blends relevant and durable memories without duplicates', function() {
@@ -323,9 +342,57 @@ function runA13CharacterDiaryIntegrationTests() {
       'Diary continuity balance rules were not supplied.'
     );
     assert(
+      calls[0].request.contents[0].parts[0].text.indexOf(
+        'RECENT_DIARY_OUTPUT_SENTINEL'
+      ) !== -1 &&
+        calls[0].request.systemInstruction.indexOf(
+          'Vary the writer perspective.'
+        ) !== -1 &&
+        calls[1].request.contents[0].parts[0].text.indexOf(
+          'RECENT_DIARY_OUTPUT_SENTINEL'
+        ) !== -1,
+      'Diary repetition comparison or trusted world seeds were omitted.'
+    );
+    assert(
       session.getUsage().apiCalls === 2 &&
         session.getUsage().inputTokens === 15,
       'Diary usage was not accumulated.'
+    );
+  });
+
+  test('persisted diary verification does not reapply repetition comparison', function() {
+    var captured = null;
+    withGlobals({
+      GeminiClient: {
+        generateStructured: function(request) {
+          captured = request;
+          return {
+            data: { verdict: 'allow', category: null, evidenceKeys: [] },
+            model: 'test-model',
+            usage: null
+          };
+        }
+      }
+    }, function() {
+      CharacterDiaryGeminiAdapter.createSession({
+        diaryDate: '2026-07-23'
+      }).verify({
+        context: makeContext(),
+        surface: 'DIARY',
+        claimType: 'general',
+        category: null,
+        requiresEvidence: false,
+        knownEvidenceKeys: [],
+        evidenceView: [],
+        textFields: ['今日のこと'],
+        payload: diaryPayload()
+      });
+    });
+    assert(
+      captured.contents[0].parts[0].text.indexOf(
+        'RECENT_DIARY_OUTPUT_SENTINEL'
+      ) === -1,
+      'Persisted diary artifact was incorrectly subjected to repetition comparison.'
     );
   });
 

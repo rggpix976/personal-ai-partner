@@ -78,6 +78,11 @@ function runA12CharacterProactiveGeminiAdapterTests() {
             domain: 'CHARACTER_CANON',
             value: 'Likes grilled food.',
             allowedScopes: ['proactive']
+          }],
+          worldSeeds: [{
+            id: 'food.detail',
+            value: 'Can discuss details about grilled food.',
+            allowedScopes: ['proactive']
           }]
         }
       },
@@ -87,6 +92,10 @@ function runA12CharacterProactiveGeminiAdapterTests() {
           role: 'user',
           type: 'text',
           text: recentText || 'UNTRUSTED_HISTORY_SENTINEL'
+        }],
+        recentOutputs: [{
+          surface: 'proactive',
+          text: 'RECENT_APPROVED_OUTPUT_SENTINEL'
         }],
         memories: [],
         userFacts: [],
@@ -232,6 +241,18 @@ function runA12CharacterProactiveGeminiAdapterTests() {
         'UNTRUSTED_HISTORY_SENTINEL'
       ) !== -1,
       'Approved conversation evidence was not supplied as untrusted data.'
+    );
+    assert(
+      captured.contents[0].parts[0].text.indexOf(
+        'RECENT_APPROVED_OUTPUT_SENTINEL'
+      ) !== -1 &&
+        captured.systemInstruction.indexOf(
+          'RECENT_APPROVED_OUTPUT_SENTINEL'
+        ) === -1 &&
+        captured.systemInstruction.indexOf(
+          'Can discuss details about grilled food.'
+        ) !== -1,
+      'Recent output comparison or trusted world seeds crossed the prompt boundary.'
     );
     assert(
       captured.systemInstruction.indexOf(
@@ -492,6 +513,53 @@ function runA12CharacterProactiveGeminiAdapterTests() {
         'Verifier usage was not aggregated.'
       );
     });
+  });
+
+  test('fresh proactive verification compares recent outputs but persisted retry does not', function() {
+    var requests = [];
+    withGeminiStub({
+      generateStructured: function(request, schemaName) {
+        requests.push({ request: request, schemaName: schemaName });
+        if (schemaName === 'character-proactive') {
+          return {
+            data: { subject: 'New topic', body: 'A different thought.' },
+            model: 'test-model',
+            usage: null
+          };
+        }
+        return {
+          data: { verdict: 'allow', category: null, evidenceKeys: [] },
+          model: 'test-model',
+          usage: null
+        };
+      }
+    }, function() {
+      var context = generationView();
+      var fresh = CharacterProactiveGeminiAdapter.createSession({});
+      var payload = fresh.generate({
+        context: context,
+        surface: 'PROACTIVE_AI',
+        mode: 'CHARACTER'
+      });
+      fresh.verify(verifierRequest(context, 'PROACTIVE_AI', payload));
+
+      var persisted = CharacterProactiveGeminiAdapter.createSession({});
+      persisted.verify(verifierRequest(
+        context,
+        'PROACTIVE_RETRY',
+        payload
+      ));
+    });
+    var freshVerifier = requests[1].request.contents[0].parts[0].text;
+    var persistedVerifier = requests[2].request.contents[0].parts[0].text;
+    assert(
+      freshVerifier.indexOf('RECENT_APPROVED_OUTPUT_SENTINEL') !== -1,
+      'Fresh proactive verification omitted recent output comparison.'
+    );
+    assert(
+      persistedVerifier.indexOf('RECENT_APPROVED_OUTPUT_SENTINEL') === -1,
+      'Persisted proactive retry was incorrectly subjected to repetition comparison.'
+    );
   });
 
   test('session callbacks satisfy coordinator new and retry contracts', function() {

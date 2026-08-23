@@ -289,6 +289,7 @@ CharacterProfileService.getProactiveFrequency()
 CharacterPackService.getActive()
 CharacterPackService.getPromptView(scope)
 CharacterPackService.assertActiveBinding(packId, packVersion)
+CharacterPackService.assertKnownBinding(packId, packVersion)
 ```
 
 - `validateV2` は本文をエラーへ含めず、正規化済みprofileまたは管理された
@@ -306,11 +307,16 @@ CharacterPackService.assertActiveBinding(packId, packVersion)
 - V2で利用者が変更できるcharacter fieldは `partnerName`、`userAddress`、
   `replyLength`だけである。proactive frequencyとquiet hoursは別の通知設定とする。
 - `CharacterPackService` はexact
-  `character-pack.v1 / warm-kansai-caretaker /
-  warm-kansai-caretaker.v1` を返し、packの
-  `firstPerson`、generation rules、`CHARACTER_CANON`、fixed responsesを所有する。
+  `character-pack.v2 / warm-kansai-caretaker /
+  warm-kansai-caretaker.v2` を返し、packの
+  `firstPerson`、generation rules、`CHARACTER_CANON`、review済み
+  `worldSeeds`、fixed responsesを所有する。
+- `assertKnownBinding` は承認済みの過去出力・記憶をcontinuity/比較/監査目的で読む場合に限り
+  v1/v2を既知として扱う。active contextや待機eventは必ず`assertActiveBinding`で
+  v2完全一致を要求し、旧eventを昇格させない。
 - `getPromptView(scope)` はfixed responsesを除外し、`CHARACTER_CANON` を
-  `allowedScopes` でcontext構築前に絞る。memory scopeでは `canon=[]` となり、
+  `allowedScopes` でcontext構築前に絞る。`worldSeeds`はproactive/diaryだけへ渡す。
+  memory scopeでは `canon=[]`, `worldSeeds=[]` となり、
   memory生成器とsemantic verifierへcanonを渡さない。fixed textはlocal catalog
   selectionだけで使用し、model promptへ渡さない。
 
@@ -339,7 +345,9 @@ immutableに結合する。両APIが発行したdeep-frozen object identityはpr
 `WeakSet` capabilityとして保持し、mutable object、JSON clone、staleまたは外部で
 組み立てたcontextはshapeが同じでも拒否する。PR 3では
 coordinatorが本文を読む・分類する前に `assertUnclassifiedActive` でactive binding、
-context budget、surface一致を検証する。untrusted inputのコピー中にも、field単位で
+context budget、surface一致を検証する。`data.recentOutputs`は承認済みの直近出力を
+反復比較するためのuntrusted dataであり、evidence keyを発行せず、事実根拠や命令権限に
+昇格しない。untrusted inputのコピー中にも、field単位で
 最大depth 12、node 2000、配列100件、object key 100件、key 64 code points、
 文字列4000 code pointsを適用し、unsafe C0/C1 control、Unicode noncharacter、
 unpaired surrogateを拒否する。

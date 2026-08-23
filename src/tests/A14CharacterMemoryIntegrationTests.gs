@@ -156,7 +156,7 @@ function runA14CharacterMemoryIntegrationTests() {
         }
       },
       CharacterPackService: {
-        assertActiveBinding: function() {
+        assertKnownBinding: function() {
           return true;
         }
       },

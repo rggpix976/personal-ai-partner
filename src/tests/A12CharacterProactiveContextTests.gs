@@ -132,7 +132,10 @@ function runA12CharacterProactiveContextTests() {
       },
       SheetRepository: {
         listRecentMessages: function(limit) {
-          assert(limit === 12, 'History query limit was not bounded.');
+          assert(
+            limit === 100,
+            'History query limit was not bounded.'
+          );
           return messages;
         }
       },
@@ -151,6 +154,7 @@ function runA12CharacterProactiveContextTests() {
 
     assert(captured.surface === 'proactive', 'Context scope must be proactive.');
     assert(captured.currentRequest === null, 'Proactive currentRequest must be null.');
+    assert(captured.recentOutputs.length === 0, 'Unapproved proactive output entered comparison history.');
     assert(captured.memories.length === 0, 'Legacy memory entered proactive context.');
     assert(captured.userFacts.length === 0, 'Unintegrated user facts must remain empty.');
     assert(captured.sharedFacts.length === 0, 'Unintegrated shared facts must remain empty.');
@@ -243,6 +247,58 @@ function runA12CharacterProactiveContextTests() {
         approved.role === 'assistant' &&
         approved.text === 'approved assistant',
       'An approved completed assistant row was lost.'
+    );
+  });
+
+  test('recent proactive output comparison accepts only complete known approvals', function() {
+    var normalize = CharacterProactiveContextService.__test
+      .normalizeRecentOutput;
+    var approved = chatApproval('PROACTIVE_AI');
+    approved.characterPackVersion = 'warm-kansai-caretaker.v1';
+    assert(
+      normalize({
+        role: 'system',
+        messageType: 'proactive',
+        text: 'approved historical output',
+        status: 'completed',
+        characterApproval: approved
+      }).text === 'approved historical output',
+      'Known historical proactive output was not accepted.'
+    );
+    var incomplete = Object.assign({}, approved);
+    delete incomplete.catalogVersion;
+    assert(
+      normalize({
+        role: 'system',
+        messageType: 'proactive',
+        text: 'unapproved output',
+        status: 'completed',
+        characterApproval: incomplete
+      }) === null,
+      'Incomplete proactive approval entered comparison history.'
+    );
+    var retry = chatApproval('PROACTIVE_RETRY');
+    retry.source = 'legacy_revalidated';
+    assert(
+      normalize({
+        role: 'system',
+        messageType: 'proactive',
+        text: 'approved retry output',
+        status: 'completed',
+        characterApproval: retry
+      }).text === 'approved retry output',
+      'Approved exact retry output was not accepted.'
+    );
+    retry.source = 'generated';
+    assert(
+      normalize({
+        role: 'system',
+        messageType: 'proactive',
+        text: 'invalid regenerated retry',
+        status: 'completed',
+        characterApproval: retry
+      }) === null,
+      'A regenerated retry entered comparison history.'
     );
   });
 

@@ -795,7 +795,7 @@ var ImmersionSafetyAuditService = (function() {
       !PACK_VERSION_PATTERN.test(
         approval.characterPackVersion
       ) ||
-      !isActivePackBinding_(
+      !isKnownPackBinding_(
         approval.characterPackId,
         approval.characterPackVersion
       )
@@ -849,7 +849,7 @@ var ImmersionSafetyAuditService = (function() {
       PACK_ID_PATTERN.test(binding.characterPackId) &&
       typeof binding.characterPackVersion === 'string' &&
       PACK_VERSION_PATTERN.test(binding.characterPackVersion) &&
-      isActivePackBinding_(
+      isKnownPackBinding_(
         binding.characterPackId,
         binding.characterPackVersion
       );
@@ -1135,14 +1135,12 @@ var ImmersionSafetyAuditService = (function() {
     );
   }
 
-  function isActivePackBinding_(packId, packVersion) {
+  function isKnownPackBinding_(packId, packVersion) {
     try {
-      var active = CharacterPackService.getActive();
-      return Boolean(
-        active &&
-        packId === active.packId &&
-        packVersion === active.packVersion
-      );
+      return CharacterPackService.assertKnownBinding(
+        packId,
+        packVersion
+      ) === true;
     } catch (ignored) {
       return false;
     }

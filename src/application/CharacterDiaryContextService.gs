@@ -4,6 +4,7 @@ var CharacterDiaryContextService = (function() {
   var RELEVANT_MEMORY_LIMIT = 6;
   var CONTINUITY_MEMORY_LIMIT = 4;
   var MAX_MEMORY_FACTS = 10;
+  var MAX_RECENT_DIARY_OUTPUTS = 5;
   var BINDING_KEYS = Object.freeze([
     'profileSchemaVersion',
     'profileRevision',
@@ -38,9 +39,15 @@ var CharacterDiaryContextService = (function() {
     var messages = Array.isArray(input.messages)
       ? input.messages
       : SheetRepository.listMessagesByDate(input.diaryDate);
+    var recentDiaryRows = loadRecentDiaryRows_(input.diaryDate);
     var approvedFacts = loadApprovedPartnerWorldFacts_(
       input.diaryDate,
-      input.partnerWorldFactLimit
+      input.partnerWorldFactLimit,
+      recentDiaryRows
+    );
+    var recentOutputs = loadRecentDiaryOutputs_(
+      input.diaryDate,
+      recentDiaryRows
     );
     var acceptedMemories = loadBalancedAcceptedMemories_(
       messages.map(function(message) {
@@ -58,6 +65,7 @@ var CharacterDiaryContextService = (function() {
           return message != null;
         })
         .slice(-MAX_MESSAGES),
+      recentOutputs: recentOutputs,
       memories: acceptedMemories,
       userFacts: [],
       sharedFacts: [],
@@ -202,7 +210,20 @@ var CharacterDiaryContextService = (function() {
     return normalized;
   }
 
-  function loadApprovedPartnerWorldFacts_(diaryDate, limit) {
+  function loadRecentDiaryRows_(diaryDate) {
+    if (
+      !SheetRepository ||
+      typeof SheetRepository.listRecentDiarySummariesBefore !== 'function'
+    ) {
+      return [];
+    }
+    return SheetRepository.listRecentDiarySummariesBefore(
+      diaryDate,
+      Math.max(MAX_PARTNER_WORLD_FACTS, MAX_RECENT_DIARY_OUTPUTS)
+    ) || [];
+  }
+
+  function loadApprovedPartnerWorldFacts_(diaryDate, limit, rowsOverride) {
     var normalizedLimit = Number(limit);
     if (!isFinite(normalizedLimit) || normalizedLimit < 1) {
       normalizedLimit = MAX_PARTNER_WORLD_FACTS;
@@ -217,10 +238,12 @@ var CharacterDiaryContextService = (function() {
     ) {
       return [];
     }
-    var rows = SheetRepository.listRecentDiarySummariesBefore(
-      diaryDate,
-      normalizedLimit
-    ) || [];
+    var rows = Array.isArray(rowsOverride)
+      ? rowsOverride.slice(0, normalizedLimit)
+      : SheetRepository.listRecentDiarySummariesBefore(
+        diaryDate,
+        normalizedLimit
+      ) || [];
     var facts = [];
     rows.forEach(function(row) {
       var provenance = normalizeApprovedDiaryRow_(row);
@@ -237,6 +260,40 @@ var CharacterDiaryContextService = (function() {
       });
     });
     return facts;
+  }
+
+  function loadRecentDiaryOutputs_(diaryDate, rowsOverride) {
+    if (
+      !SheetRepository ||
+      typeof SheetRepository.listRecentDiarySummariesBefore !== 'function'
+    ) {
+      return [];
+    }
+    var rows = Array.isArray(rowsOverride)
+      ? rowsOverride.slice(0, MAX_RECENT_DIARY_OUTPUTS)
+      : SheetRepository.listRecentDiarySummariesBefore(
+        diaryDate,
+        MAX_RECENT_DIARY_OUTPUTS
+      ) || [];
+    return rows.map(function(row) {
+      var provenance = normalizeApprovedDiaryRow_(row);
+      if (!provenance) {
+        return null;
+      }
+      return {
+        surface: 'diary',
+        date: String(row.summary_date),
+        text: [
+          provenance.payload.title,
+          provenance.payload.narrative,
+          provenance.payload.groundedSummary
+        ].concat(
+          provenance.payload.partnerWorldEvents
+        ).join('\n')
+      };
+    }).filter(function(output) {
+      return output != null;
+    }).slice(0, MAX_RECENT_DIARY_OUTPUTS).reverse();
   }
 
   function normalizeApprovedDiaryRow_(row) {
@@ -268,7 +325,7 @@ var CharacterDiaryContextService = (function() {
       return null;
     }
     try {
-      CharacterPackService.assertActiveBinding(
+      CharacterPackService.assertKnownBinding(
         approval.characterPackId,
         approval.characterPackVersion
       );
@@ -354,6 +411,8 @@ var CharacterDiaryContextService = (function() {
     __test: Object.freeze({
       normalizeHistoricalMessage: normalizeHistoricalMessage_,
       normalizeApprovedDiaryRow: normalizeApprovedDiaryRow_,
+      loadRecentDiaryOutputs: loadRecentDiaryOutputs_,
+      loadRecentDiaryRows: loadRecentDiaryRows_,
       loadApprovedPartnerWorldFacts: loadApprovedPartnerWorldFacts_,
       loadBalancedAcceptedMemories: loadBalancedAcceptedMemories_
     })
