@@ -140,6 +140,14 @@ function assessCompletedDiaryGeneration(eventId) {
   return DiaryService.assessCompletedGeneration(eventId);
 }
 
+function inspectUnresolvedProactiveDeliveries() {
+  return ProactiveMessageService.inspectUnresolvedDeliveries();
+}
+
+function quarantineUnresolvedProactiveDeliveries() {
+  return ProactiveMessageService.quarantineUnresolvedDeliveries();
+}
+
 function reconcileCompletedDiaryGeneration(eventId) {
   return DiaryService.reconcileCompletedGeneration(eventId);
 }
@@ -214,6 +222,17 @@ function postDispatchSuccess_(event, result) {
   }
   if (event.eventType === 'PROACTIVE_SEND' && result && result.sent) {
     return;
+  }
+  if (
+    event.eventType === 'PROACTIVE_SEND' &&
+    result &&
+    result.reason === 'DELIVERY_IN_PROGRESS'
+  ) {
+    throw createAppError(
+      'PROACTIVE_DELIVERY_UNRESOLVED',
+      'A proactive delivery marker is still owned by another lifecycle.',
+      { reason: 'DELIVERY_IN_PROGRESS' }
+    );
   }
 }
 

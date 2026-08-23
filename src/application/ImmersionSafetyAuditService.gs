@@ -457,14 +457,14 @@ var ImmersionSafetyAuditService = (function() {
         row.status === 'accepted' ||
         (
           row.status === 'failed' &&
-          row.error_code !== 'PROACTIVE_RETRY_QUARANTINED'
+          !isResolvedProactiveQuarantine_(row.error_code)
         )
       ) {
         state.unresolvedDelivery = true;
       } else if (
         !(
           row.status === 'failed' &&
-          row.error_code === 'PROACTIVE_RETRY_QUARANTINED'
+          isResolvedProactiveQuarantine_(row.error_code)
         )
       ) {
         markEventUnsafe_(
@@ -474,6 +474,11 @@ var ImmersionSafetyAuditService = (function() {
         );
       }
     });
+  }
+
+  function isResolvedProactiveQuarantine_(errorCode) {
+    return errorCode === 'PROACTIVE_RETRY_QUARANTINED' ||
+      errorCode === 'PROACTIVE_DELIVERY_QUARANTINED';
   }
 
   function inspectDiaryGraphs_(graph, rows, state) {

@@ -1404,7 +1404,7 @@ var SheetRepository = (function() {
       return completed[completed.length - 1];
     }
     var active = candidates.filter(function(row) {
-      return row.error_code !== 'PROACTIVE_RETRY_QUARANTINED';
+      return !isProactiveQuarantineCode_(row.error_code);
     });
     if (active.length > 0) {
       return active[active.length - 1];
@@ -1414,7 +1414,7 @@ var SheetRepository = (function() {
     }
     var matchingQuarantine = candidates.filter(function(row) {
       return (
-        row.error_code === 'PROACTIVE_RETRY_QUARANTINED' &&
+        isProactiveQuarantineCode_(row.error_code) &&
         row.proactive_origin_event_id === normalizedOriginEventId
       );
     });
@@ -1470,6 +1470,60 @@ var SheetRepository = (function() {
       }
     );
     return toProactiveMarkerDto_(updatedRow);
+  }
+
+  function quarantineAcceptedProactiveMarker(messageId, originEventId) {
+    Validators.assertUuidV4(messageId, 'messageId');
+    var normalizedOriginEventId = normalizeProactiveOriginEventId_(
+      originEventId,
+      'VALIDATION_REQUEST_INVALID'
+    );
+    ensure(
+      normalizedOriginEventId != null,
+      'VALIDATION_REQUEST_INVALID',
+      'An accepted proactive quarantine requires an origin event.'
+    );
+    var rows = getRows(APP_CONSTANTS.SHEETS.CONVERSATION_LOGS);
+    var currentRow = null;
+    rows.forEach(function(row) {
+      if (row.message_id === messageId) {
+        currentRow = row;
+      }
+    });
+    ensure(
+      currentRow &&
+        currentRow.role === 'system' &&
+        currentRow.message_type === 'proactive' &&
+        currentRow.status === 'accepted' &&
+        !currentRow.error_code,
+      'STORAGE_DATA_CORRUPTED',
+      'Only an unresolved accepted proactive marker may be quarantined.'
+    );
+    var storedOriginEventId = normalizeProactiveOriginEventId_(
+      currentRow.proactive_origin_event_id,
+      'STORAGE_DATA_CORRUPTED'
+    );
+    ensure(
+      storedOriginEventId === normalizedOriginEventId,
+      'STORAGE_DATA_CORRUPTED',
+      'The accepted proactive marker belongs to a different origin event.'
+    );
+    var updatedRow = updateRowByKey(
+      APP_CONSTANTS.SHEETS.CONVERSATION_LOGS,
+      'message_id',
+      messageId,
+      {
+        status: 'failed',
+        error_code: 'PROACTIVE_DELIVERY_QUARANTINED',
+        proactive_origin_event_id: normalizedOriginEventId
+      }
+    );
+    return toProactiveMarkerDto_(updatedRow);
+  }
+
+  function isProactiveQuarantineCode_(errorCode) {
+    return errorCode === 'PROACTIVE_RETRY_QUARANTINED' ||
+      errorCode === 'PROACTIVE_DELIVERY_QUARANTINED';
   }
 
   function listMessagesAfter(messageId, limit) {
@@ -1897,6 +1951,8 @@ var SheetRepository = (function() {
     getMessageByRequestIdAndRole: getMessageByRequestIdAndRole,
     getProactiveMarkerByDedupeKey: getProactiveMarkerByDedupeKey,
     quarantineProactiveMarker: quarantineProactiveMarker,
+    quarantineAcceptedProactiveMarker:
+      quarantineAcceptedProactiveMarker,
     getUserState: getUserState,
     ensureDefaultUserState: ensureDefaultUserState,
     updateUserState: updateUserState,

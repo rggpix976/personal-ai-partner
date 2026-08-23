@@ -992,6 +992,64 @@ function runA2PlatformTests() {
         'Origin-bound quarantine lookup did not recover its audit row.'
       );
 
+      var acceptedMessageId =
+        'abababab-abab-4bab-8bab-abababababab';
+      var acceptedOriginEventId =
+        'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd';
+      var acceptedDedupeKey =
+        'PROACTIVE_MESSAGE:2026-07-24:accepted';
+      SheetRepository.appendConversation({
+        messageId: acceptedMessageId,
+        requestId: acceptedDedupeKey,
+        createdAt: '2026-07-24T09:05:00+09:00',
+        role: 'system',
+        messageType: 'proactive',
+        text: 'ambiguous proactive body',
+        proactiveSubject: 'ambiguous proactive subject',
+        proactiveOriginEventId: acceptedOriginEventId,
+        status: 'accepted',
+        characterApproval: proactiveApproval
+      });
+      var acceptedForeignError = null;
+      try {
+        SheetRepository.quarantineAcceptedProactiveMarker(
+          acceptedMessageId,
+          proactiveOriginEventId
+        );
+      } catch (error) {
+        acceptedForeignError = error;
+      }
+      assert(
+        acceptedForeignError &&
+          acceptedForeignError.code ===
+            'STORAGE_DATA_CORRUPTED',
+        'A foreign event quarantined an accepted marker.'
+      );
+      var acceptedQuarantine =
+        SheetRepository.quarantineAcceptedProactiveMarker(
+          acceptedMessageId,
+          acceptedOriginEventId
+        );
+      assert(
+        acceptedQuarantine.status === 'failed' &&
+          acceptedQuarantine.error &&
+          acceptedQuarantine.error.code ===
+            'PROACTIVE_DELIVERY_QUARANTINED' &&
+          acceptedQuarantine.proactiveOriginEventId ===
+            acceptedOriginEventId,
+        'Accepted marker was not quarantined without content mutation.'
+      );
+      assert(
+        SheetRepository.getProactiveMarkerByDedupeKey(
+          acceptedDedupeKey
+        ) === null &&
+          SheetRepository.getProactiveMarkerByDedupeKey(
+            acceptedDedupeKey,
+            acceptedOriginEventId
+          ).messageId === acceptedMessageId,
+        'Delivery quarantine lookup escaped its origin boundary.'
+      );
+
       var legacyMessageId =
         'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
       var legacyOriginEventId =

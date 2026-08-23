@@ -1460,6 +1460,73 @@ function runA6QueueSchedulerTests() {
     );
   });
 
+  test(
+    'delivery in progress is retried instead of being marked DONE',
+    function() {
+      var doneCount = 0;
+      var retry = null;
+      var event = {
+        eventId: '11111111-1111-4111-8111-111111111111',
+        eventType: 'PROACTIVE_SEND',
+        attemptCount: 0,
+        lockedBy:
+          'queue-lease:v1:22222222-2222-4222-8222-222222222222',
+        payload: {
+          targetDate: '2099-07-08'
+        }
+      };
+      withOverrides({
+        ProactiveMessageService: {
+          prepareDispatch: function() {
+            return {
+              eligible: false,
+              reason: 'DELIVERY_IN_PROGRESS',
+              message: null,
+              createdAt: '2026-07-08T12:00:00+09:00'
+            };
+          },
+          send: function() {
+            throw new Error('Unresolved delivery reached Gmail.');
+          }
+        },
+        QueueService: {
+          markDone: function() {
+            doneCount += 1;
+          },
+          markRetry: function(eventId, error, nextAttemptAt, leaseToken) {
+            retry = {
+              eventId: eventId,
+              error: error,
+              nextAttemptAt: nextAttemptAt,
+              leaseToken: leaseToken
+            };
+          },
+          markDead: function() {
+            throw new Error('First unresolved delivery became DEAD.');
+          }
+        },
+        SheetRepository: {
+          incrementUsageDaily: function() {}
+        },
+        AppLogger: {
+          writeDebugLog: function() {}
+        }
+      }, function() {
+        processSingleQueueEvent_(event, generateUuidV4());
+      });
+      assert(doneCount === 0, 'Unresolved delivery was marked DONE.');
+      assert(
+        retry &&
+          retry.eventId === event.eventId &&
+          retry.error.code ===
+            'PROACTIVE_DELIVERY_UNRESOLVED' &&
+          retry.leaseToken === event.lockedBy &&
+          retry.nextAttemptAt instanceof Date,
+        'Unresolved delivery did not enter controlled retry.'
+      );
+    }
+  );
+
   test('PROACTIVE_SEND preserves the enqueue decision and skips after new user activity', function() {
     var done = [];
     var sendCalls = 0;
