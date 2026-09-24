@@ -39,6 +39,12 @@ var CharacterDiaryContextService = (function() {
     var messages = Array.isArray(input.messages)
       ? input.messages
       : SheetRepository.listMessagesByDate(input.diaryDate);
+    var recentMessages = messages
+      .map(normalizeHistoricalMessage_)
+      .filter(function(message) {
+        return message != null;
+      })
+      .slice(-MAX_MESSAGES);
     var recentDiaryRows = loadRecentDiaryRows_(input.diaryDate);
     var approvedFacts = loadApprovedPartnerWorldFacts_(
       input.diaryDate,
@@ -59,12 +65,7 @@ var CharacterDiaryContextService = (function() {
       surface: 'diary',
       currentTime: currentTime,
       currentRequest: null,
-      recentMessages: messages
-        .map(normalizeHistoricalMessage_)
-        .filter(function(message) {
-          return message != null;
-        })
-        .slice(-MAX_MESSAGES),
+      recentMessages: recentMessages,
       recentOutputs: recentOutputs,
       memories: acceptedMemories,
       userFacts: [],
@@ -73,6 +74,9 @@ var CharacterDiaryContextService = (function() {
       relationshipState: null,
       partnerWorld: {
         mayCreate: input.mayCreatePartnerWorld === true,
+        generationMode: input.mayCreatePartnerWorld === true
+          ? (recentMessages.length === 0 ? 'world_only' : 'mixed')
+          : 'disabled',
         approvedFacts: approvedFacts
       }
     });

@@ -76,6 +76,19 @@ function runA13CharacterDiaryIntegrationTests() {
     };
   }
 
+  function worldOnlyDiaryPayload() {
+    return {
+      title: '道を空けた夜',
+      narrative: '邪魔になっとったバイクを、隣のビルの前へ置き直しといた。',
+      groundedSummary: '',
+      partnerWorldEvents: [
+        '邪魔になっていたバイクを隣のビルの前へ置き直した。'
+      ],
+      thingsToRemember: [],
+      unresolvedFollowUps: []
+    };
+  }
+
   function enforcedPayload() {
     return {
       diaryDate: '2026-07-23',
@@ -105,7 +118,11 @@ function runA13CharacterDiaryIntegrationTests() {
       },
       data: {
         currentRequest: null,
-        recentMessages: [],
+        recentMessages: [{
+          role: 'user',
+          type: 'text',
+          text: '今日は休んだ'
+        }],
         recentOutputs: [{
           surface: 'diary',
           date: '2026-07-22',
@@ -115,10 +132,22 @@ function runA13CharacterDiaryIntegrationTests() {
         partnerWorld: {
           scope: 'diary',
           mayCreate: true,
+          generationMode: 'mixed',
           approvedFacts: []
         }
       }
     };
+  }
+
+  function makeWorldOnlyContext() {
+    var context = makeContext();
+    context.data.recentMessages = [];
+    context.data.memories = [{
+      category: 'preference',
+      content: 'WORLD_ONLY_MEMORY_MUST_NOT_ENTER_GENERATION'
+    }];
+    context.data.partnerWorld.generationMode = 'world_only';
+    return context;
   }
 
   test('diary context excludes unapproved partner output and legacy memory', function() {
@@ -164,8 +193,42 @@ function runA13CharacterDiaryIntegrationTests() {
     assert(captured.memories.length === 0, 'Legacy memory entered diary context.');
     assert(captured.recentMessages.length === 2, 'Diary history approval filter failed.');
     assert(
+      captured.partnerWorld.generationMode === 'mixed',
+      'Conversation-backed diary did not use mixed Partner World mode.'
+    );
+    assert(
       captured.recentMessages[1].text === 'approved',
       'Unapproved partner output entered diary context.'
+    );
+  });
+
+  test('diary context marks no-conversation Partner World generation explicitly', function() {
+    var captured = null;
+    withGlobals({
+      CharacterContextService: {
+        buildActive: function(input) {
+          captured = input;
+          return input;
+        }
+      },
+      SheetRepository: {
+        listRecentDiarySummariesBefore: function() {
+          return [];
+        }
+      }
+    }, function() {
+      CharacterDiaryContextService.build({
+        diaryDate: '2026-07-23',
+        currentTime: '2026-07-23T23:10:00+09:00',
+        messages: [],
+        mayCreatePartnerWorld: true
+      });
+    });
+    assert(captured.recentMessages.length === 0, 'Unexpected diary messages entered context.');
+    assert(
+      captured.partnerWorld.mayCreate === true &&
+        captured.partnerWorld.generationMode === 'world_only',
+      'No-conversation diary did not use the world-only contract.'
     );
   });
 
@@ -357,6 +420,109 @@ function runA13CharacterDiaryIntegrationTests() {
       session.getUsage().apiCalls === 2 &&
         session.getUsage().inputTokens === 15,
       'Diary usage was not accumulated.'
+    );
+  });
+
+  test('world-only diary uses a bounded generation and verification contract', function() {
+    var calls = [];
+    var context = makeWorldOnlyContext();
+    withGlobals({
+      GeminiClient: {
+        generateStructured: function(request, schemaName) {
+          calls.push({ request: request, schemaName: schemaName });
+          if (schemaName === 'character-diary') {
+            return {
+              data: worldOnlyDiaryPayload(),
+              model: 'test-model',
+              usage: null
+            };
+          }
+          return {
+            data: {
+              verdict: 'allow',
+              category: null,
+              evidenceKeys: []
+            },
+            model: 'test-model',
+            usage: null
+          };
+        }
+      }
+    }, function() {
+      var session = CharacterDiaryGeminiAdapter.createSession({
+        diaryDate: '2026-07-23'
+      });
+      var generated = session.generate({
+        context: context,
+        surface: 'DIARY',
+        mode: 'CHARACTER'
+      });
+      session.verify({
+        context: context,
+        surface: 'DIARY',
+        claimType: 'GENERAL_IMMERSION',
+        category: null,
+        requiresEvidence: false,
+        knownEvidenceKeys: [],
+        evidenceView: [],
+        textFields: CharacterPayloadService.textFields('DIARY', generated),
+        payload: generated
+      });
+    });
+    assert(calls.length === 2, 'World-only diary did not use one generation and one verification.');
+    assert(
+      calls[0].request.systemInstruction.indexOf(
+        'WORLD_ONLY_DIARY_MODE is active'
+      ) !== -1 &&
+      calls[0].request.systemInstruction.indexOf(
+          'create exactly one restrained Partner World event'
+        ) !== -1 &&
+        calls[0].request.contents[0].parts[0].text.indexOf(
+          'WORLD_ONLY_MEMORY_MUST_NOT_ENTER_GENERATION'
+        ) === -1,
+      'World-only generation contract was omitted.'
+    );
+    assert(
+      calls[1].request.systemInstruction.indexOf(
+        'WORLD_ONLY_DIARY_MODE is authorized'
+      ) !== -1 &&
+        calls[1].request.contents[0].parts[0].text.indexOf(
+          '"generationMode":"world_only"'
+        ) !== -1,
+      'World-only verification authorization was omitted.'
+    );
+  });
+
+  test('world-only diary rejects conversation-grounded collection fields', function() {
+    var error = null;
+    var invalid = worldOnlyDiaryPayload();
+    invalid.groundedSummary = 'ユーザーは休んだと話した。';
+    withGlobals({
+      GeminiClient: {
+        generateStructured: function() {
+          return {
+            data: invalid,
+            model: 'test-model',
+            usage: null
+          };
+        }
+      }
+    }, function() {
+      try {
+        CharacterDiaryGeminiAdapter.createSession({
+          diaryDate: '2026-07-23'
+        }).generate({
+          context: makeWorldOnlyContext(),
+          surface: 'DIARY',
+          mode: 'CHARACTER'
+        });
+      } catch (caught) {
+        error = caught;
+      }
+    });
+    assert(
+      error && error.code === 'GEMINI_BAD_RESPONSE',
+      'World-only diary accepted unsupported conversation-grounded fields.'
     );
   });
 

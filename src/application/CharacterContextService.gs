@@ -253,14 +253,45 @@ var CharacterContextService = (function() {
         { reason: 'CHARACTER_CONTEXT_INVALID' }
       );
     } else {
-      assertExactKeys_(context.data.partnerWorld, ['mayCreate', 'approvedFacts', 'scope']);
+      assertExactKeys_(context.data.partnerWorld, [
+        'mayCreate',
+        'approvedFacts',
+        'scope',
+        'generationMode'
+      ]);
       ensure(
         context.data.partnerWorld.scope === context.surface &&
           typeof context.data.partnerWorld.mayCreate === 'boolean' &&
+          ['disabled', 'mixed', 'world_only'].indexOf(
+            context.data.partnerWorld.generationMode
+          ) !== -1 &&
           Array.isArray(context.data.partnerWorld.approvedFacts),
         'VALIDATION_REQUEST_INVALID',
         'Partner World context is invalid.',
         { reason: 'CHARACTER_CONTEXT_INVALID' }
+      );
+      ensure(
+        (
+          context.data.partnerWorld.generationMode === 'disabled' &&
+          context.data.partnerWorld.mayCreate === false
+        ) ||
+        (
+          context.surface === 'diary' &&
+          context.data.partnerWorld.mayCreate === true &&
+          (
+            (
+              context.data.partnerWorld.generationMode === 'mixed' &&
+              context.data.recentMessages.length > 0
+            ) ||
+            (
+              context.data.partnerWorld.generationMode === 'world_only' &&
+              context.data.recentMessages.length === 0
+            )
+          )
+        ),
+        'VALIDATION_REQUEST_INVALID',
+        'Partner World generation mode is inconsistent with its context.',
+        { reason: 'PARTNER_WORLD_GENERATION_MODE_INVALID' }
       );
     }
     var profileValidation = CharacterProfileService.validateV2(context.persona.profile);
@@ -348,7 +379,7 @@ var CharacterContextService = (function() {
       'Partner World context is invalid.',
       { reason: 'PARTNER_WORLD_INVALID' }
     );
-    var allowedKeys = ['mayCreate', 'approvedFacts'];
+    var allowedKeys = ['mayCreate', 'approvedFacts', 'generationMode'];
     Object.keys(value).forEach(function(key) {
       ensure(
         allowedKeys.indexOf(key) !== -1,
@@ -370,10 +401,28 @@ var CharacterContextService = (function() {
       'Partner World creation is not allowed for this surface.',
       { reason: 'PARTNER_WORLD_CREATION_SCOPE_INVALID' }
     );
+    var generationMode = value.generationMode == null
+      ? (mayCreate ? 'mixed' : 'disabled')
+      : String(value.generationMode);
+    ensure(
+      ['disabled', 'mixed', 'world_only'].indexOf(generationMode) !== -1 &&
+        (
+          (generationMode === 'disabled' && mayCreate === false) ||
+          (
+            surface === 'diary' &&
+            mayCreate === true &&
+            (generationMode === 'mixed' || generationMode === 'world_only')
+          )
+        ),
+      'VALIDATION_REQUEST_INVALID',
+      'Partner World generation mode is invalid.',
+      { reason: 'PARTNER_WORLD_GENERATION_MODE_INVALID' }
+    );
     return {
       mayCreate: mayCreate,
       approvedFacts: normalizeArray_(value.approvedFacts, 'partnerWorld.approvedFacts'),
-      scope: surface
+      scope: surface,
+      generationMode: generationMode
     };
   }
 

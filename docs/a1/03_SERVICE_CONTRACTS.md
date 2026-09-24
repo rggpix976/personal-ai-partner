@@ -351,7 +351,12 @@ CharacterContextService.toGenerationView(classifiedContext)
 `characterPackVersion` を含む。現在の要求、履歴、記憶、fact、観測、Partner Worldは
 `data.authority = "untrusted"` の配下へ分離する。
 `partnerWorld.mayCreate=true` はdiary scopeだけで許可し、memory contextでは
-`partnerWorld=null` とする。dataはJSON-safeな値だけを受理し、legacy persona
+`partnerWorld=null` とする。Partner Worldを持つcontextは閉じた
+`generationMode`（`disabled` / `mixed` / `world_only`）を必須とし、
+`mixed`は承認済み当日messageが1件以上、`world_only`は0件の場合だけ有効とする。
+`world_only`日記はcanon、world seed、承認済みPartner World factだけから
+抑制された出来事を1件生成し、conversation由来のsummary、memory、follow-upを
+禁止する。dataはJSON-safeな値だけを受理し、legacy persona
 authorityと危険なobject keyを再帰的に拒否する。`buildActive` は
 `UNCLASSIFIED` contextを返し、`withConversationMode` は完全なcontext shapeと
 現在activeなprofile/revision/pack bindingを再検証して、PR 3で定義済みmodeを

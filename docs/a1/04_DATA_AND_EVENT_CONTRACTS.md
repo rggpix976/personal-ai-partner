@@ -235,6 +235,12 @@ diary_origin_event_id
 再検証し、別本文を生成しない。3列の部分欠落、起票event不一致、payload変更、
 lease喪失はcontent sink前にfail closedする。旧日記行を承認済み行へ自動昇格しない。
 Partner World継続情報は`DONE`かつ完全で現行の`DIARY`承認証跡を持つ行だけから読む。
+対象日の承認済み会話が0件でPartner World生成が選択された場合は、型付きcontextを
+`generationMode=world_only`として固定する。このmodeでは
+`partnerWorldEvents`をちょうど1件、`groundedSummary`を空文字、
+`thingsToRemember`と`unresolvedFollowUps`を空配列とし、生成adapterとsemantic
+verifierの両方が同じ境界を検証する。通常の会話あり日記は`mixed`、生成非選択は
+`disabled`とし、modeとmessage件数の不一致を拒否する。
 
 ## 4.8 再試行
 

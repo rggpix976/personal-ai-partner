@@ -458,6 +458,17 @@ external life. In V2, diary may create structured Partner World events only
 when its policy allows. Chat and proactive output have `mayCreate=false` and
 may refer only to approved facts already present in typed context.
 
+Diary context also carries a closed `partnerWorld.generationMode` contract.
+`disabled` forbids creation, `mixed` requires at least one approved message for
+the diary date, and `world_only` requires zero approved messages. In
+`world_only`, generation may use only CharacterPack canon, reviewed world
+seeds, and approved Partner World facts to create exactly one restrained event.
+It must return an empty grounded summary, memory list, and follow-up list. The
+semantic verifier receives the same mode and may authorize the event's natural
+retelling in the title and narrative without treating it as a real-human claim;
+user-day claims, multiple independent events, and invented real-world identity,
+body, address, employment, or verifiable external life remain denied.
+
 Chat, proactive, and diary contexts accept only provenance-checked memory rows
 created or updated by the enforced PR 7 path. Existing legacy rows are not
 silently promoted merely because they can be retrieved. Memory values remain
@@ -977,6 +988,13 @@ current-policy `DIARY` approval provenance and the active CharacterPack. Legacy
 summaries and partial or stale approval rows are not promoted. Approved Partner
 World facts may enter chat, proactive, and later diary contexts; they never
 become evidence about the user or the real world.
+
+When a diary date has no approved conversation and Partner World creation is
+selected, PR 6 uses the explicit `world_only` contract instead of the mixed
+conversation path. Generation and semantic verification share that contract,
+and the adapter rejects any non-empty conversation-grounded collection before
+approval. This keeps no-conversation diary generation available without
+weakening the common immersion guard.
 
 The a6 schema appends these `daily_summaries` columns:
 
