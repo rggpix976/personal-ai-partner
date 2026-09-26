@@ -941,6 +941,38 @@ function runA10ImmersionCoordinatorTests() {
     });
   });
 
+  test('diary provider failure preserves its safe upstream classification', function() {
+    withContext('DIARY', '今日の日記を書いて', function(context) {
+      var error = expectCode(function() {
+        CharacterOutputCoordinator.approve({
+          context: context,
+          surface: 'DIARY',
+          generate: function() {
+            throw createAppError(
+              'GEMINI_TEMPORARY_FAILURE',
+              'Gemini is temporarily unavailable.',
+              {
+                safeStage: 'HTTP_SERVER_FAILURE',
+                modelRoute: 'FALLBACK_AFTER_FAILURE',
+                failoverTriggerCode: 'GEMINI_TEMPORARY_FAILURE',
+                failoverTriggerStage: 'HTTP_SERVER_FAILURE',
+                apiCalls: 2
+              }
+            );
+          },
+          metricEmitter: function() {}
+        });
+      }, 'GEMINI_TEMPORARY_FAILURE');
+      assert(
+        error.details &&
+          error.details.safeStage === 'HTTP_SERVER_FAILURE' &&
+          error.details.modelRoute === 'FALLBACK_AFTER_FAILURE' &&
+          error.details.apiCalls === 2,
+        'Diary provider diagnosis was lost before queue persistence.'
+      );
+    });
+  });
+
   test('admin and product information return typed non-character routes', function() {
     [{
       text: '設定の状態を確認して',

@@ -14,7 +14,7 @@ var CharacterOutputCoordinator = (function() {
     'adminRequest',
     'capabilityUnavailable'
   ]);
-  var SAFE_MEMORY_GENERATION_ERROR_CODES = Object.freeze([
+  var SAFE_PRE_GUARD_GENERATION_ERROR_CODES = Object.freeze([
     'CONFIG_MISSING',
     'GEMINI_RATE_LIMIT',
     'GEMINI_AUTH_FAILED',
@@ -22,7 +22,7 @@ var CharacterOutputCoordinator = (function() {
     'GEMINI_BAD_RESPONSE',
     'GEMINI_TEMPORARY_FAILURE'
   ]);
-  var SAFE_MEMORY_GENERATION_ERROR_STAGES = Object.freeze([
+  var SAFE_PRE_GUARD_GENERATION_ERROR_STAGES = Object.freeze([
     'REQUEST_CONTENTS_INVALID',
     'HTTP_RESPONSE_JSON_INVALID',
     'HTTP_REQUEST_REJECTED',
@@ -139,10 +139,10 @@ var CharacterOutputCoordinator = (function() {
           mode: mode
         }));
       } catch (generationError) {
-        var safeMemoryError =
-          rebuildSafeMemoryGenerationError_(surface, generationError);
-        if (safeMemoryError) {
-          throw safeMemoryError;
+        var safeGenerationError =
+          rebuildSafeGenerationError_(surface, generationError);
+        if (safeGenerationError) {
+          throw safeGenerationError;
         }
         return fallbackOrFail_(
           classified,
@@ -239,6 +239,52 @@ var CharacterOutputCoordinator = (function() {
     );
   }
 
+  function rebuildSafeGenerationError_(surface, error) {
+    if (surface === 'MEMORY_EXTRACTION') {
+      return rebuildSafeMemoryGenerationError_(surface, error);
+    }
+    if (surface !== 'DIARY') {
+      return null;
+    }
+    var code = error && typeof error.code === 'string'
+      ? error.code
+      : null;
+    if (SAFE_PRE_GUARD_GENERATION_ERROR_CODES.indexOf(code) === -1) {
+      return null;
+    }
+    var stage = safePreGuardGenerationStage_(error);
+    var details = stage ? { safeStage: stage } : {};
+    var sourceDetails = error && error.details;
+    [
+      'modelRoute',
+      'failoverTriggerCode',
+      'failoverTriggerStage'
+    ].forEach(function(key) {
+      var value = sourceDetails && sourceDetails[key];
+      if (typeof value === 'string' && /^[A-Z0-9_]{1,64}$/.test(value)) {
+        details[key] = value;
+      }
+    });
+    if (
+      sourceDetails &&
+      Number(sourceDetails.apiCalls) >= 1 &&
+      Number(sourceDetails.apiCalls) <= 2
+    ) {
+      details.apiCalls = Math.floor(Number(sourceDetails.apiCalls));
+    }
+    return createAppError(
+      code,
+      'Diary generation failed before guard assessment.' +
+        (stage ? ' Stage: ' + stage + '.' : ''),
+      Object.keys(details).length > 0 ? details : null,
+      {
+        retryable: error.retryable === true,
+        retryStrategy: error.retryStrategy,
+        httpStatus: error.httpStatus
+      }
+    );
+  }
+
   function approveCatalog_(key, source, context, surface, metricEmitter) {
     var payload;
     try {
@@ -312,10 +358,10 @@ var CharacterOutputCoordinator = (function() {
     } catch (ignored) {
       return null;
     }
-    if (SAFE_MEMORY_GENERATION_ERROR_CODES.indexOf(code) === -1) {
+    if (SAFE_PRE_GUARD_GENERATION_ERROR_CODES.indexOf(code) === -1) {
       return null;
     }
-    var stage = safeMemoryGenerationStage_(error);
+    var stage = safePreGuardGenerationStage_(error);
     var options = {};
     if (
       code === 'GEMINI_BAD_RESPONSE' &&
@@ -338,7 +384,7 @@ var CharacterOutputCoordinator = (function() {
     );
   }
 
-  function safeMemoryGenerationStage_(error) {
+  function safePreGuardGenerationStage_(error) {
     var stage = null;
     try {
       stage = error &&
@@ -348,7 +394,7 @@ var CharacterOutputCoordinator = (function() {
       return null;
     }
     return typeof stage === 'string' &&
-      SAFE_MEMORY_GENERATION_ERROR_STAGES.indexOf(stage) !== -1
+      SAFE_PRE_GUARD_GENERATION_ERROR_STAGES.indexOf(stage) !== -1
       ? stage
       : null;
   }

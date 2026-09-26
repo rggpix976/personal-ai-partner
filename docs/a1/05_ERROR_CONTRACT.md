@@ -49,6 +49,12 @@
 causeへ候補本文、context、prompt、semantic verifierの自由記述、各種IDを含めない。
 管理されたreason/categoryだけを内部制御に使用し、利用者向けには中立なstatus表示だけを返す。
 
+日記のprovider呼び出しがguard評価前に失敗した場合は、管理済みの
+`GEMINI_*` codeと`safeStage`を`CHARACTER_OUTPUT_BLOCKED`へ包み直さずqueueまで保持する。
+`modelRoute`、`failoverTriggerCode`、`failoverTriggerStage`、`apiCalls`は列挙済みの
+安全な診断値だけを保持できる。provider本文、prompt、候補本文、URL、各種ID、秘密値は
+保持しない。
+
 `CHARACTER_OUTPUT_BLOCKED` の共通定義はretryableであるが、PR 5の新規proactive
 生成で承認artifactを作れなかった場合は、同じeventを短時間backoffで繰り返して
 固定文を送らない。surface adapterが管理された `NO_APPROVED_PROACTIVE_OUTPUT`

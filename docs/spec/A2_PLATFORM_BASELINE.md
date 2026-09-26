@@ -229,6 +229,8 @@ Script Propertiesは検証時点を分離する。
 | GEMINI_MODEL_ROUTING_MODE | string | single |
 | GEMINI_GENERATION_MODEL | string | gemini-3.6-flash |
 | GEMINI_UTILITY_MODEL | string | gemini-3.5-flash-lite |
+| GEMINI_GENERATION_FAILOVER_ENABLED | bool | false |
+| GEMINI_GENERATION_FALLBACK_MODEL | string | gemini-2.5-flash |
 | MAX_USER_TEXT_CHARS | int | 4000 |
 | RECENT_MESSAGE_LIMIT | int | 20 |
 | MEMORY_CONTEXT_LIMIT | int | 20 |
@@ -262,8 +264,12 @@ Gemini呼び出しが既存の`GEMINI_MODEL`を使用する。このモードは
 緊急rollback時の互換経路である。`split`では、利用者へ見える会話、画像応答、
 自発発言、日記とそれらのrewriteが`GEMINI_GENERATION_MODEL`を使用し、意味検証と
 記憶抽出・記憶rewriteが`GEMINI_UTILITY_MODEL`を使用する。未設定またはallowlist外の
-モデルへ暗黙にfallbackしてはならない。429を別モデルへ迂回させず、既存の安全な
-エラー・固定fallback契約を維持する。
+モデルへ暗黙にfallbackしてはならない。例外として、明示的に
+`GEMINI_GENERATION_FAILOVER_ENABLED=true`とした場合に限り、日記と新規自発発言の
+生成で`HTTP_SERVER_FAILURE`または`TRANSPORT_FAILURE`が発生したときだけ、
+`GEMINI_GENERATION_FALLBACK_MODEL`へ最大1回切り替えてよい。429、認証、モデル不在、
+形式不正、安全判定拒否は迂回しない。対象primaryは15分間だけ回路を開き、その間の
+対象生成はprimaryを再試行せずfallbackを1回だけ使用する。
 
 `DIARY_MIN_CHARS` is a generation target, not a persistence gate. A non-empty
 structured narrative below that target is accepted with a controlled warning;

@@ -96,7 +96,6 @@ var CharacterDiaryGeminiAdapter = (function() {
     }
 
     function invoke_(source, request) {
-      usage.apiCalls += 1;
       var response;
       try {
         response = GeminiClient.generateStructured(
@@ -108,8 +107,14 @@ var CharacterDiaryGeminiAdapter = (function() {
           { surface: SURFACE, source: source }
         );
       } catch (error) {
+        usage.apiCalls += safeApiCallCount_(
+          error && error.details && error.details.apiCalls
+        );
         throw sanitizeGeminiError_(error);
       }
+      usage.apiCalls += safeApiCallCount_(
+        response && response.usage && response.usage.apiCalls
+      );
       recordResponse_(source, response, usage, metadataBySource);
       return response;
     }
@@ -521,10 +526,46 @@ var CharacterDiaryGeminiAdapter = (function() {
       SAFE_ERROR_CODES.indexOf(error.code) !== -1
       ? error.code
       : 'GEMINI_TEMPORARY_FAILURE';
+    var details = sanitizeGeminiErrorDetails_(error && error.details);
+    var options = {};
+    if (error instanceof AppError && code === error.code) {
+      options.retryable = error.retryable === true;
+      options.retryStrategy = error.retryStrategy;
+      options.httpStatus = error.httpStatus;
+    }
     return createAppError(
       code,
-      SAFE_ERROR_MESSAGES[code]
+      SAFE_ERROR_MESSAGES[code],
+      details,
+      options
     );
+  }
+
+  function safeApiCallCount_(value) {
+    var count = Number(value);
+    return isFinite(count) && count >= 1 && count <= 2
+      ? Math.floor(count)
+      : 1;
+  }
+
+  function sanitizeGeminiErrorDetails_(details) {
+    if (!details || typeof details !== 'object') {
+      return null;
+    }
+    var result = {};
+    [
+      'safeStage',
+      'modelRoute',
+      'failoverTriggerCode',
+      'failoverTriggerStage'
+    ].forEach(function(key) {
+      var value = details[key];
+      if (typeof value === 'string' && /^[A-Z0-9_]{1,64}$/.test(value)) {
+        result[key] = value;
+      }
+    });
+    result.apiCalls = safeApiCallCount_(details.apiCalls);
+    return Object.keys(result).length > 0 ? result : null;
   }
 
   function stringifyPromptJson_(value) {

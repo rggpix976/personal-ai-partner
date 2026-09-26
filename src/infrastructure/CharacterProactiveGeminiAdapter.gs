@@ -166,13 +166,18 @@ var CharacterProactiveGeminiAdapter = (function() {
     }
 
     function invoke_(source, callback) {
-      usage.apiCalls += 1;
       var response;
       try {
         response = callback();
       } catch (error) {
+        usage.apiCalls += safeApiCallCount_(
+          error && error.details && error.details.apiCalls
+        );
         throw sanitizeGeminiError_(error);
       }
+      usage.apiCalls += safeApiCallCount_(
+        response && response.usage && response.usage.apiCalls
+      );
       recordResponse_(
         source,
         response,
@@ -683,6 +688,13 @@ var CharacterProactiveGeminiAdapter = (function() {
       null,
       options
     );
+  }
+
+  function safeApiCallCount_(value) {
+    var count = Number(value);
+    return isFinite(count) && count >= 1 && count <= 2
+      ? Math.floor(count)
+      : 1;
   }
 
   function stringifyPromptJson_(value) {

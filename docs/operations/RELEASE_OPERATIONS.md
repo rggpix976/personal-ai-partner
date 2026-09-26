@@ -160,3 +160,23 @@ Geminiの用途別モデルを本番で検証する場合は、
 問題があれば最初に`GEMINI_MODEL_ROUTING_MODE=single`へ戻す。これで復旧しない場合は、
 単一のowner-only Web App deploymentを事前記録したimmutable versionへ戻す。
 rate limit時に別roleのモデルへ自動fallbackしてはならない。
+
+### 5.1 Async generation failover
+
+日記または新規自発発言の生成で、generation modelの5xx・通信障害だけを予備modelへ
+切り替える場合は、コード配置・self-test・immutable deployment完了後に次を行う。
+
+1. `GEMINI_GENERATION_FALLBACK_MODEL`がprimaryと異なるallowlist内modelであることを確認する。
+2. `GEMINI_GENERATION_FAILOVER_ENABLED=true`だけを変更する。
+3. `inspectGeminiModelRouting()`でfailover有効、対象surfaceが`DIARY`と
+   `PROACTIVE_AI`、回路時間が900秒であることを確認する。
+4. 429、認証、モデル不在、形式不正、guard拒否ではfallbackしない。5xxまたは通信障害
+   だけが1回のfallbackを許可される。
+5. primary障害後15分間は同じprimaryを繰り返さず、fallbackを1回だけ使用する。
+6. 本番確認は日記1件を先に行い、`DONE`、日記状態`DONE`、anchor 1件、承認証跡完全、
+   active queue・stale・overdueが0件であることを確認する。
+
+復旧は`assessDeadDiaryGeneration(eventId)`が`REQUEUE_AS_NEW_EVENT`を返した日だけを、
+新しいoperator requestごとに`repairDeadDiaryGeneration(eventId, manualRequestId)`で1件ずつ
+行う。各件がterminalになる前に次を起票しない。`MANUAL_REVIEW_REQUIRED`、既存active、
+anchor不整合では停止し、`repairDiaryGenerationBacklog()`を一括実行しない。

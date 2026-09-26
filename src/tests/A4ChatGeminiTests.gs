@@ -239,7 +239,9 @@ function runA4ChatGeminiTests() {
       defaults.GEMINI_MODEL === 'gemini-2.5-flash' &&
         defaults.GEMINI_MODEL_ROUTING_MODE === 'single' &&
         defaults.GEMINI_GENERATION_MODEL === 'gemini-3.6-flash' &&
-        defaults.GEMINI_UTILITY_MODEL === 'gemini-3.5-flash-lite',
+        defaults.GEMINI_UTILITY_MODEL === 'gemini-3.5-flash-lite' &&
+        defaults.GEMINI_GENERATION_FAILOVER_ENABLED === 'false' &&
+        defaults.GEMINI_GENERATION_FALLBACK_MODEL === 'gemini-2.5-flash',
       'Gemini model routing defaults cannot preserve and stage the planned rollout.'
     );
   });
@@ -415,7 +417,9 @@ function runA4ChatGeminiTests() {
       GEMINI_MODEL: 'gemini-2.5-flash',
       GEMINI_MODEL_ROUTING_MODE: 'split',
       GEMINI_GENERATION_MODEL: 'gemini-3.6-flash',
-      GEMINI_UTILITY_MODEL: 'gemini-3.5-flash-lite'
+      GEMINI_UTILITY_MODEL: 'gemini-3.5-flash-lite',
+      GEMINI_GENERATION_FAILOVER_ENABLED: 'true',
+      GEMINI_GENERATION_FALLBACK_MODEL: 'gemini-2.5-flash'
     }, function() {
       withGlobalOverrides_({
         PropertiesService: {
@@ -472,6 +476,252 @@ function runA4ChatGeminiTests() {
         urls[0].indexOf('gemini-3.5-flash-lite') === -1,
       'A rate-limited generation request fell through to the utility model.'
     );
+  });
+
+  test('eligible async generation failure uses one bounded fallback call', function() {
+    var urls = [];
+    var metrics = [];
+    var cache = {};
+    withGeminiConfig_({
+      GEMINI_MODEL: 'gemini-2.5-flash',
+      GEMINI_MODEL_ROUTING_MODE: 'split',
+      GEMINI_GENERATION_MODEL: 'gemini-3.6-flash',
+      GEMINI_UTILITY_MODEL: 'gemini-3.5-flash-lite',
+      GEMINI_GENERATION_FAILOVER_ENABLED: 'true',
+      GEMINI_GENERATION_FALLBACK_MODEL: 'gemini-2.5-flash'
+    }, function() {
+      withGlobalOverrides_({
+        PropertiesService: {
+          getScriptProperties: function() {
+            return { getProperty: function() { return 'test-api-key'; } };
+          }
+        },
+        CacheService: {
+          getScriptCache: function() {
+            return {
+              get: function(key) { return cache[key] || null; },
+              put: function(key, value) { cache[key] = value; }
+            };
+          }
+        },
+        UrlFetchApp: {
+          fetch: function(url) {
+            urls.push(url);
+            if (url.indexOf('gemini-3.6-flash') !== -1) {
+              return {
+                getResponseCode: function() { return 503; },
+                getContentText: function() {
+                  return JSON.stringify({ error: { message: 'Unavailable.' } });
+                }
+              };
+            }
+            return {
+              getResponseCode: function() { return 200; },
+              getContentText: function() {
+                return JSON.stringify({
+                  candidates: [{
+                    finishReason: 'STOP',
+                    content: { parts: [{ text: 'fallback result' }] }
+                  }]
+                });
+              }
+            };
+          }
+        },
+        AppLogger: {
+          info: function(_, __, details) { metrics.push(details); }
+        }
+      }, function() {
+        var response = GeminiClient.generateText({
+          systemInstruction: 'test',
+          contents: [{ role: 'user', parts: [{ text: 'test' }] }]
+        }, 'GENERATION', {
+          surface: 'DIARY',
+          source: 'generated'
+        });
+        assert(response.text === 'fallback result', 'Fallback result was not returned.');
+        assert(response.usage.apiCalls === 2, 'Both provider calls were not counted.');
+      });
+    });
+    assert(urls.length === 2, 'Fallback exceeded or skipped the one-call budget.');
+    assert(
+      urls[0].indexOf('gemini-3.6-flash') !== -1 &&
+        urls[1].indexOf('gemini-2.5-flash') !== -1,
+      'Fallback did not use the configured approved model.'
+    );
+    assert(
+      metrics.length === 2 &&
+        metrics[0].modelRoute === 'PRIMARY' &&
+        metrics[0].safeStage === 'HTTP_SERVER_FAILURE' &&
+        metrics[1].modelRoute === 'FALLBACK_AFTER_FAILURE' &&
+        metrics[1].failoverTriggerStage === 'HTTP_SERVER_FAILURE',
+      'Failover metrics did not retain the safe route diagnosis.'
+    );
+  });
+
+  test('open async generation circuit skips the known failing primary model', function() {
+    var urls = [];
+    withGeminiConfig_({
+      GEMINI_MODEL: 'gemini-2.5-flash',
+      GEMINI_MODEL_ROUTING_MODE: 'split',
+      GEMINI_GENERATION_MODEL: 'gemini-3.6-flash',
+      GEMINI_UTILITY_MODEL: 'gemini-3.5-flash-lite',
+      GEMINI_GENERATION_FAILOVER_ENABLED: 'true',
+      GEMINI_GENERATION_FALLBACK_MODEL: 'gemini-2.5-flash'
+    }, function() {
+      withGlobalOverrides_({
+        PropertiesService: {
+          getScriptProperties: function() {
+            return { getProperty: function() { return 'test-api-key'; } };
+          }
+        },
+        CacheService: {
+          getScriptCache: function() {
+            return {
+              get: function() { return 'HTTP_SERVER_FAILURE'; },
+              put: function() {}
+            };
+          }
+        },
+        UrlFetchApp: {
+          fetch: function(url) {
+            urls.push(url);
+            return {
+              getResponseCode: function() { return 200; },
+              getContentText: function() {
+                return JSON.stringify({
+                  candidates: [{
+                    finishReason: 'STOP',
+                    content: { parts: [{ text: 'circuit fallback' }] }
+                  }]
+                });
+              }
+            };
+          }
+        },
+        AppLogger: { info: function() {} }
+      }, function() {
+        var response = GeminiClient.generateText({
+          systemInstruction: 'test',
+          contents: [{ role: 'user', parts: [{ text: 'test' }] }]
+        }, 'GENERATION', {
+          surface: 'PROACTIVE_AI',
+          source: 'generated'
+        });
+        assert(response.usage.apiCalls === 1, 'Circuit fallback call count is invalid.');
+      });
+    });
+    assert(
+      urls.length === 1 && urls[0].indexOf('gemini-2.5-flash') !== -1,
+      'Open circuit did not skip the known failing primary model.'
+    );
+  });
+
+  test('failed fallback retains controlled diagnostics and exact call count', function() {
+    var calls = 0;
+    var thrown = null;
+    withGeminiConfig_({
+      GEMINI_MODEL: 'gemini-2.5-flash',
+      GEMINI_MODEL_ROUTING_MODE: 'split',
+      GEMINI_GENERATION_MODEL: 'gemini-3.6-flash',
+      GEMINI_UTILITY_MODEL: 'gemini-3.5-flash-lite',
+      GEMINI_GENERATION_FAILOVER_ENABLED: 'true',
+      GEMINI_GENERATION_FALLBACK_MODEL: 'gemini-2.5-flash'
+    }, function() {
+      withGlobalOverrides_({
+        PropertiesService: {
+          getScriptProperties: function() {
+            return { getProperty: function() { return 'test-api-key'; } };
+          }
+        },
+        CacheService: {
+          getScriptCache: function() {
+            return { get: function() { return null; }, put: function() {} };
+          }
+        },
+        UrlFetchApp: {
+          fetch: function() {
+            calls += 1;
+            return {
+              getResponseCode: function() { return 503; },
+              getContentText: function() {
+                return JSON.stringify({ error: { message: 'Unavailable.' } });
+              }
+            };
+          }
+        },
+        AppLogger: { info: function() {} }
+      }, function() {
+        try {
+          GeminiClient.generateText({
+            systemInstruction: 'test',
+            contents: [{ role: 'user', parts: [{ text: 'test' }] }]
+          }, 'GENERATION', {
+            surface: 'DIARY',
+            source: 'generated'
+          });
+        } catch (error) {
+          thrown = error;
+        }
+      });
+    });
+    assert(calls === 2, 'Failed failover exceeded or skipped the bounded call count.');
+    assert(
+      thrown &&
+        thrown.code === 'GEMINI_TEMPORARY_FAILURE' &&
+        thrown.details.safeStage === 'HTTP_SERVER_FAILURE' &&
+        thrown.details.modelRoute === 'FALLBACK_AFTER_FAILURE' &&
+        thrown.details.failoverTriggerStage === 'HTTP_SERVER_FAILURE' &&
+        thrown.details.apiCalls === 2,
+      'Failed failover lost its controlled diagnosis.'
+    );
+  });
+
+  test('chat generation never uses the async generation fallback', function() {
+    var urls = [];
+    var thrown = null;
+    withGeminiConfig_({
+      GEMINI_MODEL: 'gemini-2.5-flash',
+      GEMINI_MODEL_ROUTING_MODE: 'split',
+      GEMINI_GENERATION_MODEL: 'gemini-3.6-flash',
+      GEMINI_UTILITY_MODEL: 'gemini-3.5-flash-lite',
+      GEMINI_GENERATION_FAILOVER_ENABLED: 'true',
+      GEMINI_GENERATION_FALLBACK_MODEL: 'gemini-2.5-flash'
+    }, function() {
+      withGlobalOverrides_({
+        PropertiesService: {
+          getScriptProperties: function() {
+            return { getProperty: function() { return 'test-api-key'; } };
+          }
+        },
+        UrlFetchApp: {
+          fetch: function(url) {
+            urls.push(url);
+            return {
+              getResponseCode: function() { return 503; },
+              getContentText: function() {
+                return JSON.stringify({ error: { message: 'Unavailable.' } });
+              }
+            };
+          }
+        },
+        AppLogger: { info: function() {} }
+      }, function() {
+        try {
+          GeminiClient.generateText({
+            systemInstruction: 'test',
+            contents: [{ role: 'user', parts: [{ text: 'test' }] }]
+          }, 'GENERATION', {
+            surface: 'CHAT_TEXT_SYNC',
+            source: 'generated'
+          });
+        } catch (error) {
+          thrown = error;
+        }
+      });
+    });
+    assert(thrown && thrown.code === 'GEMINI_TEMPORARY_FAILURE', 'Chat error changed.');
+    assert(urls.length === 1, 'Chat unexpectedly used async failover.');
   });
 
   test('Gemini 3.x request bodies omit deprecated sampling parameters', function() {
