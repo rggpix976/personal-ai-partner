@@ -97,6 +97,21 @@ GEMINI_UTILITY_MODEL=gemini-3.5-flash-lite
 GEMINI_MODEL_ROUTING_MODE=split
 ```
 
+生成failoverを別段階で有効化する場合は、配置・self-test・deployment後に次を確認する。
+
+```text
+GEMINI_GENERATION_FAILOVER_ENABLED=true
+GEMINI_GENERATION_FALLBACK_MODEL=gemini-2.5-flash
+```
+
+合格条件：
+
+- 日記と新規自発発言だけが対象である。
+- 5xxまたは通信障害時だけfallbackが最大1回実行される。
+- 429、認証、モデル不在、形式不正、guard拒否ではfallbackしない。
+- 失敗時もqueueの安全なerror codeがprovider分類を保持する。
+- primary障害後15分間は回路が開き、同じprimaryを反復しない。
+
 `inspectGeminiModelRouting()`を実行する。
 
 期待結果：

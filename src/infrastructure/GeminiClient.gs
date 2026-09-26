@@ -27,6 +27,16 @@ var GeminiClient = (function() {
     'rewrite',
     'verifier'
   ]);
+  var FAILOVER_SURFACES = Object.freeze([
+    'DIARY',
+    'PROACTIVE_AI'
+  ]);
+  var FAILOVER_SAFE_STAGES = Object.freeze([
+    'HTTP_SERVER_FAILURE',
+    'TRANSPORT_FAILURE'
+  ]);
+  var FAILOVER_CACHE_SECONDS = 900;
+  var FAILOVER_CACHE_PREFIX = 'gemini-generation-failover-v1:';
 
   function generateText(request, modelRole, metricContext) {
     return generateContent_(request, null, null, modelRole, metricContext);
@@ -60,8 +70,92 @@ var GeminiClient = (function() {
   function generateContent_(request, image, extraConfig, modelRole, metricContext) {
     request = request || {};
     var normalizedRole = normalizeModelRole_(modelRole);
-    var model = resolveConfiguredModel_(normalizedRole);
+    var primaryModel = resolveConfiguredModel_(normalizedRole);
+    var fallbackModel = resolveGenerationFallbackModel_(
+      normalizedRole,
+      metricContext,
+      primaryModel
+    );
+    var openStage = fallbackModel
+      ? getOpenFailoverStage_(primaryModel)
+      : null;
 
+    if (fallbackModel && openStage) {
+      try {
+        return invokeModel_(
+          request,
+          image,
+          extraConfig,
+          normalizedRole,
+          fallbackModel,
+          metricContext,
+          'FALLBACK_CIRCUIT_OPEN',
+          openStage,
+          1
+        );
+      } catch (circuitFallbackError) {
+        throw decorateFailoverError_(
+          circuitFallbackError,
+          openStage,
+          1,
+          'FALLBACK_CIRCUIT_OPEN'
+        );
+      }
+    }
+
+    try {
+      return invokeModel_(
+        request,
+        image,
+        extraConfig,
+        normalizedRole,
+        primaryModel,
+        metricContext,
+        'PRIMARY',
+        null,
+        1
+      );
+    } catch (error) {
+      var normalized = normalizeGeminiError_(error);
+      if (!fallbackModel || !isEligibleFailoverError_(normalized)) {
+        throw normalized;
+      }
+      var primarySafeStage = safeErrorStage_(normalized);
+      openFailoverCircuit_(primaryModel, primarySafeStage);
+      try {
+        return invokeModel_(
+          request,
+          image,
+          extraConfig,
+          normalizedRole,
+          fallbackModel,
+          metricContext,
+          'FALLBACK_AFTER_FAILURE',
+          primarySafeStage,
+          2
+        );
+      } catch (fallbackError) {
+        throw decorateFailoverError_(
+          fallbackError,
+          primarySafeStage,
+          2,
+          'FALLBACK_AFTER_FAILURE'
+        );
+      }
+    }
+  }
+
+  function invokeModel_(
+    request,
+    image,
+    extraConfig,
+    normalizedRole,
+    model,
+    metricContext,
+    modelRoute,
+    failoverTriggerStage,
+    apiCalls
+  ) {
     try {
       var apiKey = getApiKey_();
       var url = API_BASE_URL + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(apiKey);
@@ -73,13 +167,17 @@ var GeminiClient = (function() {
         muteHttpExceptions: true
       });
       var response = parseGenerateContentResponse_(httpResponse, model);
+      response.usage = response.usage || {};
+      response.usage.apiCalls = apiCalls;
       emitRoutingMetric_(
         'SUCCESS',
         normalizedRole,
         model,
         response,
         null,
-        metricContext
+        metricContext,
+        modelRoute,
+        failoverTriggerStage
       );
       return response;
     } catch (error) {
@@ -90,7 +188,9 @@ var GeminiClient = (function() {
         model,
         null,
         normalized,
-        metricContext
+        metricContext,
+        modelRoute,
+        failoverTriggerStage
       );
       throw normalized;
     }
@@ -639,6 +739,23 @@ var GeminiClient = (function() {
     return mode;
   }
 
+  function getConfigBool_(key, fallback) {
+    var config = ConfigRepository.getByKey(key);
+    if (!config || config.value == null || config.value === '') {
+      return Boolean(fallback);
+    }
+    if (config.value === true || String(config.value).toLowerCase() === 'true') {
+      return true;
+    }
+    if (config.value === false || String(config.value).toLowerCase() === 'false') {
+      return false;
+    }
+    throw createAppError(
+      'CONFIG_MISSING',
+      key + ' must be true or false.'
+    );
+  }
+
   function validateSupportedModel_(model) {
     ensure(
       SUPPORTED_MODELS.indexOf(String(model || '')) !== -1,
@@ -660,10 +777,137 @@ var GeminiClient = (function() {
     return validateSupportedModel_(getConfigString_(key, true));
   }
 
+  function resolveGenerationFallbackModel_(modelRole, metricContext, primaryModel) {
+    if (
+      normalizeModelRole_(modelRole) !== MODEL_ROLES.GENERATION ||
+      !metricContext ||
+      FAILOVER_SURFACES.indexOf(metricContext.surface) === -1 ||
+      !getConfigBool_('GEMINI_GENERATION_FAILOVER_ENABLED', false)
+    ) {
+      return null;
+    }
+    var fallbackModel = validateSupportedModel_(
+      getConfigString_('GEMINI_GENERATION_FALLBACK_MODEL', true)
+    );
+    ensure(
+      fallbackModel !== primaryModel,
+      'CONFIG_MISSING',
+      'Gemini generation fallback model must differ from the primary model.'
+    );
+    return fallbackModel;
+  }
+
+  function safeErrorStage_(error) {
+    var stage = error && error.details && error.details.safeStage;
+    return typeof stage === 'string' && /^[A-Z0-9_]{1,64}$/.test(stage)
+      ? stage
+      : null;
+  }
+
+  function isEligibleFailoverError_(error) {
+    return Boolean(
+      error &&
+      error.code === 'GEMINI_TEMPORARY_FAILURE' &&
+      FAILOVER_SAFE_STAGES.indexOf(safeErrorStage_(error)) !== -1
+    );
+  }
+
+  function failoverCacheKey_(model) {
+    return FAILOVER_CACHE_PREFIX + String(model || '');
+  }
+
+  function getScriptCache_() {
+    try {
+      return typeof CacheService !== 'undefined' &&
+        CacheService &&
+        typeof CacheService.getScriptCache === 'function'
+        ? CacheService.getScriptCache()
+        : null;
+    } catch (ignored) {
+      return null;
+    }
+  }
+
+  function getOpenFailoverStage_(model) {
+    var cache = getScriptCache_();
+    if (!cache) {
+      return null;
+    }
+    try {
+      var stage = cache.get(failoverCacheKey_(model));
+      return FAILOVER_SAFE_STAGES.indexOf(stage) !== -1 ? stage : null;
+    } catch (ignored) {
+      return null;
+    }
+  }
+
+  function openFailoverCircuit_(model, safeStage) {
+    if (FAILOVER_SAFE_STAGES.indexOf(safeStage) === -1) {
+      return false;
+    }
+    var cache = getScriptCache_();
+    if (!cache) {
+      return false;
+    }
+    try {
+      cache.put(
+        failoverCacheKey_(model),
+        safeStage,
+        FAILOVER_CACHE_SECONDS
+      );
+      return true;
+    } catch (ignored) {
+      return false;
+    }
+  }
+
+  function decorateFailoverError_(
+    error,
+    primarySafeStage,
+    apiCalls,
+    modelRoute
+  ) {
+    var normalized = normalizeGeminiError_(error);
+    var fallbackSafeStage = safeErrorStage_(normalized);
+    return createAppError(
+      normalized.code,
+      normalized.message,
+      {
+        safeStage: fallbackSafeStage,
+        modelRoute: modelRoute,
+        failoverTriggerCode: 'GEMINI_TEMPORARY_FAILURE',
+        failoverTriggerStage: primarySafeStage,
+        apiCalls: apiCalls
+      },
+      {
+        retryable: normalized.retryable,
+        retryStrategy: normalized.retryStrategy,
+        httpStatus: normalized.httpStatus,
+        userMessage: normalized.userMessage
+      }
+    );
+  }
+
   function inspectRouting() {
     var mode = getRoutingMode_();
     var generationModel = resolveConfiguredModel_(MODEL_ROLES.GENERATION);
     var utilityModel = resolveConfiguredModel_(MODEL_ROLES.UTILITY);
+    var failoverEnabled = getConfigBool_(
+      'GEMINI_GENERATION_FAILOVER_ENABLED',
+      false
+    );
+    var fallbackModel = failoverEnabled
+      ? validateSupportedModel_(
+        getConfigString_('GEMINI_GENERATION_FALLBACK_MODEL', true)
+      )
+      : null;
+    if (failoverEnabled) {
+      ensure(
+        fallbackModel !== generationModel,
+        'CONFIG_MISSING',
+        'Gemini generation fallback model must differ from the primary model.'
+      );
+    }
     return {
       ok: true,
       routingMode: mode,
@@ -678,6 +922,15 @@ var GeminiClient = (function() {
           samplingParametersOmitted: utilityModel === 'gemini-3.6-flash' ||
             utilityModel === 'gemini-3.5-flash-lite'
         }
+      },
+      generationFailover: {
+        enabled: failoverEnabled,
+        model: fallbackModel,
+        eligibleSurfaces: FAILOVER_SURFACES.slice(),
+        circuitSeconds: FAILOVER_CACHE_SECONDS,
+        circuitOpen: failoverEnabled && Boolean(
+          getOpenFailoverStage_(generationModel)
+        )
       }
     };
   }
@@ -688,7 +941,9 @@ var GeminiClient = (function() {
     model,
     response,
     error,
-    metricContext
+    metricContext,
+    modelRoute,
+    failoverTriggerStage
   ) {
     try {
       var errorCode = error && /^[A-Z0-9_]{1,64}$/.test(String(error.code || ''))
@@ -715,6 +970,15 @@ var GeminiClient = (function() {
           model: validateSupportedModel_(model),
           surface: surface,
           source: source,
+          modelRoute: modelRoute === 'PRIMARY' ||
+            modelRoute === 'FALLBACK_AFTER_FAILURE' ||
+            modelRoute === 'FALLBACK_CIRCUIT_OPEN'
+            ? modelRoute
+            : null,
+          failoverTriggerStage:
+            FAILOVER_SAFE_STAGES.indexOf(failoverTriggerStage) !== -1
+              ? failoverTriggerStage
+              : null,
           apiCalls: 1,
           inputTokens: response && response.usage
             ? response.usage.inputTokens || null
@@ -743,6 +1007,9 @@ var GeminiClient = (function() {
       buildGenerationConfigForModel: buildGenerationConfigForModel_,
       normalizeModelRole: normalizeModelRole_,
       resolveConfiguredModel: resolveConfiguredModel_,
+      resolveGenerationFallbackModel: resolveGenerationFallbackModel_,
+      isEligibleFailoverError: isEligibleFailoverError_,
+      getOpenFailoverStage: getOpenFailoverStage_,
       validateFinalTurn: validateFinalTurn_,
       getStructuredResponseSchema: getStructuredResponseSchema_,
       parseStructuredData: parseStructuredData_,

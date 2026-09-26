@@ -191,6 +191,8 @@ var APP_CONSTANTS = Object.freeze({
     { key: 'GEMINI_MODEL_ROUTING_MODE', value: 'single', type: 'string', description: 'Gemini model routing mode: single or split' },
     { key: 'GEMINI_GENERATION_MODEL', value: 'gemini-3.6-flash', type: 'string', description: 'Gemini model for user-visible generation and rewrites' },
     { key: 'GEMINI_UTILITY_MODEL', value: 'gemini-3.5-flash-lite', type: 'string', description: 'Gemini model for verification and memory extraction' },
+    { key: 'GEMINI_GENERATION_FAILOVER_ENABLED', value: 'false', type: 'bool', description: 'Allow one bounded fallback model call for async generation after a Gemini 5xx or transport failure' },
+    { key: 'GEMINI_GENERATION_FALLBACK_MODEL', value: 'gemini-2.5-flash', type: 'string', description: 'Fallback model used only for eligible async generation failures' },
     { key: 'MAX_USER_TEXT_CHARS', value: '4000', type: 'int', description: 'Maximum user text length' },
     { key: 'RECENT_MESSAGE_LIMIT', value: '20', type: 'int', description: 'Recent message context size' },
     { key: 'MEMORY_CONTEXT_LIMIT', value: '20', type: 'int', description: 'Memory context size' },
