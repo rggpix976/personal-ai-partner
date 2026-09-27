@@ -1059,6 +1059,61 @@ var DiaryService = (function() {
     return result;
   }
 
+  function repairNextDeadGeneration() {
+    var events = SheetRepository.listEventsByType('DIARY_GENERATE')
+      .filter(function(event) {
+        return event.status === 'DEAD';
+      })
+      .sort(function(left, right) {
+        var leftDate = left.payload && left.payload.diaryDate || '';
+        var rightDate = right.payload && right.payload.diaryDate || '';
+        return leftDate < rightDate ? -1 : leftDate > rightDate ? 1 : 0;
+      });
+    var assessedCount = 0;
+    var noActionCount = 0;
+
+    for (var i = 0; i < events.length; i += 1) {
+      var assessment = assessDeadGeneration(events[i].eventId);
+      assessedCount += 1;
+      if (assessment.action === 'MANUAL_REVIEW_REQUIRED') {
+        return {
+          eventType: 'DIARY_GENERATE',
+          enqueued: false,
+          assessedCount: assessedCount,
+          noActionCount: noActionCount,
+          diaryStatus: assessment.diaryStatus,
+          action: assessment.action,
+          reason: assessment.reason
+        };
+      }
+      if (assessment.action === 'REQUEUE_AS_NEW_EVENT') {
+        var repair = repairDeadGeneration(
+          events[i].eventId,
+          generateUuidV4()
+        );
+        return {
+          eventType: 'DIARY_GENERATE',
+          enqueued: repair.enqueued === true,
+          assessedCount: assessedCount,
+          noActionCount: noActionCount,
+          diaryStatus: repair.diaryStatus,
+          action: repair.action,
+          reason: repair.reason
+        };
+      }
+      noActionCount += 1;
+    }
+    return {
+      eventType: 'DIARY_GENERATE',
+      enqueued: false,
+      assessedCount: assessedCount,
+      noActionCount: noActionCount,
+      diaryStatus: null,
+      action: 'NO_ACTION',
+      reason: 'NO_REPAIRABLE_DEAD_DIARY'
+    };
+  }
+
   function hasNewerCompletedDiaryEvent_(sourceEvent) {
     var diaryDate = sourceEvent && sourceEvent.payload && sourceEvent.payload.diaryDate;
     if (!Validators.isDateString(diaryDate)) {
@@ -1654,6 +1709,7 @@ var DiaryService = (function() {
     markFailed: markFailed,
     assessDeadGeneration: assessDeadGeneration,
     repairDeadGeneration: repairDeadGeneration,
+    repairNextDeadGeneration: repairNextDeadGeneration,
     assessCompletedGeneration: assessCompletedGeneration,
     reconcileCompletedGeneration: reconcileCompletedGeneration,
     repairGenerationBacklog: repairGenerationBacklog,

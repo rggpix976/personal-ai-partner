@@ -1568,5 +1568,78 @@ function runA5MemoryDiaryTests() {
     });
   });
 
+  test('DiaryService bounded repair skips resolved failures and enqueues only one diary', function() {
+    var events = [
+      {
+        eventId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        eventType: 'DIARY_GENERATE',
+        status: 'DEAD',
+        payload: { diaryDate: '2026-07-09' }
+      },
+      {
+        eventId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        eventType: 'DIARY_GENERATE',
+        status: 'DEAD',
+        payload: { diaryDate: '2026-07-10' }
+      }
+    ];
+    var enqueueCount = 0;
+    withOverrides({
+      generateUuidV4: function() {
+        return '22222222-2222-4222-8222-222222222222';
+      },
+      SheetRepository: {
+        getEventById: function(eventId) {
+          return events.filter(function(event) {
+            return event.eventId === eventId;
+          })[0] || null;
+        },
+        getEventByDedupeKey: function() {
+          return null;
+        },
+        listEventsByType: function() {
+          return events;
+        },
+        getDailySummary: function(diaryDate) {
+          return {
+            summary_date: diaryDate,
+            diary_status: diaryDate === '2026-07-09' ? 'NONE' : 'FAILED',
+            diary_doc_anchor: null
+          };
+        },
+        upsertDailySummary: function(summary) {
+          return summary;
+        }
+      },
+      DocumentRepository: {
+        countDiaryEntryAnchors: function() {
+          return 0;
+        },
+        findDiaryEntryAnchor: function() {
+          return null;
+        }
+      },
+      QueueService: {
+        requeueDeadDiaryAsNewEvent: function(_, manualRequestId) {
+          enqueueCount += 1;
+          return {
+            eventType: 'DIARY_GENERATE',
+            dedupeKey: 'DIARY_GENERATE_REPAIR:2026-07-10:' + manualRequestId,
+            status: 'PENDING',
+            createdAt: '2026-07-11T09:00:00+09:00'
+          };
+        }
+      }
+    }, function() {
+      var result = DiaryService.repairNextDeadGeneration();
+      var serialized = JSON.stringify(result);
+      assert(enqueueCount === 1, 'Bounded repair must enqueue at most one diary.');
+      assert(result.enqueued === true, 'The first repairable diary should be enqueued.');
+      assert(result.assessedCount === 2 && result.noActionCount === 1, 'Resolved failures should be skipped before one repair.');
+      assert(serialized.indexOf('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa') === -1, 'Bounded repair must not expose event ids.');
+      assert(serialized.indexOf('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb') === -1, 'Bounded repair must keep the selected event id private.');
+    });
+  });
+
   return results;
 }

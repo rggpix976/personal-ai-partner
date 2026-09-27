@@ -180,3 +180,8 @@ rate limit時に別roleのモデルへ自動fallbackしてはならない。
 新しいoperator requestごとに`repairDeadDiaryGeneration(eventId, manualRequestId)`で1件ずつ
 行う。各件がterminalになる前に次を起票しない。`MANUAL_REVIEW_REQUIRED`、既存active、
 anchor不整合では停止し、`repairDiaryGenerationBacklog()`を一括実行しない。
+
+Apps Scriptエディタから引数なしで運用する場合は、`repairNextDeadDiaryGeneration()`を
+1回だけ実行する。この関数は古い`DEAD`から順に評価し、解決済みを読み飛ばして、復旧可能な
+日記を最大1件だけ再投入する。結果が`enqueued=true`のときは、その1件がterminalになるまで
+再実行しない。`MANUAL_REVIEW_REQUIRED`を返した場合は何も再投入せず停止する。

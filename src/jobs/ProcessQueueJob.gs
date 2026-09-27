@@ -156,6 +156,10 @@ function repairDiaryGenerationBacklog() {
   return DiaryService.repairGenerationBacklog();
 }
 
+function repairNextDeadDiaryGeneration() {
+  return DiaryService.repairNextDeadGeneration();
+}
+
 function resumeDiaryNarrativeLengthRetries() {
   return QueueService.expediteDiaryNarrativeLengthRetries(new Date());
 }

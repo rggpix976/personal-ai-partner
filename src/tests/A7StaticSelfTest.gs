@@ -61,6 +61,7 @@ function runA7StaticSelfTest() {
     assert(typeof assessCompletedDiaryGeneration === 'function', 'assessCompletedDiaryGeneration is missing.');
     assert(typeof reconcileCompletedDiaryGeneration === 'function', 'reconcileCompletedDiaryGeneration is missing.');
     assert(typeof repairDiaryGenerationBacklog === 'function', 'repairDiaryGenerationBacklog is missing.');
+    assert(typeof repairNextDeadDiaryGeneration === 'function', 'repairNextDeadDiaryGeneration is missing.');
     assert(typeof resumeDiaryNarrativeLengthRetries === 'function', 'resumeDiaryNarrativeLengthRetries is missing.');
   });
 
@@ -107,6 +108,7 @@ function runA7StaticSelfTest() {
     assert(hasFunction('DiaryService', 'assessCompletedGeneration'), 'DiaryService.assessCompletedGeneration is missing.');
     assert(hasFunction('DiaryService', 'reconcileCompletedGeneration'), 'DiaryService.reconcileCompletedGeneration is missing.');
     assert(hasFunction('DiaryService', 'repairGenerationBacklog'), 'DiaryService.repairGenerationBacklog is missing.');
+    assert(hasFunction('DiaryService', 'repairNextDeadGeneration'), 'DiaryService.repairNextDeadGeneration is missing.');
     assert(hasFunction('ProactiveMessageService', 'evaluateLocalConditions'), 'ProactiveMessageService.evaluateLocalConditions is missing.');
     assert(hasFunction('ProactiveMessageService', 'send'), 'ProactiveMessageService.send is missing.');
     assert(hasFunction('CharacterProfileService', 'validateV1'), 'CharacterProfileService.validateV1 is missing.');
