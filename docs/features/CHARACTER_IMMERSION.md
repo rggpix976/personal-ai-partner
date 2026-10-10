@@ -352,11 +352,13 @@ continuity only after the ordinary diary approval and persistence boundary.
 Recent approved proactive outputs and recent approved diary summaries are
 supplied to generation and semantic verification as comparison-only untrusted
 data, bounded to six proactive outputs or five diary entries. They are never
-minted as evidence keys and are forbidden on chat/memory scopes. A fresh output that substantially
-repeats the same dominant concern, advice, question, conclusion, or Partner
-World thread without advancing it is denied as `PERSONA_SOFT_STYLE` and may use
-the existing single rewrite. Stable Kansai voice and relationship tone alone
-are not repetition. Persisted proactive retries and persisted diary
+minted as evidence keys and are forbidden on chat/memory scopes. A fresh
+proactive output that substantially repeats the same dominant concern, advice,
+question, or Partner World thread without advancing it is denied as
+`PERSONA_SOFT_STYLE`. A fresh diary that substantially repeats a recent
+reflection, conclusion, remembered fact, or Partner World event is denied as
+`RECENT_DIARY_REPETITION`. Either route may use the existing single rewrite.
+Stable Kansai voice and relationship tone alone are not repetition. Persisted proactive retries and persisted diary
 re-approval do not reapply this comparison policy, preserving exact-artifact
 idempotency.
 
@@ -608,6 +610,13 @@ Exact exceptional responses make zero free-generation calls. Chat and image
 surfaces may use only their exact CharacterPack fallback. Diary and memory fail
 closed without narrative fallback.
 
+An enforced diary session has a four-minute admission budget for Gemini calls.
+Once that budget is exhausted, it starts no additional generation, rewrite, or
+verification call and returns a retryable
+`DIARY_TIME_BUDGET_EXHAUSTED` stage. This leaves execution time for the queue
+to persist a controlled retry instead of relying on Apps Script hard-timeout
+recovery.
+
 Proactive has no fixed or template message fallback. `PROACTIVE_GENERIC` does
 not exist. A proactive primary candidate that is denied may be rewritten at
 most once. Generation failure, guard unavailability, or a non-approved rewrite
@@ -701,7 +710,9 @@ Controlled violation categories include:
 | `GROUNDING_USER_STATE_UNSUPPORTED` | Unsupported user-state assertion | Rewrite once |
 | `GROUNDING_SENSOR_UNSUPPORTED` | Unsupported observation | Rewrite once |
 | `PERSONA_HARD_CONSTRAINT` | Pack identity/canon/world boundary/direct-romance violation | Rewrite once |
-| `PERSONA_SOFT_STYLE` | Material Kansai voice, temperament, or length drift | Rewrite once, then surface fallback if allowed |
+| `PERSONA_SOFT_STYLE` | Material voice, temperament, relationship-style, or length drift on non-diary surfaces | Rewrite once, then surface fallback if allowed |
+| `PERSONA_VOICE_DRIFT` | Diary voice, temperament, or relationship style conflicts with trusted authority | Diary-specific rewrite once |
+| `RECENT_DIARY_REPETITION` | A fresh diary substantially repeats a recent approved diary without material development | Diary-specific rewrite from a different focal point |
 | `FORMAT_INVALID` | Empty, oversized, invalid structure, role label, or analysis text | Rewrite/fallback where allowed |
 
 Minimum corpus:
@@ -899,6 +910,16 @@ provider stage. It never contains generated or conversation text, prompts,
 raw provider responses, exception messages, IDs, URLs, email addresses, or
 secrets. Diagnostic logging is observational: a logger failure cannot change
 the existing exact-fallback or fail-closed result.
+
+Diary generation emits the fixed operation
+`CharacterDiaryGeminiAdapter.diagnostic`. Its details contain only a managed
+kind (`PROVIDER_FAILURE`, `SEMANTIC_DENY`, or `TIME_BUDGET_EXHAUSTED`), the
+bounded retry variant, and applicable controlled source, category, error code,
+provider stage, or elapsed-time bucket. It never contains generated diary or
+conversation text, prompts, provider responses, identifiers, URLs, email
+addresses, or secrets. Automatic queue retries derive the bounded variation
+from the event attempt count so they choose a deterministic alternative
+viewpoint without placing rejected content in the queue.
 
 `immersion_unsafe_persisted_or_sent_total` is derived by the read-only
 `inspectPr9PersistenceSafety()` operator. It audits the complete graph of

@@ -52,7 +52,8 @@
 
 次のいずれかがあれば追加の生成テストを止め、診断する。
 
-- `GEMINI_BAD_RESPONSE`または`PERSONA_SOFT_STYLE`拒否が連続する。
+- `GEMINI_BAD_RESPONSE`、`PERSONA_SOFT_STYLE`、`PERSONA_VOICE_DRIFT`、
+  `RECENT_DIARY_REPETITION`のいずれかが連続する。
 - 日記がretryを使い切る。
 - 同じ主題が3件中2件以上で、内容上の進展なく繰り返される。
 - 推し世界の記述が現実の身体・住所・外部生活の断定へ越境する。

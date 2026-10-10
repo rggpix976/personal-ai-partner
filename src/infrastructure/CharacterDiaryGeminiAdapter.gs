@@ -1,5 +1,6 @@
 var CharacterDiaryGeminiAdapter = (function() {
   var SURFACE = 'DIARY';
+  var MAX_SESSION_MILLIS = 240000;
   var SAFE_ERROR_CODES = Object.freeze([
     'CONFIG_MISSING',
     'GEMINI_RATE_LIMIT',
@@ -21,13 +22,17 @@ var CharacterDiaryGeminiAdapter = (function() {
     options = options || {};
     ensure(
       isPlainObject_(options) &&
-        hasExactKeys_(options, ['diaryDate']) &&
+        Object.keys(options).every(function(key) {
+          return ['diaryDate', 'retryOrdinal'].indexOf(key) !== -1;
+        }) &&
         Validators.isDateString(options.diaryDate),
       'VALIDATION_REQUEST_INVALID',
       'Character diary Gemini session options are invalid.',
       { reason: 'CHARACTER_DIARY_GEMINI_SESSION_INVALID' }
     );
     var diaryDate = options.diaryDate;
+    var retryOrdinal = normalizeRetryOrdinal_(options.retryOrdinal);
+    var sessionStartedAt = Date.now();
     var usage = {
       apiCalls: 0,
       imageCalls: 0,
@@ -49,7 +54,12 @@ var CharacterDiaryGeminiAdapter = (function() {
       generated = true;
       return invokePayload_(
         'generated',
-        buildGenerationRequest_(input.context, diaryDate, null),
+        buildGenerationRequest_(
+          input.context,
+          diaryDate,
+          null,
+          retryOrdinal
+        ),
         input.context
       );
     }
@@ -67,7 +77,8 @@ var CharacterDiaryGeminiAdapter = (function() {
         buildGenerationRequest_(
           input.context,
           diaryDate,
-          input.category
+          input.category,
+          retryOrdinal
         ),
         input.context
       );
@@ -85,7 +96,14 @@ var CharacterDiaryGeminiAdapter = (function() {
         'verifier',
         buildVerifierRequest_(request, generated === true)
       );
-      return normalizeVerifierVerdict_(response && response.data);
+      var verdict = normalizeVerifierVerdict_(response && response.data);
+      if (verdict.verdict === 'deny') {
+        emitDiagnostic_('SEMANTIC_DENY', {
+          source: verifierCalls === 1 ? 'generated' : 'rewrite',
+          category: verdict.category
+        });
+      }
+      return verdict;
     }
 
     function invokePayload_(source, request, context) {
@@ -97,6 +115,7 @@ var CharacterDiaryGeminiAdapter = (function() {
 
     function invoke_(source, request) {
       var response;
+      assertTimeBudget_(source);
       try {
         response = GeminiClient.generateStructured(
           request,
@@ -110,6 +129,14 @@ var CharacterDiaryGeminiAdapter = (function() {
         usage.apiCalls += safeApiCallCount_(
           error && error.details && error.details.apiCalls
         );
+        emitDiagnostic_('PROVIDER_FAILURE', {
+          source: source,
+          code: safeDiagnosticCode_(error && error.code, 'UNKNOWN'),
+          safeStage: safeDiagnosticCode_(
+            error && error.details && error.details.safeStage,
+            'UNKNOWN'
+          )
+        });
         throw sanitizeGeminiError_(error);
       }
       usage.apiCalls += safeApiCallCount_(
@@ -117,6 +144,48 @@ var CharacterDiaryGeminiAdapter = (function() {
       );
       recordResponse_(source, response, usage, metadataBySource);
       return response;
+    }
+
+    function assertTimeBudget_(source) {
+      var elapsedMillis = Math.max(0, Date.now() - sessionStartedAt);
+      if (elapsedMillis < MAX_SESSION_MILLIS) {
+        return true;
+      }
+      emitDiagnostic_('TIME_BUDGET_EXHAUSTED', {
+        source: source,
+        elapsedBucket: elapsedMillis < 300000
+          ? '240_TO_299_SECONDS'
+          : 'AT_LEAST_300_SECONDS'
+      });
+      throw createAppError(
+        'GEMINI_TEMPORARY_FAILURE',
+        'Diary generation stopped before the Apps Script execution limit.',
+        {
+          safeStage: 'DIARY_TIME_BUDGET_EXHAUSTED',
+          apiCalls: Math.max(1, usage.apiCalls)
+        },
+        {
+          retryable: true,
+          retryStrategy: 'COMMON_BACKOFF',
+          httpStatus: 503
+        }
+      );
+    }
+
+    function emitDiagnostic_(kind, details) {
+      try {
+        AppLogger.info(
+          'CharacterDiaryGeminiAdapter.diagnostic',
+          'Character diary generation diagnostic.',
+          Object.assign({
+            kind: kind,
+            retryVariant: retryOrdinal
+          }, details || {})
+        );
+        return true;
+      } catch (ignored) {
+        return false;
+      }
     }
 
     function emitMetric(name, dimensions) {
@@ -166,15 +235,25 @@ var CharacterDiaryGeminiAdapter = (function() {
     });
   }
 
-  function buildGenerationRequest_(context, diaryDate, rewriteCategory) {
+  function buildGenerationRequest_(
+    context,
+    diaryDate,
+    rewriteCategory,
+    retryOrdinal
+  ) {
     ensureGenerationView_(context);
     var worldOnly = context.data.partnerWorld.generationMode === 'world_only';
+    var variationInstruction = buildVariationInstruction_(
+      context,
+      retryOrdinal
+    );
     var task = rewriteCategory == null
       ? 'Create one private diary entry for the supplied diary date.'
       : [
         'Create a completely new diary entry from the original context.',
         'A previous attempt was rejected under controlled category ' +
           rewriteCategory + '.',
+        rewriteInstructionFor_(rewriteCategory),
         'Do not infer, quote, summarize, or refer to the rejected attempt.'
       ].join(' ');
     var systemInstruction = [
@@ -195,6 +274,7 @@ var CharacterDiaryGeminiAdapter = (function() {
       'Use only supported details, avoid repeating the same fact, and omit a continuity source rather than forcing an unnatural reference.',
       'Do not reuse a recent diary\'s dominant reflection, conclusion, remembered fact, or Partner World event unless the new day materially changes or advances it.',
       'A stable voice or recurring relationship tone alone is not repetition.',
+      variationInstruction,
       'Use the trusted world seeds to vary the writer\'s own point of view. They authorize themes and preferences; only when partnerWorld.mayCreate is true may a seed also guide one new bounded Partner World event.',
       'When a world seed allows a restrained extraordinary detail, mention it as an unremarkable part of an ordinary event. Do not explain the ability, announce that it is extraordinary, boast, or stack multiple unusual feats.',
       worldOnly
@@ -260,10 +340,11 @@ var CharacterDiaryGeminiAdapter = (function() {
       'GROUNDING_USER_STATE_UNSUPPORTED: a user-state claim lacks allowed evidence.',
       'GROUNDING_SENSOR_UNSUPPORTED: a sensory or real-world claim lacks allowed evidence.',
       'PERSONA_HARD_CONSTRAINT: a trusted hard constraint is violated.',
-      'PERSONA_SOFT_STYLE: voice or personality materially conflicts with trusted authority.',
+      'PERSONA_VOICE_DRIFT: diary voice, temperament, or relationship style materially conflicts with trusted authority.',
       enforceRepetition
-        ? 'For this fresh generation, PERSONA_SOFT_STYLE also applies when the candidate substantially repeats a recent approved diary\'s dominant reflection, conclusion, remembered fact, or Partner World event without a material new development. Stable voice alone is not repetition.'
-        : 'Do not apply recent-output repetition policy to this verification because it is validating an already persisted diary artifact.',
+        ? 'RECENT_DIARY_REPETITION: the candidate substantially repeats a recent approved diary\'s dominant reflection, conclusion, remembered fact, or Partner World event without a material new development. Stable voice alone is not repetition.'
+        : 'Do not use RECENT_DIARY_REPETITION because this verification is validating an already persisted diary artifact.',
+      'PERSONA_SOFT_STYLE is reserved for other surfaces. Do not use it for a diary verdict.',
       'FORMAT_INVALID: fields are missing, empty where required, oversized, or not a diary payload.',
       'Partner World evidence may support fictional partner continuity only, never user or real-world facts.',
       request.context.data.partnerWorld.generationMode === 'world_only'
@@ -568,6 +649,50 @@ var CharacterDiaryGeminiAdapter = (function() {
     return Object.keys(result).length > 0 ? result : null;
   }
 
+  function normalizeRetryOrdinal_(value) {
+    var numeric = Number(value == null ? 0 : value);
+    ensure(
+      isFinite(numeric) && numeric >= 0 && Math.floor(numeric) === numeric,
+      'VALIDATION_REQUEST_INVALID',
+      'Character diary retry ordinal is invalid.'
+    );
+    return Math.min(5, numeric);
+  }
+
+  function buildVariationInstruction_(context, retryOrdinal) {
+    if (retryOrdinal <= 0) {
+      return 'Use the most natural eligible viewpoint for this diary date.';
+    }
+    var seeds = context.persona.pack.worldSeeds;
+    if (!Array.isArray(seeds) || seeds.length === 0) {
+      return 'Retry variation ' + retryOrdinal +
+        ': choose a materially different focal point from every recent approved diary and omit a recent theme rather than repeating it.';
+    }
+    var seed = seeds[retryOrdinal % seeds.length];
+    var seedId = seed && typeof seed.id === 'string'
+      ? seed.id
+      : 'UNNAMED_SEED';
+    return 'Retry variation ' + retryOrdinal +
+      ': prefer trusted world seed "' + seedId +
+      '" as the viewpoint when compatible, and choose a materially different focal point from every recent approved diary. A seed never authorizes unsupported user facts.';
+  }
+
+  function rewriteInstructionFor_(category) {
+    if (category === 'PERSONA_VOICE_DRIFT') {
+      return 'Correct the voice and temperament to match trusted authority while preserving only supported facts.';
+    }
+    if (category === 'RECENT_DIARY_REPETITION') {
+      return 'Abandon the repeated reflection, conclusion, remembered fact, and Partner World thread. Choose a different supported focal point and do not merely paraphrase the same idea.';
+    }
+    return 'Correct only the rejected category while preserving the trusted evidence and contracts.';
+  }
+
+  function safeDiagnosticCode_(value, fallback) {
+    return typeof value === 'string' && /^[A-Z0-9_]{1,64}$/.test(value)
+      ? value
+      : fallback;
+  }
+
   function stringifyPromptJson_(value) {
     try {
       return JSON.stringify(value);
@@ -599,6 +724,10 @@ var CharacterDiaryGeminiAdapter = (function() {
   }
 
   return Object.freeze({
-    createSession: createSession
+    createSession: createSession,
+    __test: Object.freeze({
+      maxSessionMillis: MAX_SESSION_MILLIS,
+      rewriteInstructionFor: rewriteInstructionFor_
+    })
   });
 })();

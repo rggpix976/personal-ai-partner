@@ -170,7 +170,7 @@ var DiaryService = (function() {
       'CHARACTER_ARTIFACT_INVALID',
       'Enforced diary generation requires a current queue lease.'
     );
-    assertQueueClaimCurrent_(queueClaim, payload);
+    var queueEvent = assertQueueClaimCurrent_(queueClaim, payload);
     SheetRepository.assertDiaryProvenanceColumns();
 
     var diaryDate = payload.diaryDate;
@@ -244,7 +244,8 @@ var DiaryService = (function() {
       context
     );
     var session = CharacterDiaryGeminiAdapter.createSession({
-      diaryDate: diaryDate
+      diaryDate: diaryDate,
+      retryOrdinal: normalizeRetryOrdinal_(queueEvent.attemptCount)
     });
     var coordinatorOptions = {
       context: context,
@@ -1634,7 +1635,15 @@ var DiaryService = (function() {
         }
       );
     }
-    return true;
+    return event;
+  }
+
+  function normalizeRetryOrdinal_(value) {
+    var numeric = Number(value);
+    if (!isFinite(numeric) || numeric < 0) {
+      return 0;
+    }
+    return Math.min(5, Math.floor(numeric));
   }
 
   function diaryQueuePayloadIdentity_(payload) {
