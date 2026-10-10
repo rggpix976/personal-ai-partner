@@ -423,6 +423,157 @@ function runA13CharacterDiaryIntegrationTests() {
     );
   });
 
+  test('diary retry varies its viewpoint and rewrites repetition specifically', function() {
+    var calls = [];
+    var diagnostics = [];
+    withGlobals({
+      AppLogger: {
+        info: function(operation, message, details) {
+          diagnostics.push({
+            operation: operation,
+            message: message,
+            details: details
+          });
+        }
+      },
+      GeminiClient: {
+        generateStructured: function(request, schemaName) {
+          calls.push({ request: request, schemaName: schemaName });
+          if (schemaName === 'character-diary') {
+            return {
+              data: diaryPayload(),
+              model: 'test-model',
+              usage: null
+            };
+          }
+          return {
+            data: {
+              verdict: 'deny',
+              category: 'RECENT_DIARY_REPETITION',
+              evidenceKeys: []
+            },
+            model: 'test-model',
+            usage: null
+          };
+        }
+      }
+    }, function() {
+      var session = CharacterDiaryGeminiAdapter.createSession({
+        diaryDate: '2026-07-23',
+        retryOrdinal: 1
+      });
+      var context = makeContext();
+      var generated = session.generate({
+        context: context,
+        surface: 'DIARY',
+        mode: 'CHARACTER'
+      });
+      var verdict = session.verify({
+        context: context,
+        surface: 'DIARY',
+        claimType: 'GENERAL_IMMERSION',
+        category: null,
+        requiresEvidence: false,
+        knownEvidenceKeys: [],
+        evidenceView: [],
+        textFields: CharacterPayloadService.textFields('DIARY', generated),
+        payload: generated
+      });
+      assert(
+        verdict.category === 'RECENT_DIARY_REPETITION',
+        'Diary repetition diagnostic category was collapsed.'
+      );
+      session.rewrite({
+        context: context,
+        surface: 'DIARY',
+        category: verdict.category
+      });
+    });
+    assert(
+      calls[0].request.systemInstruction.indexOf('Retry variation 1') !== -1 &&
+        calls[0].request.systemInstruction.indexOf(
+          'care.small_pleasures'
+        ) !== -1,
+      'Diary retry did not select a deterministic viewpoint.'
+    );
+    assert(
+      calls[2].request.systemInstruction.indexOf(
+        'Abandon the repeated reflection'
+      ) !== -1,
+      'Diary repetition rewrite was not targeted.'
+    );
+    assert(
+      CharacterDiaryGeminiAdapter.__test.rewriteInstructionFor(
+        'PERSONA_VOICE_DRIFT'
+      ).indexOf('Correct the voice and temperament') !== -1,
+      'Diary voice-drift rewrite was not targeted.'
+    );
+    assert(
+      diagnostics.length === 1 &&
+        diagnostics[0].details.kind === 'SEMANTIC_DENY' &&
+        diagnostics[0].details.category === 'RECENT_DIARY_REPETITION' &&
+        diagnostics[0].details.retryVariant === 1,
+      'Diary semantic denial did not emit a safe diagnostic.'
+    );
+  });
+
+  test('diary session stops before another call after its time budget', function() {
+    var nowCalls = 0;
+    var apiCalls = 0;
+    var diagnostics = [];
+    var error = null;
+    withGlobals({
+      Date: {
+        now: function() {
+          nowCalls += 1;
+          return nowCalls === 1
+            ? 0
+            : CharacterDiaryGeminiAdapter.__test.maxSessionMillis;
+        }
+      },
+      AppLogger: {
+        info: function(operation, message, details) {
+          diagnostics.push(details);
+        }
+      },
+      GeminiClient: {
+        generateStructured: function() {
+          apiCalls += 1;
+          return {
+            data: diaryPayload(),
+            model: 'test-model',
+            usage: null
+          };
+        }
+      }
+    }, function() {
+      try {
+        CharacterDiaryGeminiAdapter.createSession({
+          diaryDate: '2026-07-23'
+        }).generate({
+          context: makeContext(),
+          surface: 'DIARY',
+          mode: 'CHARACTER'
+        });
+      } catch (caught) {
+        error = caught;
+      }
+    });
+    assert(apiCalls === 0, 'Diary time budget allowed another Gemini call.');
+    assert(
+      error &&
+        error.code === 'GEMINI_TEMPORARY_FAILURE' &&
+        error.retryable === true &&
+        error.details.safeStage === 'DIARY_TIME_BUDGET_EXHAUSTED',
+      'Diary time budget did not surface a safe retryable failure.'
+    );
+    assert(
+      diagnostics.length === 1 &&
+        diagnostics[0].kind === 'TIME_BUDGET_EXHAUSTED',
+      'Diary time-budget diagnostic was not emitted.'
+    );
+  });
+
   test('world-only diary uses a bounded generation and verification contract', function() {
     var calls = [];
     var context = makeWorldOnlyContext();
