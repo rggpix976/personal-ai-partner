@@ -28,6 +28,8 @@ var GeminiClient = (function() {
     'verifier'
   ]);
   var FAILOVER_SURFACES = Object.freeze([
+    'CHAT_TEXT_SYNC',
+    'CHAT_TEXT_QUEUED',
     'DIARY',
     'PROACTIVE_AI'
   ]);

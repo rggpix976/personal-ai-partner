@@ -677,51 +677,93 @@ function runA4ChatGeminiTests() {
     );
   });
 
-  test('chat generation never uses the async generation fallback', function() {
-    var urls = [];
-    var thrown = null;
-    withGeminiConfig_({
-      GEMINI_MODEL: 'gemini-2.5-flash',
-      GEMINI_MODEL_ROUTING_MODE: 'split',
-      GEMINI_GENERATION_MODEL: 'gemini-3.6-flash',
-      GEMINI_UTILITY_MODEL: 'gemini-3.5-flash-lite',
-      GEMINI_GENERATION_FAILOVER_ENABLED: 'true',
-      GEMINI_GENERATION_FALLBACK_MODEL: 'gemini-2.5-flash'
-    }, function() {
-      withGlobalOverrides_({
-        PropertiesService: {
-          getScriptProperties: function() {
-            return { getProperty: function() { return 'test-api-key'; } };
-          }
-        },
-        UrlFetchApp: {
-          fetch: function(url) {
-            urls.push(url);
-            return {
-              getResponseCode: function() { return 503; },
-              getContentText: function() {
-                return JSON.stringify({ error: { message: 'Unavailable.' } });
-              }
-            };
-          }
-        },
-        AppLogger: { info: function() {} }
+  test('chat generation uses one bounded fallback call after an eligible failure', function() {
+    ['CHAT_TEXT_SYNC', 'CHAT_TEXT_QUEUED'].forEach(function(surface) {
+      var urls = [];
+      var metrics = [];
+      var cache = {};
+      withGeminiConfig_({
+        GEMINI_MODEL: 'gemini-2.5-flash',
+        GEMINI_MODEL_ROUTING_MODE: 'split',
+        GEMINI_GENERATION_MODEL: 'gemini-3.6-flash',
+        GEMINI_UTILITY_MODEL: 'gemini-3.5-flash-lite',
+        GEMINI_GENERATION_FAILOVER_ENABLED: 'true',
+        GEMINI_GENERATION_FALLBACK_MODEL: 'gemini-2.5-flash'
       }, function() {
-        try {
-          GeminiClient.generateText({
+        withGlobalOverrides_({
+          PropertiesService: {
+            getScriptProperties: function() {
+              return { getProperty: function() { return 'test-api-key'; } };
+            }
+          },
+          CacheService: {
+            getScriptCache: function() {
+              return {
+                get: function(key) { return cache[key] || null; },
+                put: function(key, value) { cache[key] = value; }
+              };
+            }
+          },
+          UrlFetchApp: {
+            fetch: function(url) {
+              urls.push(url);
+              if (url.indexOf('gemini-3.6-flash') !== -1) {
+                return {
+                  getResponseCode: function() { return 503; },
+                  getContentText: function() {
+                    return JSON.stringify({ error: { message: 'Unavailable.' } });
+                  }
+                };
+              }
+              return {
+                getResponseCode: function() { return 200; },
+                getContentText: function() {
+                  return JSON.stringify({
+                    candidates: [{
+                      finishReason: 'STOP',
+                      content: { parts: [{ text: 'chat fallback result' }] }
+                    }]
+                  });
+                }
+              };
+            }
+          },
+          AppLogger: {
+            info: function(_, __, details) { metrics.push(details); }
+          }
+        }, function() {
+          var response = GeminiClient.generateText({
             systemInstruction: 'test',
             contents: [{ role: 'user', parts: [{ text: 'test' }] }]
           }, 'GENERATION', {
-            surface: 'CHAT_TEXT_SYNC',
+            surface: surface,
             source: 'generated'
           });
-        } catch (error) {
-          thrown = error;
-        }
+          assert(
+            response.text === 'chat fallback result',
+            'Chat fallback result was not returned for ' + surface + '.'
+          );
+          assert(
+            response.usage.apiCalls === 2,
+            'Chat fallback call count was not bounded for ' + surface + '.'
+          );
+        });
       });
+      assert(
+        urls.length === 2 &&
+          urls[0].indexOf('gemini-3.6-flash') !== -1 &&
+          urls[1].indexOf('gemini-2.5-flash') !== -1,
+        'Chat fallback did not use the configured approved model for ' + surface + '.'
+      );
+      assert(
+        metrics.length === 2 &&
+          metrics[0].modelRoute === 'PRIMARY' &&
+          metrics[0].safeStage === 'HTTP_SERVER_FAILURE' &&
+          metrics[1].modelRoute === 'FALLBACK_AFTER_FAILURE' &&
+          metrics[1].failoverTriggerStage === 'HTTP_SERVER_FAILURE',
+        'Chat failover metrics lost the safe route diagnosis for ' + surface + '.'
+      );
     });
-    assert(thrown && thrown.code === 'GEMINI_TEMPORARY_FAILURE', 'Chat error changed.');
-    assert(urls.length === 1, 'Chat unexpectedly used async failover.');
   });
 
   test('Gemini 3.x request bodies omit deprecated sampling parameters', function() {
